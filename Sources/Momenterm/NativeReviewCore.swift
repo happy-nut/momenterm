@@ -3,7 +3,7 @@ import Foundation
 
 final class NativeReviewCore {
     private static let diffContextLines = 80
-    private static let maxInlineUntrackedDiffBytes = 1_000_000
+    private static let maxInlineUntrackedDiffBytes = 500_000
 
     private let gitClient: GitClient
 
@@ -14,8 +14,15 @@ final class NativeReviewCore {
     func build(root requestedRoot: URL, ignoreWhitespace: Bool) throws -> ReviewDocument {
         let root = try gitClient.repoRoot(from: requestedRoot)
         let diffText = try workingTreeDiff(root: root, ignoreWhitespace: ignoreWhitespace)
-        let files = UnifiedDiffParser.parse(diffText)
-        let sourceFiles = try collectSourceFiles(files: files, root: root)
+        var files = UnifiedDiffParser.parse(diffText)
+        let sourceCollector = NativeSourceCollector(gitClient: gitClient)
+        let sourceFiles = try sourceCollector.collect(files: files, root: root)
+        let sourceVcs = Dictionary(uniqueKeysWithValues: sourceFiles.compactMap { file in file.vcs.map { (file.path, $0) } })
+        for index in files.indices {
+            files[index].vcs = sourceVcs[files[index].displayPath]
+        }
+        let fileStates = sourceCollector.fileStates(files: files, sourceFiles: sourceFiles)
+        let httpEnvironments = NativeHttpEnvironmentReader.collect(root: root)
         let generatedAt = isoNow()
         let branch = (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
         let diffHtml = NativeHTMLRenderer.renderDiff(files)
@@ -24,12 +31,10 @@ final class NativeReviewCore {
         let reviewStatus = NativeHTMLRenderer.renderReviewStatus(files: files.count, hunks: files.reduce(0) { $0 + $1.hunks.count }, generatedAt: generatedAt, ignoreWhitespace: ignoreWhitespace)
         let sourceJSON = JSONValue.array(sourceFiles.map { $0.jsonValue(includeContent: true) }).jsonString()
         let signature = sha1([
-            root.path,
-            branch,
             diffText,
-            sourceJSON,
-            ignoreWhitespace ? "ignoreWhitespace" : "normal"
-        ].joined(separator: "\n---momenterm---\n"))
+            sourceCollector.signaturePayload(sourceFiles),
+            httpEnvironments.stableJsonString()
+        ].joined(separator: "\n"))
         let html = NativeHTMLRenderer.renderReview(
             root: root,
             branch: branch,
@@ -51,9 +56,9 @@ final class NativeReviewCore {
             "changesPanel": .string(changesPanel),
             "filesTree": .string(filesTree),
             "reviewStatus": .string(reviewStatus),
-            "fileStates": .array(files.map { .object(["path": .string($0.displayPath), "viewed": .bool(false)]) }),
+            "fileStates": .array(fileStates),
             "sourceFilesMeta": .array(sourceFiles.map { $0.jsonValue(includeContent: false) }),
-            "httpEnvironments": .object([:])
+            "httpEnvironments": httpEnvironments
         ])
         return ReviewDocument(
             root: root.path,
@@ -173,32 +178,37 @@ final class NativeReviewCore {
     }
 
     private func workingTreeDiff(root: URL, ignoreWhitespace: Bool) throws -> String {
-        var args = ["diff", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--unified=\(Self.diffContextLines)"]
+        var args = ["diff", "--no-ext-diff", "--no-color", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "--unified=\(Self.diffContextLines)"]
         if ignoreWhitespace {
             args.append("--ignore-all-space")
         }
+        args.append(contentsOf: ["HEAD", "--"])
         let tracked = try gitClient.run(root: root, arguments: args)
         let untracked = try gitClient.run(root: root, arguments: ["ls-files", "--others", "--exclude-standard"])
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         let untrackedDiffs = try untracked.map { try diffForUntrackedFile($0, root: root) }
-        return ([tracked] + untrackedDiffs)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
+        return ([tracked] + untrackedDiffs).filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
     private func diffForUntrackedFile(_ path: String, root: URL) throws -> String {
         let url = root.appendingPathComponent(path)
-        if fileSize(url) > Self.maxInlineUntrackedDiffBytes {
-            return largeUntrackedPlaceholder(path: path, size: fileSize(url))
+        if fileSize(url) > Self.maxInlineUntrackedDiffBytes || isLikelyBinary(url) {
+            return largeUntrackedBinaryDiff(path: path)
         }
-        let result = try Shell.run("/usr/bin/env", ["git", "diff", "--no-index", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--unified=\(Self.diffContextLines)", "--", "/dev/null", path], cwd: root)
-        if result.status != 0 && result.status != 1 {
-            throw MomentermError.commandFailed("git diff --no-index /dev/null \(path)", result.stderr)
+        let content = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var lines = content.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        if lines.last == "" {
+            lines.removeLast()
         }
-        return result.stdout
+        return ([
+            "diff --git a/\(path) b/\(path)",
+            "new file mode 100644",
+            "--- /dev/null",
+            "+++ b/\(path)",
+            "@@ -0,0 +1,\(lines.count) @@"
+        ] + lines.map { "+\($0)" }).joined(separator: "\n")
     }
 
     private func fileSize(_ url: URL) -> Int {
@@ -206,63 +216,19 @@ final class NativeReviewCore {
         return attributes?[.size] as? Int ?? 0
     }
 
-    private func largeUntrackedPlaceholder(path: String, size: Int) -> String {
+    private func isLikelyBinary(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        let sample = (try? handle.read(upToCount: 8_000)) ?? Data()
+        return sample.contains(0)
+    }
+
+    private func largeUntrackedBinaryDiff(path: String) -> String {
         """
         diff --git a/\(path) b/\(path)
         new file mode 100644
-        --- /dev/null
-        +++ b/\(path)
-        @@ -0,0 +1 @@
-        +Large untracked file omitted from inline diff (\(size) bytes). Open the file from the Files panel for source metadata.
+        Binary files /dev/null and b/\(path) differ
         """
-    }
-
-    private func collectSourceFiles(files: [DiffFile], root: URL) throws -> [SourceFile] {
-        let paths: [String]
-        if files.isEmpty {
-            let tracked = try gitClient.run(root: root, arguments: ["ls-files"])
-                .components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-            paths = tracked.sorted { left, right in
-                let l = sourceSortRank(left)
-                let r = sourceSortRank(right)
-                return l == r ? left.localizedStandardCompare(right) == .orderedAscending : l < r
-            }
-            .prefix(200)
-            .map { String($0) }
-        } else {
-            paths = files.map { $0.displayPath }
-        }
-
-        return paths.map { path in
-            sourceFile(path: path, root: root)
-        }
-    }
-
-    private func sourceFile(path: String, root: URL) -> SourceFile {
-        let url = root.appendingPathComponent(path)
-        guard let data = try? Data(contentsOf: url) else {
-            return SourceFile(path: path, size: 0, embedded: false, content: "", skippedReason: "file is not present in the working tree")
-        }
-        if data.count > 1_000_000 {
-            return SourceFile(path: path, size: data.count, embedded: false, content: "", skippedReason: "file is larger than 1 MB")
-        }
-        guard let content = String(data: data, encoding: .utf8) else {
-            return SourceFile(path: path, size: data.count, embedded: false, content: "", skippedReason: "file is not valid UTF-8")
-        }
-        return SourceFile(path: path, size: data.count, embedded: true, content: content, skippedReason: "")
-    }
-
-    private func sourceSortRank(_ path: String) -> Int {
-        let lower = path.lowercased()
-        if lower == "readme.md" || lower == "readme.markdown" || lower == "readme.txt" {
-            return 0
-        }
-        if lower.hasPrefix("readme.") {
-            return 1
-        }
-        return 2
     }
 
     private func isoNow() -> String {

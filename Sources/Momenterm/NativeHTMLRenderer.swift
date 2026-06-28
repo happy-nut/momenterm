@@ -128,20 +128,26 @@ enum NativeHTMLRenderer {
     }
 
     static func renderReviewStatus(files: Int, hunks: Int, generatedAt: String, ignoreWhitespace: Bool) -> String {
-        #"<div class="status"><b>\#(files)</b> files <b>\#(hunks)</b> hunks <small>\#(escape(generatedAt))\#(ignoreWhitespace ? " · ignore whitespace" : "")</small></div>"#
+        ""
     }
 
     static func renderChangesPanel(_ files: [DiffFile]) -> String {
         if files.isEmpty { return #"<div class="empty-nav">No changes</div>"# }
         return files.map { file in
-            #"<button class="file-link" data-path="\#(escapeAttr(file.displayPath))"><span>\#(escape(file.displayPath))</span><b>+\#(file.added) -\#(file.removed)</b></button>"#
+            let vcsClass = file.vcs.map { " vcs-\($0)" } ?? ""
+            return #"<button class="file-link change-row\#(vcsClass)" data-path="\#(escapeAttr(file.displayPath))"><span>\#(escape(file.displayPath))</span><b>+\#(file.added) -\#(file.removed)</b></button>"#
         }.joined(separator: "\n")
     }
 
     static func renderFilesPanel(_ files: [SourceFile]) -> String {
         if files.isEmpty { return #"<div class="empty-nav">No files</div>"# }
         return files.map { file in
-            #"<button class="source-link" data-path="\#(escapeAttr(file.path))"><span>\#(escape(file.path))</span><small>\#(file.size) bytes</small></button>"#
+            let classes = [
+                "source-link",
+                file.embedded || !file.image.isEmpty ? "" : "not-embedded",
+                file.vcs.map { "vcs-\($0)" } ?? ""
+            ].filter { !$0.isEmpty }.joined(separator: " ")
+            return #"<button class="\#(classes)" data-path="\#(escapeAttr(file.path))"><span>\#(escape(file.path))</span><small>\#(file.size) bytes</small></button>"#
         }.joined(separator: "\n")
     }
 
@@ -154,10 +160,13 @@ enum NativeHTMLRenderer {
             let rows = hunk.lines.map(renderLine).joined(separator: "\n")
             return #"<tbody><tr class="hunk"><td></td><td></td><td class="code">\#(escape(hunk.header))</td></tr>\#(rows)</tbody>"#
         }.joined(separator: "\n")
+        let body = hunks.isEmpty && file.binary
+            ? #"<tbody><tr class="meta"><td class="ln"></td><td class="ln"></td><td class="code"><span class="marker"> </span>Binary file changed</td></tr></tbody>"#
+            : hunks
         return """
         <article class="d2h-file-wrapper" data-path="\(escapeAttr(file.displayPath))">
           <header class="file-header"><span class="d2h-file-name">\(escape(file.displayPath))</span><span>+\(file.added) -\(file.removed)</span></header>
-          <table class="diff-table">\(hunks)</table>
+          <table class="diff-table">\(body)</table>
         </article>
         """
     }
@@ -225,6 +234,11 @@ enum NativeHTMLRenderer {
     .file-link b,.source-link small{color:var(--muted);font-weight:500}
     .file-link:hover,.source-link:hover{background:#45494c;color:#d6e8ff}
     .file-link.viewed span,.source-link.viewed span{text-decoration:line-through;color:var(--muted)}
+    .vcs-new.source-link span,.vcs-new.change-row span{color:#d36c6c}
+    .vcs-edited.source-link span,.vcs-edited.change-row span{color:#6c9fd4}
+    .vcs-staged.source-link span,.vcs-staged.change-row span{color:#7faf6b}
+    .source-link.not-embedded{opacity:.45}
+    .source-link.not-embedded:hover{opacity:.72}
     .comment-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:10px;background:var(--blue);color:#fff;font-size:11px;margin-left:6px}
     .hidden{display:none!important}
     .pane{display:none}
@@ -275,6 +289,12 @@ enum NativeHTMLRenderer {
     .csv-table{border-collapse:collapse;width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .csv-table th,.csv-table td{border:1px solid var(--border);padding:3px 6px;text-align:left}
     .csv-head .source-code{font-weight:700}
+    .source-body.image-body{display:flex;align-items:flex-start;justify-content:center;padding:24px}
+    .image-view{display:flex;flex-direction:column;align-items:center;gap:12px;max-width:100%}
+    .image-preview{max-width:100%;max-height:calc(100vh - 230px);object-fit:contain;border:1px solid var(--border);border-radius:0;background:repeating-conic-gradient(#3a3a3a 0% 25%,#2f2f2f 0% 50%) 50%/20px 20px;cursor:zoom-in}
+    .image-cap{color:var(--muted);font:11px Monaco,ui-monospace,SFMono-Regular,Menlo,monospace}
+    .mc-lightbox{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.82);cursor:zoom-out;padding:32px}
+    .mc-lightbox-img{max-width:100%;max-height:100%;object-fit:contain}
     .empty,.empty-nav{color:var(--muted);padding:18px}
     .floating-dock{position:fixed;right:18px;bottom:18px;width:min(760px,calc(100vw - 382px));max-height:70vh;background:#3c3f41;border:1px solid #555a5e;border-radius:4px;box-shadow:0 18px 44px var(--shadow);z-index:8;display:flex;flex-direction:column}
     .floating-dock.maximized{left:370px;right:20px;top:70px;bottom:20px;width:auto;max-height:none}
@@ -881,6 +901,27 @@ enum NativeHTMLRenderer {
           return '<div class="source-row" data-line="' + absolute + '" data-line-index="' + (absolute - 1) + '"><b class="source-gutter">' + absolute + '</b><span class="source-code">' + highlightCode(line, path) + '</span></div>';
         }).join('') + bottom;
       }
+      function renderImageView(file){
+        return '<div class="image-view"><img class="image-preview" src="' + attr(file.image) + '" alt="' + attr(file.name || file.path || '') + '" data-zoomable="1"><div class="image-cap">' + esc(file.name || file.path || '') + ' &middot; ' + Number(file.size || 0) + ' bytes &middot; click to zoom</div></div>';
+      }
+      function openLightbox(src, alt){
+        if (!src) return;
+        var lb = qs('#mc-lightbox');
+        if (!lb) {
+          lb = document.createElement('div');
+          lb.id = 'mc-lightbox';
+          lb.className = 'mc-lightbox hidden';
+          lb.innerHTML = '<img class="mc-lightbox-img" alt="">';
+          document.body.appendChild(lb);
+          lb.addEventListener('click', closeLightbox);
+        }
+        var img = qs('img', lb);
+        img.src = src;
+        img.alt = alt || '';
+        lb.classList.remove('hidden');
+      }
+      function closeLightbox(){ var lb = qs('#mc-lightbox'); if (lb) lb.classList.add('hidden'); }
+      function lightboxOpen(){ var lb = qs('#mc-lightbox'); return !!(lb && !lb.classList.contains('hidden')); }
       function markSourceRow(row){
         if (!row) return;
         if (current.row) {
@@ -902,6 +943,16 @@ enum NativeHTMLRenderer {
         qs('#source-title').textContent = path;
         var body = qs('#source-body');
         body.dataset.openPath = path;
+        body.classList.remove('image-body');
+        if (f.image) {
+          body.classList.remove('empty');
+          body.classList.add('image-body');
+          body.innerHTML = renderImageView(f);
+          var imageToggle = qs('#source-raw-toggle');
+          if (imageToggle) imageToggle.textContent = 'Raw';
+          refreshComments();
+          return;
+        }
         if (!f.embedded) {
           body.classList.add('empty');
           body.textContent = f.skippedReason || 'Source unavailable';
@@ -1301,6 +1352,10 @@ enum NativeHTMLRenderer {
         var row = eventDiffRow(e);
         if (row) { markRow(row); openComposer('q'); }
       });
+      qs('#source-body').addEventListener('click', function(e){
+        var img = e.target && e.target.closest && e.target.closest('.image-preview');
+        if (img) openLightbox(img.getAttribute('src'), img.getAttribute('alt'));
+      });
       qsa('[data-action]').forEach(function(b){
         b.onclick = function(){
           var a = b.dataset.action;
@@ -1328,6 +1383,7 @@ enum NativeHTMLRenderer {
           lastShift = { time: 0, location: -1 };
         }
         if (editing) return;
+        if (e.key === 'Escape' && lightboxOpen()) { e.preventDefault(); closeLightbox(); return; }
         if (e.key === 'F7') { e.preventDefault(); navigateDiff(e.shiftKey ? -1 : 1); return; }
         if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === '0') { e.preventDefault(); qs('#changes-panel .file-link') && qs('#changes-panel .file-link').focus(); return; }
         if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === '1') { e.preventDefault(); openSource(current.path || firstChangedPath()); return; }

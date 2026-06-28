@@ -35,6 +35,7 @@ Current classifications:
 ## UI/Parity Gate
 
 - [ ] Darcula visual tokens and syntax classes stay covered by `scripts/parity-smoke.sh`.
+- [ ] Monacori build-output parity stays covered by `scripts/ab-parity-smoke.sh` for modified, staged, untracked text, untracked binary, rename/delete/image, review signatures, source metadata, and HTTP environment fixtures.
 - [ ] Monacori-like action exposure stays covered: no topbar global action row, icon activity rail, guarded Quick Open binding, and icon-only contextual controls.
 - [ ] New keyboard shortcuts require parity smoke coverage.
 - [ ] New settings require persistence checks through the native settings bridge.
@@ -56,6 +57,7 @@ Run these before claiming a behavior or cleanup change is complete:
 ```bash
 ./scripts/build.sh
 ./scripts/parity-smoke.sh
+./scripts/ab-parity-smoke.sh
 ./scripts/smoke.sh /path/to/repo
 ./scripts/pty-smoke.sh /path/to/repo
 ./scripts/perf-smoke.sh
@@ -67,7 +69,7 @@ git diff --check
 For dependency-removal or native-port parity work, also scan for forbidden runtime markers:
 
 ```bash
-rg -n "monacori/dist|monacori-bridge|MONACORI_DIST|NODE_BIN|buildDiffReview\\(|renderWelcomeHtml\\(|performHttpRequest\\(" Sources/Momenterm scripts Package.swift README.md -g '!*.app'
+rg -n "monacori/dist|monacori-bridge|MONACORI_DIST|NODE_BIN|buildDiffReview\\(|renderWelcomeHtml\\(|performHttpRequest\\(" Sources/Momenterm scripts Package.swift README.md -g '!*.app' -g '!ab-parity-smoke.mjs'
 ```
 
 The scan should return no matches.

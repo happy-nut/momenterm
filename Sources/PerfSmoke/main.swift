@@ -24,8 +24,8 @@ do {
         fputs("perf smoke failed: large single-line diff rendered \(rowCount) rows\n", stderr)
         exit(1)
     }
-    guard review.html.contains("Large untracked file omitted from inline diff") else {
-        fputs("perf smoke failed: large untracked file was not capped\n", stderr)
+    guard review.html.contains("Binary file changed") || review.html.contains("Binary files /dev/null") else {
+        fputs("perf smoke failed: large untracked file was not capped as binary-style diff\n", stderr)
         exit(1)
     }
     guard review.html.contains("source-window-note"), review.html.contains("requestIdleCallback"), review.html.contains("diffIndex") else {

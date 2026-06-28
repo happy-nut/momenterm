@@ -76,33 +76,112 @@ enum JSONValue: Codable {
         }
         return String(data: data, encoding: .utf8) ?? "null"
     }
+
+    func stableJsonString() -> String {
+        switch self {
+        case .null:
+            return "null"
+        case .bool(let value):
+            return value ? "true" : "false"
+        case .number(let value):
+            return value.rounded() == value ? String(Int(value)) : String(value)
+        case .string(let value):
+            return jsonStringLiteral(value)
+        case .array(let values):
+            return "[\(values.map { $0.stableJsonString() }.joined(separator: ","))]"
+        case .object(let values):
+            return "{\(values.keys.sorted().map { key in "\(jsonStringLiteral(key)):\(values[key]?.stableJsonString() ?? "null")" }.joined(separator: ","))}"
+        }
+    }
+
+    private func jsonStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value) else {
+            return "\"\""
+        }
+        return String(data: data, encoding: .utf8) ?? "\"\""
+    }
 }
 
 struct SourceFile {
     let path: String
+    let name: String
+    let language: String
     let size: Int
+    let changed: Bool
     let embedded: Bool
+    let changedLines: [Int]
+    let signature: String
     let content: String
     let skippedReason: String
+    let image: String
+    let vcs: String?
+
+    init(
+        path: String,
+        size: Int,
+        embedded: Bool,
+        content: String,
+        skippedReason: String,
+        name: String? = nil,
+        language: String = "text",
+        changed: Bool = false,
+        changedLines: [Int] = [],
+        signature: String = "",
+        image: String = "",
+        vcs: String? = nil
+    ) {
+        self.path = path
+        self.name = name ?? URL(fileURLWithPath: path).lastPathComponent
+        self.language = language
+        self.size = size
+        self.changed = changed
+        self.embedded = embedded
+        self.changedLines = changedLines
+        self.signature = signature
+        self.content = content
+        self.skippedReason = skippedReason
+        self.image = image
+        self.vcs = vcs
+    }
 
     func jsonValue(includeContent: Bool) -> JSONValue {
-        .object([
+        var object: [String: JSONValue] = [
             "path": .string(path),
+            "name": .string(name),
+            "language": .string(language),
             "size": .number(Double(size)),
+            "changed": .bool(changed),
             "embedded": .bool(embedded),
+            "changedLines": .array(changedLines.map { .number(Double($0)) }),
+            "signature": .string(signature),
             "content": .string(includeContent ? content : ""),
-            "image": .string(""),
-            "skippedReason": .string(skippedReason)
-        ])
+        ]
+        if !skippedReason.isEmpty {
+            object["skippedReason"] = .string(skippedReason)
+        }
+        if includeContent {
+            if !image.isEmpty {
+                object["image"] = .string(image)
+            }
+        } else {
+            object["image"] = .string("")
+        }
+        if let vcs = vcs {
+            object["vcs"] = .string(vcs)
+        }
+        return .object(object)
     }
 }
 
 struct DiffFile {
     var oldPath: String
     var newPath: String
+    var status: String
     var hunks: [DiffHunk]
     var added: Int
     var removed: Int
+    var binary: Bool
+    var vcs: String?
 
     var displayPath: String {
         let selected = (!newPath.isEmpty && newPath != "/dev/null") ? newPath : oldPath

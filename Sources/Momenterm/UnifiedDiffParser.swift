@@ -25,10 +25,32 @@ enum UnifiedDiffParser {
         for rawLine in diff.components(separatedBy: .newlines) {
             if rawLine.hasPrefix("diff --git ") {
                 flushFile()
-                current = DiffFile(oldPath: "", newPath: "", hunks: [], added: 0, removed: 0)
+                let paths = parseDiffGitPaths(rawLine)
+                current = DiffFile(oldPath: paths.oldPath, newPath: paths.newPath, status: "modified", hunks: [], added: 0, removed: 0, binary: false, vcs: nil)
                 continue
             }
             guard current != nil else { continue }
+            if rawLine.hasPrefix("new file mode ") {
+                current?.status = "added"
+                continue
+            }
+            if rawLine.hasPrefix("deleted file mode ") {
+                current?.status = "deleted"
+                continue
+            }
+            if rawLine.hasPrefix("rename from ") {
+                current?.status = "renamed"
+                current?.oldPath = String(rawLine.dropFirst("rename from ".count))
+                continue
+            }
+            if rawLine.hasPrefix("rename to ") {
+                current?.newPath = String(rawLine.dropFirst("rename to ".count))
+                continue
+            }
+            if rawLine.hasPrefix("Binary files ") || rawLine == "GIT binary patch" {
+                current?.binary = true
+                continue
+            }
             if rawLine.hasPrefix("--- ") {
                 current?.oldPath = String(rawLine.dropFirst(4))
                 continue
@@ -58,8 +80,6 @@ enum UnifiedDiffParser {
                 currentHunk?.lines.append(DiffLine(kind: .context, oldNumber: oldLine, newNumber: newLine, text: String(rawLine.dropFirst())))
                 oldLine += 1
                 newLine += 1
-            } else {
-                currentHunk?.lines.append(DiffLine(kind: .meta, oldNumber: nil, newNumber: nil, text: rawLine))
             }
         }
         flushFile()
@@ -80,5 +100,19 @@ enum UnifiedDiffParser {
             return (0, 0)
         }
         return (oldStart, newStart)
+    }
+
+    private static func parseDiffGitPaths(_ line: String) -> (oldPath: String, newPath: String) {
+        let pattern = #"^diff --git a/(.+) b/(.+)$"#
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern, options: []),
+            let match = regex.firstMatch(in: line, options: [], range: NSRange(location: 0, length: line.utf16.count)),
+            match.numberOfRanges >= 3,
+            let oldRange = Range(match.range(at: 1), in: line),
+            let newRange = Range(match.range(at: 2), in: line)
+        else {
+            return ("unknown", "unknown")
+        }
+        return (String(line[oldRange]), String(line[newRange]))
     }
 }

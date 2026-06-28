@@ -5,6 +5,8 @@ import vm from "node:vm";
 const root = new URL("..", import.meta.url);
 const sourceFiles = [
   "Sources/Momenterm/NativeReviewCore.swift",
+  "Sources/Momenterm/NativeSourceCollector.swift",
+  "Sources/Momenterm/NativeHttpEnvironmentReader.swift",
   "Sources/Momenterm/NativeHTMLRenderer.swift",
   "Sources/Momenterm/NativeReviewTypes.swift",
   "Sources/Momenterm/UnifiedDiffParser.swift",
@@ -227,6 +229,9 @@ const featureChecks = [
   ["feature: clean tree opens source", /!changedPaths\(\)\.length && sourceFiles\(\)\[0\].*openSource/s],
   ["feature: markdown HTML is sanitized", "sanitizeInlineHtml"],
   ["feature: CSV render path", "parseCsvLine"],
+  ["feature: image source preview", "renderImageView"],
+  ["feature: image lightbox", "openLightbox"],
+  ["feature: VCS status classes", "vcs-new.source-link"],
   ["feature: diff update defers while composing or typing", /if \(composing \|\| isTextEditingActive\(\)\) \{ pendingUpdate = update; schedulePendingUpdate\(\); return; \}/],
   ["feature: comment remap keeps comments", "function remapComments"],
   ["feature: terminal split", "function splitTerminal"],
@@ -240,7 +245,10 @@ for (const [name, pattern] of featureChecks) check(name, has(pattern));
 const performanceChecks = [
   ["performance: large diff context is bounded", "--unified=\\(Self.diffContextLines)"],
   ["performance: 100000-line diff context removed", !core.includes("--unified=100000")],
-  ["performance: large untracked inline diff capped", "largeUntrackedPlaceholder"],
+  ["performance: large untracked inline diff capped", "largeUntrackedBinaryDiff"],
+  ["performance: large untracked cap matches Monacori", "maxInlineUntrackedDiffBytes = 500_000"],
+  ["parity: unstaged review includes staged changes", "args.append(contentsOf: [\"HEAD\", \"--\"])"],
+  ["parity: diff rename detection matches Monacori", "--find-renames"],
   ["performance: diff index cache present", "var diffIndex ="],
   ["performance: source path index present", "rebuildSourceIndex"],
   ["performance: syntax highlighting is chunked", "requestIdleCallback"],

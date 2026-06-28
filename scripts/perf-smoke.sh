@@ -25,6 +25,8 @@ swiftc \
   "$ROOT/Sources/Momenterm/NativeReviewTypes.swift" \
   "$ROOT/Sources/Momenterm/UnifiedDiffParser.swift" \
   "$ROOT/Sources/Momenterm/NativeHTMLRenderer.swift" \
+  "$ROOT/Sources/Momenterm/NativeSourceCollector.swift" \
+  "$ROOT/Sources/Momenterm/NativeHttpEnvironmentReader.swift" \
   "$ROOT/Sources/Momenterm/NativeReviewCore.swift" \
   "$ROOT/Sources/PerfSmoke/main.swift" \
   -framework Foundation

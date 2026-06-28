@@ -33,6 +33,7 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 ./scripts/build.sh
 ./scripts/smoke.sh /path/to/repo
 ./scripts/parity-smoke.sh
+./scripts/ab-parity-smoke.sh
 ./scripts/perf-smoke.sh
 ./scripts/pty-smoke.sh /path/to/repo
 ./scripts/launch-smoke.sh /path/to/repo
@@ -62,4 +63,4 @@ Clean-code, SOLID, UI parity, and verification gates are tracked in [docs/mainte
 ## Next Experiments
 
 1. Add code signing and notarization for distribution.
-2. Add browser-level UI regression tests against the generated native review HTML.
+2. Add browser-level visual regression screenshots against the generated native review HTML.
