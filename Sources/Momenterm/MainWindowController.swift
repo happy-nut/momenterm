@@ -439,7 +439,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         """
         <!doctype html>
         <html><head><meta charset="utf-8"><style>
-        body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#f6f7f8;color:#1f2328}
+        body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;font-size:14px;line-height:1.45;background:#f6f7f8;color:#1f2328;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
         main{text-align:center;display:flex;flex-direction:column;gap:14px;align-items:center}
         h1{margin:0;font-size:24px}p{margin:0;color:#59636e}
         button{font:inherit;border:1px solid #d8dee4;border-radius:6px;background:white;padding:7px 12px}
@@ -451,7 +451,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         """
         <!doctype html>
         <html><head><meta charset="utf-8"><style>
-        body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#f6f7f8;color:#1f2328}
+        body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;font-size:14px;line-height:1.45;background:#f6f7f8;color:#1f2328;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
         main{max-width:720px;padding:24px;text-align:center}pre{white-space:pre-wrap;text-align:left;color:#cf222e}
         button{font:inherit;border:1px solid #d8dee4;border-radius:6px;background:white;padding:7px 12px}
         </style></head><body><main><h1>Momenterm</h1><pre>\(escapeHtml(message))</pre><button onclick="window.momentermApp.openFolder()">Open Another Folder</button></main></body></html>

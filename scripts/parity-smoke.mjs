@@ -199,6 +199,12 @@ const darculaChecks = [
   ["darcula: editor background", "--bg:#2b2b2b"],
   ["darcula: tool window panel", "--panel:#3c3f41"],
   ["darcula: foreground", "--text:#a9b7c6"],
+  ["darcula: stable UI font token", "--ui-font:-apple-system"],
+  ["darcula: Korean UI fallback", "Apple SD Gothic Neo"],
+  ["darcula: stable code font token", "--code-font:\"SF Mono\""],
+  ["darcula: stable terminal font token", "--terminal-font:\"MesloLGS NF\""],
+  ["darcula: terminal nerd font fallback", "JetBrainsMono Nerd Font Mono"],
+  ["darcula: terminal uses font token", ".terminal-output{display:none;margin:0;height:100%;overflow:auto;padding:12px;font-family:var(--terminal-font)"],
   ["darcula: keyword orange", "--kw:#cc7832"],
   ["darcula: string green", "--str:#6a8759"],
   ["darcula: function yellow", "--fn:#ffc66d"],
@@ -246,6 +252,8 @@ const featureChecks = [
   ["feature: terminal split", "function splitTerminal"],
   ["feature: terminal pane focus", "function focusTerminalPane"],
   ["feature: terminal pane rename", "function renameTerminalPane"],
+  ["feature: terminal strips OSC title escapes", /function stripAnsi[\s\S]*\\x1b\\]/],
+  ["feature: terminal strips save-restore cursor escapes", /function stripAnsi[\s\S]*\\x1b\[=>78\]/],
   ["feature: history graph", "computeHistoryGraph"],
   ["feature: HTTP dock", "http-client"]
 ];
