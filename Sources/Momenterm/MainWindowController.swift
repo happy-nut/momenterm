@@ -4,10 +4,10 @@ import WebKit
 
 final class MainWindowController: NSWindowController, WKScriptMessageHandler, NativePtyManagerDelegate {
     private let webView: WKWebView
-    private let service = MonacoriBridgeService()
+    private let service = NativeReviewCore()
     private let ptyManager = NativePtyManager()
     private var root: URL?
-    private var currentDocument: MonacoriReviewDocument?
+    private var currentDocument: ReviewDocument?
     private var refreshTimer: Timer?
     private var ignoreWhitespace = false
     private var persistedSettings: [String: JSONValue] = [:]
@@ -237,7 +237,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let result: Result<MonacoriReviewDocument, Error>
+            let result: Result<ReviewDocument, Error>
             do {
                 result = .success(try self.service.build(root: root, ignoreWhitespace: self.ignoreWhitespace))
             } catch {
@@ -259,7 +259,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         }
     }
 
-    private func apply(document: MonacoriReviewDocument, forceReload: Bool) {
+    private func apply(document: ReviewDocument, forceReload: Bool) {
         let previousSignature = currentDocument?.signature
         let changed = document.signature != previousSignature
         currentDocument = document
@@ -326,7 +326,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         guard Bundle.main.bundleURL.pathExtension == "app" else {
             return
         }
-        let title = payload?.objectValue?["title"]?.stringValue ?? "monacori"
+        let title = payload?.objectValue?["title"]?.stringValue ?? "Momenterm"
         let body = payload?.objectValue?["body"]?.stringValue ?? ""
         let content = UNMutableNotificationContent()
         content.title = title
@@ -401,13 +401,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
     }
 
     private func jsString(_ value: String) -> String {
-        guard
-            let data = try? JSONSerialization.data(withJSONObject: value, options: []),
-            let string = String(data: data, encoding: .utf8)
-        else {
-            return "\"\""
-        }
-        return string
+        JSONValue.string(value).jsonString()
     }
 
     private func welcomeHtml() -> String {
@@ -418,7 +412,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         main{text-align:center;display:flex;flex-direction:column;gap:14px;align-items:center}
         h1{margin:0;font-size:24px}p{margin:0;color:#59636e}
         button{font:inherit;border:1px solid #d8dee4;border-radius:6px;background:white;padding:7px 12px}
-        </style></head><body><main><h1>Momenterm</h1><p>Native macOS host for Monacori review HTML.</p><button onclick="window.monacoriApp.openFolder()">Open Git Repository</button></main></body></html>
+        </style></head><body><main><h1>Momenterm</h1><p>Native macOS review app.</p><button onclick="window.momentermApp.openFolder()">Open Git Repository</button></main></body></html>
         """
     }
 
@@ -429,7 +423,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#f6f7f8;color:#1f2328}
         main{max-width:720px;padding:24px;text-align:center}pre{white-space:pre-wrap;text-align:left;color:#cf222e}
         button{font:inherit;border:1px solid #d8dee4;border-radius:6px;background:white;padding:7px 12px}
-        </style></head><body><main><h1>Momenterm</h1><pre>\(escapeHtml(message))</pre><button onclick="window.monacoriApp.openFolder()">Open Another Folder</button></main></body></html>
+        </style></head><body><main><h1>Momenterm</h1><pre>\(escapeHtml(message))</pre><button onclick="window.momentermApp.openFolder()">Open Another Folder</button></main></body></html>
         """
     }
 
@@ -440,8 +434,8 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
             .replacingOccurrences(of: ">", with: "&gt;")
     }
 
-    private static let settingsKey = "monacori.settings"
-    private static let recentProjectsKey = "monacori.recentProjects"
+    private static let settingsKey = "momenterm.settings"
+    private static let recentProjectsKey = "momenterm.recentProjects"
 
     private static func loadPersistedSettings() -> [String: JSONValue] {
         guard
@@ -494,8 +488,8 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
           try { cb(value); } catch (e) {}
         });
       };
-      window.monacoriHttp = { send: function (request) { return post('http.send', request); } };
-      window.monacoriMenu = {
+      window.momentermHttp = { send: function (request) { return post('http.send', request); } };
+      window.momentermMenu = {
         onMergedView: function (cb) { on('mergedView', cb); },
         onOpenMemo: function (cb) { on('openMemo', cb); },
         onDiffUpdate: function (cb) { on('diffUpdate', cb); },
@@ -505,26 +499,26 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         onTerminalPaneFocus: function (cb) { on('terminalPaneFocus', cb); },
         onTerminalPaneRename: function (cb) { on('terminalPaneRename', cb); }
       };
-      window.monacoriFile = {
+      window.momentermFile = {
         get: function (index, kind) { return post('file.get', { index: index, kind: kind }); },
         getSourceData: function () { return post('file.getSourceData'); }
       };
-      window.monacoriGit = {
+      window.momentermGit = {
         log: function (request) { return post('git.log', request || {}); },
         commitDiff: function (sha) { return post('git.commitDiff', { sha: sha }); }
       };
-      window.monacoriApp = {
+      window.momentermApp = {
         openFolder: function () { return post('app.openFolder'); },
         openRecent: function (path) { return post('app.openRecent', { path: path }); },
         revealInFinder: function (path) { return post('app.revealInFinder', { path: path }); },
         openTerminalAt: function (path) { return post('app.openTerminalAt', { path: path }); }
       };
-      window.monacoriClipboard = { write: function (text) { post('clipboard.write', { text: String(text) }); } };
-      window.monacoriSettings = {
+      window.momentermClipboard = { write: function (text) { post('clipboard.write', { text: String(text) }); } };
+      window.momentermSettings = {
         all: \(settingsJSON),
         set: function (key, value) { post('settings.set', { key: key, value: value }); }
       };
-      window.monacoriPty = {
+      window.momentermPty = {
         spawn: function (size) { return post('pty.spawn', size || {}); },
         write: function (msg) { post('pty.write', msg || {}); },
         resize: function (msg) { post('pty.resize', msg || {}); },
