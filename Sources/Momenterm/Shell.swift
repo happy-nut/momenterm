@@ -21,12 +21,26 @@ enum Shell {
         process.standardError = stderr
 
         try process.run()
+        var stdoutData = Data()
+        var stderrData = Data()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
         process.waitUntilExit()
+        group.wait()
 
         return ShellResult(
             status: process.terminationStatus,
-            stdout: String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
-            stderr: String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+            stderr: String(data: stderrData, encoding: .utf8) ?? ""
         )
     }
 
