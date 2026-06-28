@@ -9,7 +9,7 @@ The prototype keeps the review loop local and native:
 - native Swift bridge for app actions and PTY events
 - polling refresh for Git diff changes
 - Swift Git diff parsing, source loading, Git history, HTTP requests, and welcome/recent-project state
-- native review UI parity for syntax highlighting, comments, viewed files, source rendering, quick-open, history, settings, shortcuts, and terminal handoff
+- native Darcula review UI parity for syntax highlighting, comments, viewed files, source rendering, quick-open, history, settings, shortcuts, and terminal handoff
 
 The integrated terminal is backed by a native macOS PTY.
 
@@ -52,7 +52,7 @@ This tests the riskiest host boundary first: a native macOS window and `WKScript
 
 ## Parity Tracking
 
-The Monacori parity gap and verification contract are tracked in [docs/parity-gap.md](docs/parity-gap.md).
+The Monacori parity gap and verification contract are tracked in [docs/parity-gap.md](docs/parity-gap.md). The latest visual comparison is in [docs/ui-parity-review.md](docs/ui-parity-review.md).
 
 ## Next Experiments
 

@@ -551,7 +551,7 @@ private enum NativeHTMLRenderer {
         </aside>
         <main class="workspace">
           <section id="diff-viewer" class="pane active">
-            <div class="toolbar"><span class="branch-label">\(escape(branch))</span><span>\(files.count) files</span><span>\(escape(generatedAt))</span>\(ignoreWhitespace ? "<span>ignore whitespace</span>" : "")<button id="diff-viewed-toggle">Mark Viewed</button><button id="quick-open-button">Quick Open</button></div>
+            <div class="toolbar"><span class="branch-label">\(escape(branch))</span>\(ignoreWhitespace ? "<span>ignore whitespace</span>" : "")<button id="diff-viewed-toggle">Mark Viewed</button><button id="quick-open-button">Quick Open</button></div>
             <div id="diff2html-container" class="diff2html-container">\(diffHtml.isEmpty ? "<div class=\"empty\">No diff to review.</div>" : diffHtml)</div>
           </section>
           <section id="source-viewer" class="pane"><div class="toolbar"><span id="source-title">Source</span><button id="source-raw-toggle">Raw</button><button id="back-to-diff">Diff</button></div><div id="source-body" class="source-body empty">Select a file from the Files tab.</div></section>
@@ -559,7 +559,7 @@ private enum NativeHTMLRenderer {
         </main>
         <div id="floating-dock" class="floating-dock hidden"></div>
         <div id="quick-open" class="modal-backdrop hidden"><section class="quick-open-panel"><input id="quick-open-input" autocomplete="off" placeholder="Search files"><div id="quick-open-list"></div></section></div>
-        <div id="settings-modal" class="modal-backdrop hidden"><section class="settings-panel"><header><b>Settings</b><button id="settings-close">×</button></header><label>Theme <button id="settings-theme" class="dropdown-trigger"></button></label><label>Language <button id="settings-language" class="dropdown-trigger"></button></label><label class="settings-text">Plan prompt <textarea id="settings-prompt-plan"></textarea></label><label class="settings-text">Question prompt <textarea id="settings-prompt-q"></textarea></label><label class="settings-text">Change prompt <textarea id="settings-prompt-c"></textarea></label><footer class="settings-actions"><button id="settings-reset">Reset</button><span id="settings-saved"></span></footer><div id="settings-theme-menu" class="mc-dropdown hidden"><button data-theme-option="dark">Dark</button><button data-theme-option="light">Light</button></div><div id="settings-language-menu" class="mc-dropdown hidden"><button data-language-option="en">English</button><button data-language-option="ko">한국어</button></div></section></div>
+        <div id="settings-modal" class="modal-backdrop hidden"><section class="settings-panel"><header><b>Settings</b><button id="settings-close">×</button></header><label>Theme <button id="settings-theme" class="dropdown-trigger"></button></label><label>Language <button id="settings-language" class="dropdown-trigger"></button></label><label class="settings-text">Plan prompt <textarea id="settings-prompt-plan"></textarea></label><label class="settings-text">Question prompt <textarea id="settings-prompt-q"></textarea></label><label class="settings-text">Change prompt <textarea id="settings-prompt-c"></textarea></label><footer class="settings-actions"><button id="settings-reset">Reset</button><span id="settings-saved"></span></footer><div id="settings-theme-menu" class="mc-dropdown hidden"><button data-theme-option="darcula">Darcula</button><button data-theme-option="light">Light</button></div><div id="settings-language-menu" class="mc-dropdown hidden"><button data-language-option="en">English</button><button data-language-option="ko">한국어</button></div></section></div>
         <section id="terminal-panel" class="terminal-panel hidden"><div class="terminal-bar"><span>Terminal</span><div id="terminal-tabs"></div><button id="terminal-split">Split</button><button id="terminal-rename">Rename</button><button id="terminal-close">×</button></div><div id="terminal-panes"></div></section>
         <script>window.__momentermData = \(data);</script>
         <script>\(clientScript)</script>
@@ -625,46 +625,51 @@ private enum NativeHTMLRenderer {
     }
 
     private static let css = """
-    :root{color-scheme:dark;--bg:#1f2328;--panel:#24292f;--panel-2:#2d333b;--text:#f0f6fc;--muted:#9198a1;--border:#3d444d;--blue:#58a6ff;--green:#3fb950;--red:#ff7b72;--green-bg:#16361f;--red-bg:#3c1618;--code:#151b23;--shadow:rgba(0,0,0,.34)}
-    html[data-theme="light"]{color-scheme:light;--bg:#f6f7f8;--panel:#fff;--panel-2:#f6f8fa;--text:#1f2328;--muted:#66707a;--border:#d8dee4;--blue:#0969da;--green:#1f883d;--red:#cf222e;--green-bg:#dafbe1;--red-bg:#ffebe9;--code:#f6f8fa;--shadow:rgba(31,35,40,.16)}
+    :root{color-scheme:dark;--bg:#2b2b2b;--chrome:#313335;--panel:#3c3f41;--panel-2:#343638;--panel-3:#2f3032;--text:#a9b7c6;--strong:#bbbbbb;--muted:#7f868d;--border:#4b4f52;--border-strong:#555a5e;--blue:#4a88c7;--green:#6a8759;--red:#d36c6c;--yellow:#ffc66d;--orange:#cc7832;--purple:#9876aa;--green-bg:#314433;--red-bg:#4a3030;--code:#2b2b2b;--shadow:rgba(0,0,0,.38);--kw:#cc7832;--str:#6a8759;--comment:#808080;--num:#6897bb;--fn:#ffc66d;--type:#a9b7c6;--decor:#bbb529;--op:#cc7832}
+    html[data-theme="light"]{color-scheme:light;--bg:#f4f4f4;--chrome:#e8e8e8;--panel:#ffffff;--panel-2:#f5f5f5;--panel-3:#eeeeee;--text:#1f2328;--strong:#111827;--muted:#6b7280;--border:#d2d6dc;--border-strong:#b8bec8;--blue:#2a6db5;--green:#3f7f3f;--red:#c65353;--yellow:#9b6a00;--orange:#a45100;--purple:#7a4aa0;--green-bg:#e8f3e8;--red-bg:#f8e7e7;--code:#ffffff;--shadow:rgba(31,35,40,.16);--kw:#cc7832;--str:#6a8759;--comment:#808080;--num:#6897bb;--fn:#ffc66d;--type:#a9b7c6;--decor:#bbb529;--op:#cc7832}
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font:13px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+    body{margin:0;background:var(--bg);color:var(--text);font:12px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
     button,input,textarea{font:inherit}
-    button{color:inherit;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px 9px}
-    button:hover,button.active{border-color:var(--blue);color:var(--blue)}
-    input,textarea{background:var(--code);color:var(--text);border:1px solid var(--border);border-radius:6px}
-    .topbar{position:fixed;left:0;right:0;top:0;height:50px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 12px;z-index:4}
+    button{color:inherit;background:var(--panel-2);border:1px solid var(--border);border-radius:3px;padding:4px 8px}
+    button:hover,button.active{border-color:var(--blue);background:#42474b;color:#d6e8ff}
+    input,textarea{background:var(--code);color:var(--text);border:1px solid var(--border);border-radius:3px}
+    .topbar{position:fixed;left:0;right:0;top:0;height:44px;background:linear-gradient(#3c3f41,#343638);border-bottom:1px solid #232425;display:flex;align-items:center;justify-content:space-between;padding:0 10px;z-index:4;box-shadow:0 1px 0 rgba(255,255,255,.04) inset}
     .topbar div{display:flex;gap:10px;align-items:baseline;min-width:0}
+    .topbar strong{color:var(--strong);font-size:13px;letter-spacing:.01em}
     .topbar span{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .topbar nav{display:flex;gap:6px;align-items:center}
-    .activity{position:fixed;top:50px;bottom:0;left:0;width:70px;background:var(--panel);border-right:1px solid var(--border);padding:8px;display:flex;flex-direction:column;gap:8px}
-    .activity button{font-size:11px;padding:7px 3px}
-    .sidebar{position:fixed;left:70px;top:50px;bottom:0;width:280px;background:var(--panel);border-right:1px solid var(--border);overflow:auto}
-    .workspace{margin-left:350px;padding-top:50px;min-height:100vh}
-    .toolbar{height:40px;display:flex;gap:8px;align-items:center;padding:0 12px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:50px;z-index:2}
+    .topbar nav{display:flex;gap:4px;align-items:center}
+    .topbar nav button{height:26px;padding:3px 8px;background:#36393b}
+    .activity{position:fixed;top:44px;bottom:0;left:0;width:54px;background:#313335;border-right:1px solid #242628;padding:6px;display:flex;flex-direction:column;gap:5px}
+    .activity button{height:42px;font-size:10px;line-height:1.05;padding:4px 2px;background:#343638;border-color:transparent;color:#b8c0c8}
+    .activity button.active,.activity button:hover{background:#3f464d;border-color:#4a88c7;color:#d6e8ff}
+    .sidebar{position:fixed;left:54px;top:44px;bottom:0;width:296px;background:#3c3f41;border-right:1px solid #242628;overflow:auto}
+    .workspace{margin-left:350px;padding-top:44px;min-height:100vh}
+    .toolbar{height:34px;display:flex;gap:6px;align-items:center;padding:0 10px;border-bottom:1px solid #242628;background:#343638;position:sticky;top:44px;z-index:2}
     .toolbar span{color:var(--muted)}
     .toolbar button{padding:4px 8px}
-    .status{padding:10px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center}
+    .status{padding:8px 10px;border-bottom:1px solid #2e3133;display:flex;gap:8px;align-items:center;background:#383b3d}
     .status small{display:block;color:var(--muted);margin-left:auto}
-    .tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px;border-bottom:1px solid var(--border)}
-    .file-link,.source-link,.recent{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;text-align:left;background:transparent}
+    .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:6px;border-bottom:1px solid #2e3133;background:#35383a}
+    .tabs button{height:25px}
+    .file-link,.source-link,.recent{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;width:100%;border:0;border-bottom:1px solid #34383a;border-radius:0;text-align:left;background:transparent;padding:6px 10px;color:#bec6cf}
     .file-link span,.source-link span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .file-link b,.source-link small{color:var(--muted);font-weight:500}
+    .file-link:hover,.source-link:hover{background:#45494c;color:#d6e8ff}
     .file-link.viewed span,.source-link.viewed span{text-decoration:line-through;color:var(--muted)}
     .comment-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:10px;background:var(--blue);color:#fff;font-size:11px;margin-left:6px}
     .hidden{display:none!important}
     .pane{display:none}
     .pane.active{display:block}
-    .diff2html-container{padding:14px;display:flex;flex-direction:column}
-    .d2h-file-wrapper{border:1px solid var(--border);border-radius:8px;background:var(--panel);overflow:hidden;margin-bottom:14px;flex-shrink:0}
+    .diff2html-container{padding:10px 12px;display:flex;flex-direction:column;background:var(--bg)}
+    .d2h-file-wrapper{border:1px solid #4b4f52;border-radius:4px;background:var(--panel);overflow:hidden;margin-bottom:10px;flex-shrink:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset}
     .d2h-file-wrapper.viewed .diff-table{display:none}
     .d2h-file-wrapper.viewed .file-header{opacity:.72}
-    .file-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-bottom:1px solid var(--border);background:var(--code);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .file-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px;border-bottom:1px solid #4b4f52;background:#343638;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c7cbd1}
     .file-header-actions{display:flex;gap:6px;align-items:center}
     .file-header-actions button{padding:3px 7px;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
-    .diff-table{width:100%;border-collapse:collapse;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+    .diff-table{width:100%;border-collapse:collapse;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code)}
     .ln{width:52px;text-align:right;color:var(--muted);padding:0 8px;border-right:1px solid var(--border);user-select:none}
-    .code{white-space:pre-wrap;overflow-wrap:anywhere;padding-left:8px}
+    .code{white-space:pre-wrap;overflow-wrap:anywhere;padding-left:8px;color:#a9b7c6}
     .marker{display:inline-block;width:16px;color:var(--muted)}
     tr.addition{background:var(--green-bg)}
     tr.deletion{background:var(--red-bg)}
@@ -682,67 +687,59 @@ private enum NativeHTMLRenderer {
     .mc-composer .mc-card{border-left-color:var(--green)}
     .mc-composer textarea{width:100%;min-height:82px;margin-top:6px;padding:8px;caret-color:auto}
     .mc-composer footer{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
-    .source-body{padding:14px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:normal}
+    .source-body{padding:10px 12px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:normal;background:var(--code);min-height:calc(100vh - 78px)}
     .source-row{display:grid;grid-template-columns:52px minmax(0,1fr);min-height:18px}
     .source-gutter{color:var(--muted);font-weight:400;text-align:right;padding-right:8px;border-right:1px solid var(--border);user-select:none}
     .source-code{padding-left:8px;white-space:pre-wrap;overflow-wrap:anywhere}
     .code-cursor{display:inline-block;min-width:1px}
-    .tok-keyword{color:#ff7b72}
-    .tok-string{color:#a5d6ff}
-    .tok-comment{color:#8b949e;font-style:italic}
-    .tok-number{color:#79c0ff}
-    .tok-fn{color:#d2a8ff}
-    .tok-type{color:#ffa657}
-    .tok-decorator{color:#7ee787}
-    .tok-operator{color:#ff7b72}
-    html[data-theme="light"] .tok-keyword{color:#cf222e}
-    html[data-theme="light"] .tok-string{color:#0a3069}
-    html[data-theme="light"] .tok-comment{color:#6e7781}
-    html[data-theme="light"] .tok-number{color:#0550ae}
-    html[data-theme="light"] .tok-fn{color:#8250df}
-    html[data-theme="light"] .tok-type{color:#953800}
-    html[data-theme="light"] .tok-decorator{color:#116329}
-    html[data-theme="light"] .tok-operator{color:#cf222e}
+    .tok-keyword{color:var(--kw)}
+    .tok-string{color:var(--str)}
+    .tok-comment{color:var(--comment);font-style:italic}
+    .tok-number{color:var(--num)}
+    .tok-fn{color:var(--fn)}
+    .tok-type{color:var(--type)}
+    .tok-decorator{color:var(--decor)}
+    .tok-operator{color:var(--op)}
     .md-row .source-code{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;white-space:normal}
     .md-row h1,.md-row h2,.md-row h3{margin:0;font-size:15px}
     .csv-table{border-collapse:collapse;width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     .csv-table th,.csv-table td{border:1px solid var(--border);padding:3px 6px;text-align:left}
     .csv-head .source-code{font-weight:700}
     .empty,.empty-nav{color:var(--muted);padding:18px}
-    .floating-dock{position:fixed;right:24px;bottom:24px;width:min(760px,calc(100vw - 390px));max-height:70vh;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 12px 40px var(--shadow);z-index:8;display:flex;flex-direction:column}
+    .floating-dock{position:fixed;right:18px;bottom:18px;width:min(760px,calc(100vw - 382px));max-height:70vh;background:#3c3f41;border:1px solid #555a5e;border-radius:4px;box-shadow:0 18px 44px var(--shadow);z-index:8;display:flex;flex-direction:column}
     .floating-dock.maximized{left:370px;right:20px;top:70px;bottom:20px;width:auto;max-height:none}
-    .floating-dock header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)}
+    .floating-dock header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #4b4f52;background:#343638}
     .floating-dock header div{display:flex;gap:8px}
-    .floating-dock textarea{min-height:240px;border:0;border-radius:0;background:var(--panel);color:var(--text);font:13px ui-monospace,SFMono-Regular,Menlo,monospace;padding:12px;resize:vertical;caret-color:auto}
+    .floating-dock textarea{min-height:240px;border:0;border-radius:0;background:#2b2b2b;color:#a9b7c6;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px;resize:vertical;caret-color:auto}
     .floating-dock form{display:grid;gap:8px;padding:12px}
     .floating-dock input,.floating-dock textarea{width:100%;padding:8px}
     .floating-dock pre{margin:0;padding:12px;max-height:220px;overflow:auto;background:var(--code);border-top:1px solid var(--border);white-space:pre-wrap}
-    .terminal-panel{position:fixed;left:350px;right:0;bottom:0;height:260px;background:#161616;color:#a9b7c6;border-top:1px solid #333;z-index:7;display:flex;flex-direction:column}
-    .terminal-bar{min-height:34px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:8px;align-items:center;padding:0 10px;background:#202020}
-    .terminal-bar button{background:#202020;border-color:#444;color:#ddd;padding:4px 8px}
+    .terminal-panel{position:fixed;left:350px;right:0;bottom:0;height:260px;background:#1f2021;color:#a9b7c6;border-top:1px solid #555a5e;z-index:7;display:flex;flex-direction:column}
+    .terminal-bar{min-height:32px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:6px;align-items:center;padding:0 8px;background:#313335;border-bottom:1px solid #242628}
+    .terminal-bar button{background:#383b3d;border-color:#555a5e;color:#c7cbd1;padding:3px 7px}
     #terminal-tabs{display:flex;gap:6px;overflow:auto}
-    #terminal-tabs button.active{background:#2b2b2b;color:#fff}
+    #terminal-tabs button.active{background:#2b2b2b;color:#ffc66d;border-color:#4a88c7}
     #terminal-panes{position:relative;flex:1;min-height:0}
-    .terminal-output{display:none;margin:0;height:100%;overflow:auto;padding:8px;font:12px Monaco,ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;outline:none}
+    .terminal-output{display:none;margin:0;height:100%;overflow:auto;padding:8px;font:12px Monaco,ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;outline:none;background:#1f2021}
     .terminal-output.active{display:block}
-    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.28);z-index:12;display:flex;align-items:flex-start;justify-content:center;padding-top:80px}
-    .quick-open-panel,.settings-panel{width:min(720px,calc(100vw - 40px));background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 16px 52px var(--shadow);overflow:hidden}
-    #quick-open-input{width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;padding:12px;background:var(--panel);font-size:15px}
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.36);z-index:12;display:flex;align-items:flex-start;justify-content:center;padding-top:72px}
+    .quick-open-panel,.settings-panel{width:min(720px,calc(100vw - 40px));background:#3c3f41;border:1px solid #555a5e;border-radius:4px;box-shadow:0 18px 52px var(--shadow);overflow:hidden}
+    #quick-open-input{width:100%;border:0;border-bottom:1px solid #555a5e;border-radius:0;padding:10px 12px;background:#2b2b2b;color:#a9b7c6;font-size:14px}
     #quick-open-list{max-height:58vh;overflow:auto}
     .quick-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;text-align:left;background:transparent}
-    .quick-row.active{background:var(--code);color:var(--blue)}
-    .settings-panel{width:360px;padding-bottom:12px;position:relative}
-    .settings-panel header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)}
-    .settings-panel label{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:12px}
+    .quick-row.active{background:#2f4865;color:#d6e8ff}
+    .settings-panel{width:430px;padding-bottom:10px;position:relative}
+    .settings-panel header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #555a5e;background:#343638}
+    .settings-panel label{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:9px 10px}
     .settings-panel label.settings-text{display:grid;grid-template-columns:1fr;gap:6px;align-items:stretch}
-    .settings-panel textarea{min-height:74px;padding:8px;resize:vertical}
+    .settings-panel textarea{min-height:74px;padding:8px;resize:vertical;background:#2b2b2b;color:#a9b7c6}
     .settings-actions{display:flex;align-items:center;justify-content:space-between;padding:0 12px 12px;color:var(--muted)}
-    .mc-dropdown{position:absolute;right:12px;top:82px;display:grid;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 8px 24px var(--shadow);z-index:13}
+    .mc-dropdown{position:absolute;right:12px;top:82px;display:grid;background:#3c3f41;border:1px solid #555a5e;border-radius:3px;box-shadow:0 8px 24px var(--shadow);z-index:13}
     .mc-dropdown button{border:0;border-bottom:1px solid var(--border);border-radius:0;text-align:left}
-    .history-workspace{display:grid;grid-template-columns:330px 240px minmax(0,1fr);min-height:calc(100vh - 90px)}
-    #history-commits,#history-files{border-right:1px solid var(--border);overflow:auto}
+    .history-workspace{display:grid;grid-template-columns:330px 240px minmax(0,1fr);min-height:calc(100vh - 78px);background:#2b2b2b}
+    #history-commits,#history-files{border-right:1px solid #4b4f52;overflow:auto;background:#3c3f41}
     .history-row,.history-file{display:grid;grid-template-columns:minmax(0,1fr) auto;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;text-align:left}
-    .history-row.active,.history-file.active{background:var(--code);color:var(--blue)}
+    .history-row.active,.history-file.active{background:#2f4865;color:#d6e8ff}
     #history-diff-container{overflow:auto;padding:12px}
     .welcome{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:28px}
     .welcome h1{margin:0;font-size:26px}.welcome p{margin:0;color:var(--muted)}
@@ -761,7 +758,7 @@ private enum NativeHTMLRenderer {
       var recentKey = 'momenterm-recent-files:' + rootKey;
       var settingsStore = (window.momentermSettings && window.momentermSettings.all) || {};
       var settingDefaults = {
-        theme: 'dark',
+        theme: 'darcula',
         language: 'en',
         promptPlan: 'Review the current diff and propose the safest next implementation plan.',
         promptQ: 'Please answer this review question using the referenced file and line.',
@@ -807,7 +804,7 @@ private enum NativeHTMLRenderer {
       function setRecent(path){ if (!path) return; openedPaths = [path].concat(openedPaths.filter(function(p){ return p !== path; })).slice(0, 30); persist(recentKey, openedPaths); }
 
       function applyTheme(theme){
-        theme = theme === 'light' ? 'light' : 'dark';
+        theme = theme === 'light' ? 'light' : 'darcula';
         document.documentElement.setAttribute('data-theme', theme);
         saveSetting('theme', theme);
         var trigger = qs('#settings-theme');
@@ -1246,7 +1243,16 @@ private enum NativeHTMLRenderer {
       function attachSidebarHandlers(){
         qsa('.source-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ openSource(b.dataset.path); }); b.addEventListener('keydown', sidebarKeydown); });
         qsa('.file-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ scrollToPath(b.dataset.path); }); b.addEventListener('keydown', sidebarKeydown); });
-        qsa('[data-tab]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ qs('#changes-panel').classList.toggle('hidden', b.dataset.tab !== 'changes'); qs('#files-panel').classList.toggle('hidden', b.dataset.tab !== 'files'); }); });
+        qsa('[data-tab]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ setSidebarTab(b.dataset.tab); }); });
+        qsa('[data-view]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ setSidebarTab(b.dataset.view); }); });
+        setSidebarTab(qs('#files-panel').classList.contains('hidden') ? 'changes' : 'files');
+      }
+      function setSidebarTab(tab){
+        var files = tab === 'files';
+        qs('#changes-panel').classList.toggle('hidden', files);
+        qs('#files-panel').classList.toggle('hidden', !files);
+        qsa('[data-tab]').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === tab); });
+        qsa('[data-view]').forEach(function(b){ b.classList.toggle('active', b.dataset.view === tab); });
       }
       function sidebarRows(){
         return qsa('#changes-panel:not(.hidden) .file-link,#files-panel:not(.hidden) .source-link');

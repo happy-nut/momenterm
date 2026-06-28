@@ -169,6 +169,8 @@ const shortcutChecks = [
 for (const [name, pattern] of shortcutChecks) check(name, has(pattern));
 
 const settingsChecks = [
+  ["settings: Darcula default", /theme:\s*'darcula'/],
+  ["settings: Darcula theme option", /data-theme-option=\\?"darcula\\?"/],
   ["settings: theme selector", "settings-theme"],
   ["settings: language selector", "settings-language"],
   ["settings: plan prompt template", "settings-prompt-plan"],
@@ -182,6 +184,24 @@ const settingsChecks = [
   ["settings: prompt templates feed merged handoff", /getSetting\('promptC'\).*getSetting\('promptQ'\).*getSetting\('promptPlan'\)/s]
 ];
 for (const [name, pattern] of settingsChecks) check(name, has(pattern));
+
+const darculaChecks = [
+  ["darcula: editor background", "--bg:#2b2b2b"],
+  ["darcula: tool window panel", "--panel:#3c3f41"],
+  ["darcula: foreground", "--text:#a9b7c6"],
+  ["darcula: keyword orange", "--kw:#cc7832"],
+  ["darcula: string green", "--str:#6a8759"],
+  ["darcula: function yellow", "--fn:#ffc66d"],
+  ["darcula: type foreground", "--type:#a9b7c6"],
+  ["darcula: decorator olive", "--decor:#bbb529"],
+  ["darcula: topbar compact", ".topbar{position:fixed;left:0;right:0;top:0;height:44px"],
+  ["darcula: compact activity rail", ".activity{position:fixed;top:44px;bottom:0;left:0;width:54px"],
+  ["darcula: activity active state", ".activity button.active"],
+  ["darcula: source editor background", ".source-body{padding:10px 12px"],
+  ["darcula: diff editor background", ".diff2html-container{padding:10px 12px"],
+  ["darcula: sidebar tab wiring", "function setSidebarTab"]
+];
+for (const [name, pattern] of darculaChecks) check(name, has(pattern));
 
 const featureChecks = [
   ["feature: clean tree opens source", /!changedPaths\(\)\.length && sourceFiles\(\)\[0\].*openSource/s],
