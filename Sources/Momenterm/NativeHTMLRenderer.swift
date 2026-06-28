@@ -258,6 +258,7 @@ enum NativeHTMLRenderer {
     .mc-composer footer{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
     .source-body{padding:10px 12px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:normal;background:var(--code);min-height:calc(100vh - 78px)}
     .source-row{display:grid;grid-template-columns:52px minmax(0,1fr);min-height:18px}
+    .source-window-note{color:var(--muted);background:#303234;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
     .source-gutter{color:var(--muted);font-weight:400;text-align:right;padding-right:8px;border-right:1px solid var(--border);user-select:none}
     .source-code{padding-left:8px;white-space:pre-wrap;overflow-wrap:anywhere}
     .code-cursor{display:inline-block;min-width:1px}
@@ -345,6 +346,12 @@ enum NativeHTMLRenderer {
       var activeTerminalId = null;
       var terminalSeq = 0;
       var historyState = { commits: [], index: 0, file: '' };
+      var diffIndex = { wrappers: [], paths: [], byPath: {}, rowsByPath: {} };
+      var sourceByPathIndex = {};
+      var quickItemCache = null;
+      var syntaxJobToken = 0;
+      var updateScheduled = false;
+      var renderedCommentCount = 0;
       window.reviewComments = reviewComments;
 
       function qs(s, root){ return (root || document).querySelector(s); }
@@ -373,11 +380,32 @@ enum NativeHTMLRenderer {
       function persistComments(){ persist(commentsKey, reviewComments); }
       function persistViewed(){ persist(viewedKey, viewed); }
       function sourceFiles(){ return Array.isArray(data.sourceFiles) ? data.sourceFiles : []; }
-      function sourceByPath(path){ return sourceFiles().filter(function(f){ return f.path === path; })[0]; }
-      function changedPaths(){ return qsa('.d2h-file-wrapper').map(function(w){ return w.dataset.path; }).filter(Boolean); }
+      function rebuildSourceIndex(){
+        sourceByPathIndex = {};
+        sourceFiles().forEach(function(f){ if (f && f.path) sourceByPathIndex[f.path] = f; });
+        quickItemCache = null;
+      }
+      rebuildSourceIndex();
+      function sourceByPath(path){ return sourceByPathIndex[path]; }
+      function rebuildDiffIndex(){
+        var wrappers = qsa('.d2h-file-wrapper');
+        var byPath = {};
+        var rowsByPath = {};
+        var paths = [];
+        wrappers.forEach(function(w){
+          var path = w.dataset.path || '';
+          if (!path) return;
+          paths.push(path);
+          (byPath[path] || (byPath[path] = [])).push(w);
+          rowsByPath[path] = (rowsByPath[path] || []).concat(qsa('tr.addition,tr.deletion,tr.context', w));
+        });
+        diffIndex = { wrappers: wrappers, paths: paths, byPath: byPath, rowsByPath: rowsByPath };
+        quickItemCache = null;
+      }
+      function changedPaths(){ return diffIndex.paths.slice(); }
       function firstChangedPath(){ return changedPaths()[0] || (sourceFiles()[0] && sourceFiles()[0].path) || ''; }
-      function wrappersFor(path){ return qsa('.d2h-file-wrapper').filter(function(w){ return w.dataset.path === path; }); }
-      function rowsFor(path){ var out = []; wrappersFor(path).forEach(function(w){ out = out.concat(qsa('tr.addition,tr.deletion,tr.context', w)); }); return out; }
+      function wrappersFor(path){ return (diffIndex.byPath[path] || []).slice(); }
+      function rowsFor(path){ return (diffIndex.rowsByPath[path] || []).slice(); }
       function rowLine(row){ return Number((row && (row.dataset.new || row.dataset.old)) || 0); }
       function rowCode(row){ var c = row && qs('.code', row); var text = c ? c.textContent || '' : ''; return text.replace(/^[-+ ]/, ''); }
       function setRecent(path){ if (!path) return; openedPaths = [path].concat(openedPaths.filter(function(p){ return p !== path; })).slice(0, 30); persist(recentKey, openedPaths); }
@@ -422,8 +450,12 @@ enum NativeHTMLRenderer {
       }
 
       function markRow(row){
-        qsa('tr.cursor-line,.source-row.cursor-line').forEach(function(r){ r.classList.remove('cursor-line'); });
         if (!row) return;
+        if (current.row && current.row !== row) current.row.classList.remove('cursor-line');
+        if (current.sourceRow) {
+          current.sourceRow.classList.remove('cursor-line');
+          current.sourceRow = null;
+        }
         row.classList.add('cursor-line');
         current.row = row;
         var wrap = row.closest && row.closest('.d2h-file-wrapper');
@@ -433,7 +465,7 @@ enum NativeHTMLRenderer {
       }
       function ensureCurrentRow(){
         if (current.row && document.contains(current.row) && !current.row.closest('.d2h-file-wrapper.viewed')) return current.row;
-        var wrappers = qsa('.d2h-file-wrapper').filter(function(w){ return !w.classList.contains('viewed'); });
+        var wrappers = diffIndex.wrappers.filter(function(w){ return !w.classList.contains('viewed'); });
         var row = null;
         for (var i = 0; i < wrappers.length && !row; i++) row = qs('tr.addition,tr.deletion,tr.context', wrappers[i]);
         if (row) markRow(row);
@@ -456,14 +488,14 @@ enum NativeHTMLRenderer {
         if (viewed[path]) navigateDiff(1);
       }
       function applyViewed(){
-        qsa('.d2h-file-wrapper').forEach(function(w){ w.classList.toggle('viewed', !!viewed[w.dataset.path]); });
+        diffIndex.wrappers.forEach(function(w){ w.classList.toggle('viewed', !!viewed[w.dataset.path]); });
         qsa('.file-link,.source-link').forEach(function(b){ b.classList.toggle('viewed', !!viewed[b.dataset.path]); });
         updateViewedToggle();
       }
       function navigateDiff(delta){
         showPane('diff-viewer');
-        var wrappers = qsa('.d2h-file-wrapper').filter(function(w){ return !w.classList.contains('viewed'); });
-        if (!wrappers.length) wrappers = qsa('.d2h-file-wrapper');
+        var wrappers = diffIndex.wrappers.filter(function(w){ return !w.classList.contains('viewed'); });
+        if (!wrappers.length) wrappers = diffIndex.wrappers;
         if (!wrappers.length) return;
         var idx = wrappers.findIndex(function(w){ return w.dataset.path === current.path; });
         idx = idx < 0 ? (delta < 0 ? wrappers.length - 1 : 0) : idx + delta;
@@ -490,6 +522,22 @@ enum NativeHTMLRenderer {
         composing = false;
         document.body.classList.remove('mc-composing');
         if (pendingUpdate) { var u = pendingUpdate; pendingUpdate = null; applyDiffUpdate(u); }
+      }
+      function isTextEditingActive(){
+        var active = document.activeElement;
+        return !!(active && (/TEXTAREA|INPUT|SELECT/.test(active.tagName) || active.isContentEditable));
+      }
+      function schedulePendingUpdate(){
+        if (updateScheduled) return;
+        updateScheduled = true;
+        setTimeout(function(){
+          updateScheduled = false;
+          if (!pendingUpdate) return;
+          if (composing || isTextEditingActive()) { schedulePendingUpdate(); return; }
+          var update = pendingUpdate;
+          pendingUpdate = null;
+          applyDiffUpdate(update);
+        }, 180);
       }
       function openComposer(kind, existing){
         var target = existing ? { path: existing.path, line: Number(existing.line || 0), code: existing.code || '', source: current.view === 'source', row: null } : targetFromCurrent();
@@ -637,10 +685,12 @@ enum NativeHTMLRenderer {
         return true;
       }
       function refreshComments(){
+        if (!reviewComments.length && renderedCommentCount === 0) return;
         renderDiffComments();
         renderSourceComments();
         refreshBadges();
         refreshCommentActions();
+        renderedCommentCount = reviewComments.length;
         if (selectedCommentId) selectComment(selectedCommentId);
       }
       window.refreshComments = refreshComments;
@@ -741,17 +791,33 @@ enum NativeHTMLRenderer {
         }
         return out || '<span class="code-cursor">&nbsp;</span>';
       }
+      function highlightCell(cell){
+        if (!cell || cell.dataset.highlighted === '1') return;
+        var wrap = cell.closest('.d2h-file-wrapper');
+        var marker = qs('.marker', cell);
+        var markerText = marker ? marker.textContent : '';
+        var raw = cell.textContent || '';
+        var code = markerText ? raw.slice(markerText.length) : raw;
+        cell.innerHTML = '<span class="marker">' + esc(markerText) + '</span>' + highlightCode(code, wrap ? wrap.dataset.path : '');
+        cell.dataset.highlighted = '1';
+      }
+      function scheduleWork(fn){
+        if (window.requestIdleCallback) window.requestIdleCallback(fn, { timeout: 80 });
+        else setTimeout(function(){ fn({ timeRemaining: function(){ return 8; } }); }, 0);
+      }
       function applySyntaxHighlighting(root){
-        qsa('td.code', root || document).forEach(function(cell){
-          if (cell.dataset.highlighted === '1') return;
-          var wrap = cell.closest('.d2h-file-wrapper');
-          var marker = qs('.marker', cell);
-          var markerText = marker ? marker.textContent : '';
-          var raw = cell.textContent || '';
-          var code = markerText ? raw.slice(markerText.length) : raw;
-          cell.innerHTML = '<span class="marker">' + esc(markerText) + '</span>' + highlightCode(code, wrap ? wrap.dataset.path : '');
-          cell.dataset.highlighted = '1';
-        });
+        var tokenId = ++syntaxJobToken;
+        var cells = qsa('td.code:not([data-highlighted="1"])', root || document);
+        var index = 0;
+        function step(deadline){
+          var processed = 0;
+          while (index < cells.length && processed < 220 && (!deadline || deadline.timeRemaining() > 2)) {
+            highlightCell(cells[index++]);
+            processed++;
+          }
+          if (index < cells.length && tokenId === syntaxJobToken) scheduleWork(step);
+        }
+        scheduleWork(step);
       }
       window.__momentermHighlightCode = highlightCode;
       function renderMarkdownLine(line){
@@ -776,25 +842,55 @@ enum NativeHTMLRenderer {
         cells.push(cur);
         return cells;
       }
-      function renderSourceRows(file, raw){
+      function renderSourceRows(file, raw, centerLine){
         var path = file.path || '';
         var ext = path.split('.').pop().toLowerCase();
         var all = lines(file.content || '');
+        var limit = 3200;
+        var start = 0;
+        var end = all.length;
+        if (all.length > limit) {
+          var center = Math.max(1, Math.min(Number(centerLine || 1), all.length));
+          start = Math.max(0, center - Math.floor(limit / 2));
+          end = Math.min(all.length, start + limit);
+          start = Math.max(0, end - limit);
+        }
+        function notice(count, side){
+          return count > 0 ? '<div class="source-row source-window-note" data-window-note="' + side + '"><b class="source-gutter">…</b><span class="source-code">' + count + ' lines omitted</span></div>' : '';
+        }
+        var visible = all.slice(start, end);
+        function lineNumber(i){ return start + i + 1; }
+        var top = notice(start, 'top');
+        var bottom = notice(all.length - end, 'bottom');
         if (!raw && ext === 'csv') {
-          return all.map(function(line, i){
+          return top + visible.map(function(line, i){
             var cells = parseCsvLine(line);
-            var tag = i === 0 ? 'th' : 'td';
-            return '<div class="source-row csv-row ' + (i === 0 ? 'csv-head' : '') + '" data-line="' + (i + 1) + '" data-line-index="' + i + '"><b class="source-gutter">' + (i + 1) + '</b><div class="source-code"><table class="csv-table"><tr>' + cells.map(function(c){ return '<' + tag + '>' + esc(c) + '</' + tag + '>'; }).join('') + '</tr></table></div></div>';
-          }).join('');
+            var absolute = lineNumber(i);
+            var tag = absolute === 1 ? 'th' : 'td';
+            return '<div class="source-row csv-row ' + (absolute === 1 ? 'csv-head' : '') + '" data-line="' + absolute + '" data-line-index="' + (absolute - 1) + '"><b class="source-gutter">' + absolute + '</b><div class="source-code"><table class="csv-table"><tr>' + cells.map(function(c){ return '<' + tag + '>' + esc(c) + '</' + tag + '>'; }).join('') + '</tr></table></div></div>';
+          }).join('') + bottom;
         }
         if (!raw && (ext === 'md' || ext === 'markdown')) {
-          return all.map(function(line, i){
-            return '<div class="source-row md-row" data-line="' + (i + 1) + '" data-line-index="' + i + '"><b class="source-gutter">' + (i + 1) + '</b><div class="source-code">' + renderMarkdownLine(line) + '</div></div>';
-          }).join('');
+          return top + visible.map(function(line, i){
+            var absolute = lineNumber(i);
+            return '<div class="source-row md-row" data-line="' + absolute + '" data-line-index="' + (absolute - 1) + '"><b class="source-gutter">' + absolute + '</b><div class="source-code">' + renderMarkdownLine(line) + '</div></div>';
+          }).join('') + bottom;
         }
-        return all.map(function(line, i){
-          return '<div class="source-row" data-line="' + (i + 1) + '" data-line-index="' + i + '"><b class="source-gutter">' + (i + 1) + '</b><span class="source-code">' + highlightCode(line, path) + '</span></div>';
-        }).join('');
+        return top + visible.map(function(line, i){
+          var absolute = lineNumber(i);
+          return '<div class="source-row" data-line="' + absolute + '" data-line-index="' + (absolute - 1) + '"><b class="source-gutter">' + absolute + '</b><span class="source-code">' + highlightCode(line, path) + '</span></div>';
+        }).join('') + bottom;
+      }
+      function markSourceRow(row){
+        if (!row) return;
+        if (current.row) {
+          current.row.classList.remove('cursor-line');
+          current.row = null;
+        }
+        if (current.sourceRow && current.sourceRow !== row) current.sourceRow.classList.remove('cursor-line');
+        row.classList.add('cursor-line');
+        current.sourceRow = row;
+        current.line = Number(row.dataset.line || 1);
       }
       function openSource(path, line){
         var f = sourceByPath(path);
@@ -812,16 +908,18 @@ enum NativeHTMLRenderer {
           return;
         }
         body.classList.remove('empty');
-        body.innerHTML = renderSourceRows(f, !!sourceRaw[path]);
+        var desiredLine = Number(line || current.line || 1);
+        body.innerHTML = renderSourceRows(f, !!sourceRaw[path], desiredLine);
         var rawToggle = qs('#source-raw-toggle');
         if (rawToggle) rawToggle.textContent = sourceRaw[path] ? 'Rendered' : 'Raw';
         qsa('.source-row', body).forEach(function(row){
-          row.addEventListener('click', function(){ qsa('.source-row.cursor-line', body).forEach(function(r){ r.classList.remove('cursor-line'); }); row.classList.add('cursor-line'); current.line = Number(row.dataset.line || 1); });
-          row.addEventListener('dblclick', function(){ current.line = Number(row.dataset.line || 1); openComposer('q'); });
+          if (row.dataset.windowNote) return;
+          row.addEventListener('click', function(){ markSourceRow(row); });
+          row.addEventListener('dblclick', function(){ markSourceRow(row); openComposer('q'); });
         });
-        var target = line ? qsa('.source-row', body).filter(function(r){ return Number(r.dataset.line) === Number(line); })[0] : qs('.source-row', body);
-        if (target) target.classList.add('cursor-line');
-        current.line = Number((target && target.dataset.line) || 1);
+        var sourceRows = qsa('.source-row:not([data-window-note])', body);
+        var target = sourceRows.filter(function(r){ return Number(r.dataset.line) === desiredLine; })[0] || sourceRows[0];
+        if (target) markSourceRow(target);
         refreshComments();
       }
       window.gotoLineJump = function(path, line){ openSource(path, line); };
@@ -875,8 +973,9 @@ enum NativeHTMLRenderer {
         qs('[data-terminal-path]', menu).onclick = function(){ window.momentermApp.openTerminalAt(button.dataset.path || ''); closeMenus(); };
       }
       function attachDiffHandlers(){
+        rebuildDiffIndex();
         applySyntaxHighlighting(qs('#diff2html-container'));
-        qsa('.d2h-file-wrapper').forEach(function(w){
+        diffIndex.wrappers.forEach(function(w){
           var header = qs('.file-header', w);
           if (header && !qs('.file-header-actions', header)) {
             var actions = document.createElement('span');
@@ -886,12 +985,6 @@ enum NativeHTMLRenderer {
             qs('[data-view-file]', actions).onclick = function(){ openSource(w.dataset.path); };
             qs('[data-viewed-file]', actions).onclick = function(){ current.path = w.dataset.path; toggleViewed(w.dataset.path); };
           }
-          qsa('tr.addition,tr.deletion,tr.context', w).forEach(function(row){
-            if (row.dataset.bound) return;
-            row.dataset.bound = '1';
-            row.addEventListener('click', function(){ markRow(row); });
-            row.addEventListener('dblclick', function(){ markRow(row); openComposer('q'); });
-          });
         });
         if (!current.path) current.path = firstChangedPath();
         ensureCurrentRow();
@@ -979,11 +1072,17 @@ enum NativeHTMLRenderer {
         setTimeout(function(){ input.focus(); }, 0);
       }
       function closeQuickOpen(){ qs('#quick-open').classList.add('hidden'); }
-      function quickItems(query){
+      function allQuickItems(){
+        if (quickItemCache) return quickItemCache;
         var seen = {};
         var all = [];
         changedPaths().forEach(function(path){ if (!seen[path]) { seen[path] = true; all.push({ path: path, kind: 'change' }); } });
         sourceFiles().forEach(function(f){ if (!seen[f.path]) { seen[f.path] = true; all.push({ path: f.path, kind: 'file' }); } });
+        quickItemCache = all;
+        return quickItemCache;
+      }
+      function quickItems(query){
+        var all = allQuickItems().slice();
         var q = String(query || '').toLowerCase();
         if (!q && openedPaths.length) all.sort(function(a,b){ return openedPaths.indexOf(a.path) - openedPaths.indexOf(b.path); });
         return all.filter(function(item){ return !q || item.path.toLowerCase().indexOf(q) >= 0; }).slice(0, 80);
@@ -1006,7 +1105,11 @@ enum NativeHTMLRenderer {
         rows[idx].classList.add('active');
         rows[idx].scrollIntoView({ block: 'nearest' });
       }
-      qs('#quick-open-input').addEventListener('input', function(e){ renderQuickList(e.target.value); });
+      qs('#quick-open-input').addEventListener('input', function(e){
+        var value = e.target.value;
+        clearTimeout(renderQuickList.timer);
+        renderQuickList.timer = setTimeout(function(){ renderQuickList(value); }, 35);
+      });
       qs('#quick-open-input').addEventListener('keydown', function(e){
         if (e.key === 'Escape') { closeQuickOpen(); return; }
         if (e.key === 'ArrowDown') { e.preventDefault(); quickMove(1); return; }
@@ -1163,7 +1266,7 @@ enum NativeHTMLRenderer {
 
       function applyDiffUpdate(update){
         if (!update) return;
-        if (composing) { pendingUpdate = update; return; }
+        if (composing || isTextEditingActive()) { pendingUpdate = update; schedulePendingUpdate(); return; }
         if (update.diffContainer != null) qs('#diff2html-container').innerHTML = update.diffContainer;
         if (update.changesPanel != null) qs('#changes-panel').innerHTML = update.changesPanel;
         if (update.filesTree != null) qs('#files-panel').innerHTML = update.filesTree;
@@ -1173,6 +1276,7 @@ enum NativeHTMLRenderer {
         if (window.momentermFile && window.momentermFile.getSourceData) {
           window.momentermFile.getSourceData().then(function(raw){
             try { data.sourceFiles = JSON.parse(raw); } catch(e) {}
+            rebuildSourceIndex();
             remapComments();
             if (current.sourcePath && sourceByPath(current.sourcePath)) openSource(current.sourcePath, current.line);
           });
@@ -1185,6 +1289,18 @@ enum NativeHTMLRenderer {
       var quickOpenButton = qs('#quick-open-button');
       if (quickOpenButton) quickOpenButton.addEventListener('click', openQuickOpen);
       qs('#history-close').addEventListener('click', function(){ showPane('diff-viewer'); });
+      function eventDiffRow(event){
+        var row = event.target && event.target.closest && event.target.closest('tr.addition,tr.deletion,tr.context');
+        return row && qs('#diff2html-container').contains(row) ? row : null;
+      }
+      qs('#diff2html-container').addEventListener('click', function(e){
+        var row = eventDiffRow(e);
+        if (row) markRow(row);
+      });
+      qs('#diff2html-container').addEventListener('dblclick', function(e){
+        var row = eventDiffRow(e);
+        if (row) { markRow(row); openComposer('q'); }
+      });
       qsa('[data-action]').forEach(function(b){
         b.onclick = function(){
           var a = b.dataset.action;

@@ -9,6 +9,9 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
     private var root: URL?
     private var currentDocument: ReviewDocument?
     private var refreshTimer: Timer?
+    private var isLoadingDocument = false
+    private var queuedReload = false
+    private var queuedForceReload = false
     private var ignoreWhitespace = false
     private var persistedSettings: [String: JSONValue] = [:]
 
@@ -236,15 +239,33 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
             return
         }
 
+        if isLoadingDocument {
+            queuedReload = true
+            queuedForceReload = queuedForceReload || forceReload
+            return
+        }
+
+        isLoadingDocument = true
         DispatchQueue.global(qos: .userInitiated).async {
+            let requestedRoot = root
             let result: Result<ReviewDocument, Error>
             do {
-                result = .success(try self.service.build(root: root, ignoreWhitespace: self.ignoreWhitespace))
+                result = .success(try self.service.build(root: requestedRoot, ignoreWhitespace: self.ignoreWhitespace))
             } catch {
                 result = .failure(error)
             }
 
             DispatchQueue.main.async {
+                self.isLoadingDocument = false
+                guard self.root == requestedRoot else {
+                    if self.queuedReload {
+                        let queuedForceReload = self.queuedForceReload
+                        self.queuedReload = false
+                        self.queuedForceReload = false
+                        self.loadDocument(forceReload: queuedForceReload)
+                    }
+                    return
+                }
                 switch result {
                 case .success(let document):
                     if let root = self.root {
@@ -254,6 +275,12 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
                 case .failure(let error):
                     self.webView.loadHTMLString(self.errorHtml(String(describing: error)), baseURL: nil)
                     self.window?.title = "Momenterm"
+                }
+                if self.queuedReload {
+                    let queuedForceReload = self.queuedForceReload
+                    self.queuedReload = false
+                    self.queuedForceReload = false
+                    self.loadDocument(forceReload: queuedForceReload)
                 }
             }
         }
@@ -286,6 +313,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
     private func startRefreshTimer() {
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            guard self?.root != nil else { return }
             self?.loadDocument(forceReload: false)
         }
     }

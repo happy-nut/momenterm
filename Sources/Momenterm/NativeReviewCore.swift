@@ -2,6 +2,9 @@ import CryptoKit
 import Foundation
 
 final class NativeReviewCore {
+    private static let diffContextLines = 80
+    private static let maxInlineUntrackedDiffBytes = 1_000_000
+
     private let gitClient: GitClient
 
     init(gitClient: GitClient = SystemGitClient()) {
@@ -170,7 +173,7 @@ final class NativeReviewCore {
     }
 
     private func workingTreeDiff(root: URL, ignoreWhitespace: Bool) throws -> String {
-        var args = ["diff", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--unified=100000"]
+        var args = ["diff", "--no-ext-diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--unified=\(Self.diffContextLines)"]
         if ignoreWhitespace {
             args.append("--ignore-all-space")
         }
@@ -187,11 +190,31 @@ final class NativeReviewCore {
     }
 
     private func diffForUntrackedFile(_ path: String, root: URL) throws -> String {
-        let result = try Shell.run("/usr/bin/env", ["git", "diff", "--no-index", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--", "/dev/null", path], cwd: root)
+        let url = root.appendingPathComponent(path)
+        if fileSize(url) > Self.maxInlineUntrackedDiffBytes {
+            return largeUntrackedPlaceholder(path: path, size: fileSize(url))
+        }
+        let result = try Shell.run("/usr/bin/env", ["git", "diff", "--no-index", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--unified=\(Self.diffContextLines)", "--", "/dev/null", path], cwd: root)
         if result.status != 0 && result.status != 1 {
             throw MomentermError.commandFailed("git diff --no-index /dev/null \(path)", result.stderr)
         }
         return result.stdout
+    }
+
+    private func fileSize(_ url: URL) -> Int {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes?[.size] as? Int ?? 0
+    }
+
+    private func largeUntrackedPlaceholder(path: String, size: Int) -> String {
+        """
+        diff --git a/\(path) b/\(path)
+        new file mode 100644
+        --- /dev/null
+        +++ b/\(path)
+        @@ -0,0 +1 @@
+        +Large untracked file omitted from inline diff (\(size) bytes). Open the file from the Files panel for source metadata.
+        """
     }
 
     private func collectSourceFiles(files: [DiffFile], root: URL) throws -> [SourceFile] {

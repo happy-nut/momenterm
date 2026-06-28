@@ -39,6 +39,16 @@ Current classifications:
 - [ ] New keyboard shortcuts require parity smoke coverage.
 - [ ] New settings require persistence checks through the native settings bridge.
 
+## Performance Gate
+
+- [ ] Large diffs must not use unbounded context; keep Git diff context capped.
+- [ ] Large untracked files must not be expanded into full inline diff HTML.
+- [ ] Diff row click handling should use event delegation, not one listener per row.
+- [ ] Syntax highlighting should stay chunked through idle work.
+- [ ] Source view must window large files instead of rendering every line into the DOM.
+- [ ] Refresh polling must not start overlapping native review builds.
+- [ ] Input/composer focus should defer diff DOM updates until typing quiets.
+
 ## Verification Gate
 
 Run these before claiming a behavior or cleanup change is complete:
@@ -48,6 +58,7 @@ Run these before claiming a behavior or cleanup change is complete:
 ./scripts/parity-smoke.sh
 ./scripts/smoke.sh /path/to/repo
 ./scripts/pty-smoke.sh /path/to/repo
+./scripts/perf-smoke.sh
 ./scripts/package-app.sh
 ./scripts/launch-smoke.sh /path/to/repo
 git diff --check

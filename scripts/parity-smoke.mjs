@@ -8,7 +8,8 @@ const sourceFiles = [
   "Sources/Momenterm/NativeHTMLRenderer.swift",
   "Sources/Momenterm/NativeReviewTypes.swift",
   "Sources/Momenterm/UnifiedDiffParser.swift",
-  "Sources/Momenterm/NativeGitClient.swift"
+  "Sources/Momenterm/NativeGitClient.swift",
+  "Sources/Momenterm/MainWindowController.swift"
 ];
 const core = sourceFiles.map((path) => fs.readFileSync(new URL(path, root), "utf8")).join("\n");
 const scriptMatch = core.match(/private static let clientScript = """\n([\s\S]*?)\n    """\n\n    private static func escape/);
@@ -226,7 +227,7 @@ const featureChecks = [
   ["feature: clean tree opens source", /!changedPaths\(\)\.length && sourceFiles\(\)\[0\].*openSource/s],
   ["feature: markdown HTML is sanitized", "sanitizeInlineHtml"],
   ["feature: CSV render path", "parseCsvLine"],
-  ["feature: diff update defers while composing", /if \(composing\) \{ pendingUpdate = update; return; \}/],
+  ["feature: diff update defers while composing or typing", /if \(composing \|\| isTextEditingActive\(\)\) \{ pendingUpdate = update; schedulePendingUpdate\(\); return; \}/],
   ["feature: comment remap keeps comments", "function remapComments"],
   ["feature: terminal split", "function splitTerminal"],
   ["feature: terminal pane focus", "function focusTerminalPane"],
@@ -235,6 +236,18 @@ const featureChecks = [
   ["feature: HTTP dock", "http-client"]
 ];
 for (const [name, pattern] of featureChecks) check(name, has(pattern));
+
+const performanceChecks = [
+  ["performance: large diff context is bounded", "--unified=\\(Self.diffContextLines)"],
+  ["performance: 100000-line diff context removed", !core.includes("--unified=100000")],
+  ["performance: large untracked inline diff capped", "largeUntrackedPlaceholder"],
+  ["performance: diff index cache present", "var diffIndex ="],
+  ["performance: source path index present", "rebuildSourceIndex"],
+  ["performance: syntax highlighting is chunked", "requestIdleCallback"],
+  ["performance: source view windowing present", "source-window-note"],
+  ["performance: refresh builds do not overlap", "isLoadingDocument"]
+];
+for (const [name, pattern] of performanceChecks) check(name, typeof pattern === "boolean" ? pattern : has(pattern));
 
 const forbiddenRuntime = [
   "monacori" + "/dist",
