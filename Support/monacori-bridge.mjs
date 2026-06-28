@@ -47,7 +47,7 @@ async function readStdinJson() {
   return raw ? JSON.parse(raw) : {};
 }
 
-async function build(root) {
+async function build(root, payload = {}) {
   const { buildDiffReview } = await importDist("build.js");
   const review = buildDiffReview({
     root,
@@ -56,7 +56,7 @@ async function build(root) {
     context: 100000,
     title: "monacori native review",
     watch: true,
-    ignoreWhitespace: false,
+    ignoreWhitespace: !!payload.ignoreWhitespace,
     lazyLoad: true,
     app: true,
   });
@@ -94,7 +94,7 @@ async function main() {
   const [command, root] = process.argv.slice(2);
   const payload = await readStdinJson();
 
-  if (command === "build") return build(root);
+  if (command === "build") return build(root, payload);
   if (command === "git-log") return gitLog(root, payload);
   if (command === "commit-diff") return commitDiff(root, payload);
   if (command === "http-send") return httpSend(payload);

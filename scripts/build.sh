@@ -9,6 +9,7 @@ swiftc \
   -o "$OUT/Momenterm" \
   "$ROOT"/Sources/Momenterm/*.swift \
   -framework AppKit \
+  -framework UserNotifications \
   -framework WebKit
 
 echo "$OUT/Momenterm"

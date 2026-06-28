@@ -31,7 +31,17 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 ```bash
 ./scripts/build.sh
 ./scripts/smoke.sh /path/to/repo
+./scripts/pty-smoke.sh /path/to/repo
 ```
+
+## Package
+
+```bash
+./scripts/package-app.sh
+open .build/Momenterm.app --args --repo /path/to/repo
+```
+
+The package script copies `monacori/dist` into the app bundle so the native host can generate Monacori review HTML without Electron.
 
 ## Why This Shape
 
@@ -46,8 +56,6 @@ Monacori itself remains the review engine. `Support/monacori-bridge.mjs` imports
 
 ## Next Experiments
 
-1. Replace the minimal Swift diff renderer with Monacori's generated HTML.
-2. Add a real PTY-backed terminal view.
-3. Move menu accelerators into native commands.
-4. Add app bundle packaging and signing.
-5. Remove any remaining Electron-only assumptions from the shared host contract.
+1. Add code signing and notarization.
+2. Replace the Node bridge with a stable embedded helper strategy.
+3. Remove any remaining Electron-only assumptions from the shared host contract.

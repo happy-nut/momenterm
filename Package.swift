@@ -11,6 +11,13 @@ let package = Package(
         .executable(name: "Momenterm", targets: ["Momenterm"])
     ],
     targets: [
-        .target(name: "Momenterm")
+        .target(
+            name: "Momenterm",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("UserNotifications"),
+                .linkedFramework("WebKit")
+            ]
+        )
     ]
 )

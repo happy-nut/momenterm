@@ -1,12 +1,15 @@
 import AppKit
+import UserNotifications
 import WebKit
 
-final class MainWindowController: NSWindowController, WKScriptMessageHandler {
+final class MainWindowController: NSWindowController, WKScriptMessageHandler, NativePtyManagerDelegate {
     private let webView: WKWebView
     private let service = MonacoriBridgeService()
+    private let ptyManager = NativePtyManager()
     private var root: URL?
     private var currentDocument: MonacoriReviewDocument?
     private var refreshTimer: Timer?
+    private var ignoreWhitespace = false
 
     init(initialRoot: URL?) {
         self.root = initialRoot
@@ -29,6 +32,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler {
 
         super.init(window: window)
 
+        ptyManager.delegate = self
         userContent.add(self, name: "momenterm")
         configureContentView()
         loadDocument(forceReload: true)
@@ -41,6 +45,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler {
 
     deinit {
         refreshTimer?.invalidate()
+        ptyManager.killAll()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "momenterm")
     }
 
@@ -62,11 +67,48 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler {
         loadDocument(forceReload: true)
     }
 
+    func setIgnoreWhitespace(_ enabled: Bool) {
+        ignoreWhitespace = enabled
+        loadDocument(forceReload: true)
+    }
+
+    func isIgnoringWhitespace() -> Bool {
+        ignoreWhitespace
+    }
+
     func revealInFinder() {
         guard let root = root else {
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([root])
+    }
+
+    func openMergedView(kind: String) {
+        emit(event: "mergedView", value: .string(kind))
+    }
+
+    func openMemo() {
+        emit(event: "openMemo", value: .null)
+    }
+
+    func closeTab() {
+        emit(event: "closeTab", value: .null)
+    }
+
+    func toggleTerminal() {
+        emit(event: "terminalToggle", value: .null)
+    }
+
+    func splitTerminal() {
+        emit(event: "terminalSplit", value: .null)
+    }
+
+    func focusTerminalPane(delta: Int) {
+        emit(event: "terminalPaneFocus", value: .number(Double(delta)))
+    }
+
+    func renameTerminalPane() {
+        emit(event: "terminalPaneRename", value: .null)
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -124,9 +166,44 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler {
             resolve(id: id, value: .object(["ok": .bool(true)]))
         case "settings.set":
             resolve(id: id, value: .object(["ok": .bool(true)]))
+        case "pty.spawn":
+            let cols = body?.objectValue?["cols"]?.intValue ?? 80
+            let rows = body?.objectValue?["rows"]?.intValue ?? 24
+            do {
+                let ptyId = try ptyManager.spawn(cols: cols, rows: rows, cwd: root)
+                resolve(id: id, value: .object(["ok": .bool(true), "id": .number(Double(ptyId))]))
+            } catch {
+                resolve(id: id, value: .object(["ok": .bool(false), "id": .number(-1), "error": .string(String(describing: error))]))
+            }
+        case "pty.write":
+            if let object = body?.objectValue, let ptyId = object["id"]?.intValue, let data = object["data"]?.stringValue {
+                ptyManager.write(id: ptyId, data: data)
+            }
+            resolve(id: id, value: .object(["ok": .bool(true)]))
+        case "pty.resize":
+            if let object = body?.objectValue, let ptyId = object["id"]?.intValue {
+                ptyManager.resize(id: ptyId, cols: object["cols"]?.intValue ?? 80, rows: object["rows"]?.intValue ?? 24)
+            }
+            resolve(id: id, value: .object(["ok": .bool(true)]))
+        case "pty.kill":
+            if let ptyId = body?.objectValue?["id"]?.intValue {
+                ptyManager.kill(id: ptyId)
+            }
+            resolve(id: id, value: .object(["ok": .bool(true)]))
+        case "pty.bell":
+            showBellNotification(body)
+            resolve(id: id, value: .object(["ok": .bool(true)]))
         default:
             resolve(id: id, ok: false, value: .string("Unknown native bridge message: \(type)"))
         }
+    }
+
+    func nativePty(_ manager: NativePtyManager, didReceiveData data: String, id: Int) {
+        emit(event: "ptyData", value: .object(["id": .number(Double(id)), "data": .string(data)]))
+    }
+
+    func nativePtyDidExit(_ manager: NativePtyManager, id: Int) {
+        emit(event: "ptyExit", value: .object(["id": .number(Double(id))]))
     }
 
     private func configureContentView() {
@@ -153,7 +230,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler {
         DispatchQueue.global(qos: .userInitiated).async {
             let result: Result<MonacoriReviewDocument, Error>
             do {
-                result = .success(try self.service.build(root: root))
+                result = .success(try self.service.build(root: root, ignoreWhitespace: self.ignoreWhitespace))
             } catch {
                 result = .failure(error)
             }
@@ -231,6 +308,19 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler {
         let target = relativePath.map { root.appendingPathComponent($0) } ?? root
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
         _ = try? Shell.run("/usr/bin/open", ["-a", "Terminal", target.path])
+    }
+
+    private func showBellNotification(_ payload: JSONValue?) {
+        guard Bundle.main.bundleURL.pathExtension == "app" else {
+            return
+        }
+        let title = payload?.objectValue?["title"]?.stringValue ?? "monacori"
+        let body = payload?.objectValue?["body"]?.stringValue ?? ""
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 
     private func resolve(id: String, ok: Bool = true, value: JSONValue) {
@@ -367,6 +457,15 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler {
       window.monacoriSettings = {
         all: {},
         set: function (key, value) { post('settings.set', { key: key, value: value }); }
+      };
+      window.monacoriPty = {
+        spawn: function (size) { return post('pty.spawn', size || {}); },
+        write: function (msg) { post('pty.write', msg || {}); },
+        resize: function (msg) { post('pty.resize', msg || {}); },
+        kill: function (msg) { post('pty.kill', msg || {}); },
+        bell: function (msg) { post('pty.bell', msg || {}); },
+        onData: function (cb) { on('ptyData', cb); },
+        onExit: function (cb) { on('ptyExit', cb); }
       };
     })();
     """

@@ -88,8 +88,9 @@ enum JSONValue: Codable {
 final class MonacoriBridgeService {
     private let decoder = JSONDecoder()
 
-    func build(root: URL) throws -> MonacoriReviewDocument {
-        let data = try runBridge(command: "build", root: root, payload: "{}")
+    func build(root: URL, ignoreWhitespace: Bool) throws -> MonacoriReviewDocument {
+        let payload: JSONValue = .object(["ignoreWhitespace": .bool(ignoreWhitespace)])
+        let data = try runBridge(command: "build", root: root, payload: payload.jsonString())
         return try decoder.decode(MonacoriReviewDocument.self, from: data)
     }
 
@@ -147,11 +148,17 @@ final class MonacoriBridgeService {
         let sourceRoot = URL(fileURLWithPath: #file).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
         let candidates = [
+            Bundle.main.resourceURL?.appendingPathComponent("Support/monacori-bridge.mjs"),
             envRoot,
             sourceRoot,
             cwd,
             cwd.deletingLastPathComponent()
-        ].compactMap { $0?.appendingPathComponent("Support/monacori-bridge.mjs") }
+        ].compactMap { candidate -> URL? in
+            if candidate?.lastPathComponent == "monacori-bridge.mjs" {
+                return candidate
+            }
+            return candidate?.appendingPathComponent("Support/monacori-bridge.mjs")
+        }
 
         for candidate in candidates where fm.fileExists(atPath: candidate.path) {
             return candidate
