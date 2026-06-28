@@ -10,8 +10,9 @@ The prototype keeps the review loop local and native:
 - polling refresh for Git diff changes
 - Swift Git diff parsing, source loading, Git history, HTTP requests, and welcome/recent-project state
 - native Darcula review UI parity for syntax highlighting, comments, viewed files, source rendering, quick-open, history, settings, shortcuts, and terminal handoff
+- terminal-first workbench: the native PTY is the base surface, while diff, source, history, changes, and file tree views open as floating review tools
 
-The integrated terminal is backed by a native macOS PTY.
+The integrated terminal is backed by a native macOS PTY and supports multiple tabs.
 
 ## Run
 

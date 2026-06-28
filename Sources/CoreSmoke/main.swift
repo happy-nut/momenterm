@@ -32,6 +32,8 @@ do {
         "http-client",
         "computeHistoryGraph",
         "history-workspace",
+        "review-overlay",
+        "terminal-base",
         "terminal-tabs",
         "terminal-split",
         "sendToTerminal",

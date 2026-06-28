@@ -104,7 +104,7 @@ const sandbox = {
   window: {
     __momentermData: { root: "/tmp/momenterm-parity", sourceFiles: [] },
     momentermSettings: { all: {}, set() {} },
-    momentermPty: { spawn: () => Promise.resolve({ ok: true, id: 1 }), write() {}, onData() {}, onExit() {} },
+    momentermPty: { spawn: () => Promise.resolve({ ok: true, id: 1 }), write() {}, kill() {}, onData() {}, onExit() {} },
     momentermGit: { log: () => Promise.resolve([]), commitDiff: () => Promise.resolve({}) },
     momentermHttp: { send: () => Promise.resolve({ ok: true }) },
     momentermClipboard: { write() {} },
@@ -170,6 +170,7 @@ const shortcutChecks = [
   ["shortcut: history ArrowDown", /current\.view === 'history' && e\.key === 'ArrowDown'.*historyMove\(1\)/s],
   ["shortcut: history ArrowUp", /current\.view === 'history' && e\.key === 'ArrowUp'.*historyMove\(-1\)/s],
   ["shortcut: history Enter opens commit", /current\.view === 'history' && e\.key === 'Enter'.*openHistoryCommit/s],
+  ["shortcut: Ctrl+backtick focuses terminal", /e\.ctrlKey && e\.key === '`'.*toggleTerminal\(\)/s],
   ["shortcut: terminal Enter", /#terminal-panes[\s\S]*e\.key === 'Enter'[\s\S]*writeActive\('\\\\r'\)/],
   ["shortcut: terminal Backspace", /#terminal-panes[\s\S]*e\.key === 'Backspace'[\s\S]*String\.fromCharCode\(127\)/],
   ["shortcut: terminal Tab", /#terminal-panes[\s\S]*e\.key === 'Tab'[\s\S]*writeActive\('\\\\t'\)/],
@@ -226,7 +227,11 @@ check("action exposure: dock controls are icon buttons", /class="icon-btn" data-
 check("action exposure: file header controls are icon buttons", /class="icon-btn" data-view-file/.test(clientScript) && /class="icon-btn" data-viewed-file/.test(clientScript));
 
 const featureChecks = [
-  ["feature: clean tree opens source", /!changedPaths\(\)\.length && sourceFiles\(\)\[0\].*openSource/s],
+  ["feature: terminal base boots by default", /var current = \{ view: 'terminal'[\s\S]*ensureTerminal\(\);/],
+  ["feature: review tools are floating overlay", "id=\"review-overlay\" class=\"review-overlay hidden\""],
+  ["feature: showPane opens review overlay", /function showPane\(id\)[\s\S]*openReviewOverlay\(\)/],
+  ["feature: terminal new tab", /function splitTerminal\(\)\{ closeReviewOverlay\(\); spawnTerminal\(\); \}/],
+  ["feature: terminal tab close uses native PTY kill", /function closeTerminalTab[\s\S]*momentermPty\.kill/],
   ["feature: markdown HTML is sanitized", "sanitizeInlineHtml"],
   ["feature: CSV render path", "parseCsvLine"],
   ["feature: image source preview", "renderImageView"],

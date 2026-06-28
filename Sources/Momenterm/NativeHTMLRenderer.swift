@@ -47,24 +47,27 @@ enum NativeHTMLRenderer {
           <div><strong>Momenterm</strong><span>\(escape(root.path))</span></div>
         </header>
         \(activityRail)
-        <aside class="sidebar">
-          <section id="review-status">\(reviewStatus)</section>
-          <div class="tabs"><button data-tab="changes">Changes</button><button data-tab="files">Files</button></div>
-          <div id="changes-panel">\(changesPanel)</div>
-          <div id="files-panel" class="hidden">\(filesTree)</div>
-        </aside>
-        <main class="workspace">
-          <section id="diff-viewer" class="pane active">
-            <div class="toolbar"><span class="branch-label">\(escape(branch))</span>\(ignoreWhitespace ? "<span>ignore whitespace</span>" : "")<button id="diff-viewed-toggle" class="diff-viewed-toggle icon-label-button" aria-pressed="false" title="Toggle viewed (<)" hidden>\(miniIcon("eye"))<span>Viewed</span></button></div>
-            <div id="diff2html-container" class="diff2html-container">\(diffHtml.isEmpty ? "<div class=\"empty\">No diff to review.</div>" : diffHtml)</div>
-          </section>
-          <section id="source-viewer" class="pane"><div class="toolbar"><span id="source-title">Source</span><button id="source-raw-toggle" class="plain-button">Raw</button><button id="back-to-diff" class="plain-button">Diff</button></div><div id="source-body" class="source-body empty">Select a file from the Files tab.</div></section>
-          <section id="history-viewer" class="pane"><div class="toolbar"><span>History</span><button id="history-close" class="plain-button">Diff</button></div><div id="history-body" class="history-workspace">Loading history...</div></section>
-        </main>
+        <section id="terminal-panel" class="terminal-panel terminal-base"><div class="terminal-bar"><span>Terminal</span><div id="terminal-tabs" role="tablist"></div><button id="terminal-split" class="icon-btn" title="New terminal tab" aria-label="New terminal tab">\(miniIcon("plus"))</button><button id="terminal-rename" class="icon-btn" title="Rename tab" aria-label="Rename tab">\(miniIcon("edit"))</button><button id="terminal-close" class="icon-btn" title="Close tab" aria-label="Close tab">\(miniIcon("x"))</button></div><div id="terminal-panes"></div></section>
+        <div id="review-overlay" class="review-overlay hidden" aria-hidden="true">
+          <div class="review-overlay-bar"><span>Review tools</span><button id="review-overlay-close" class="icon-btn" title="Back to terminal" aria-label="Back to terminal">\(miniIcon("x"))</button></div>
+          <aside class="sidebar">
+            <section id="review-status">\(reviewStatus)</section>
+            <div class="tabs"><button data-tab="changes">Changes</button><button data-tab="files">Files</button></div>
+            <div id="changes-panel">\(changesPanel)</div>
+            <div id="files-panel" class="hidden">\(filesTree)</div>
+          </aside>
+          <main class="workspace">
+            <section id="diff-viewer" class="pane active">
+              <div class="toolbar"><span class="branch-label">\(escape(branch))</span>\(ignoreWhitespace ? "<span>ignore whitespace</span>" : "")<button id="diff-viewed-toggle" class="diff-viewed-toggle icon-label-button" aria-pressed="false" title="Toggle viewed (<)" hidden>\(miniIcon("eye"))<span>Viewed</span></button></div>
+              <div id="diff2html-container" class="diff2html-container">\(diffHtml.isEmpty ? "<div class=\"empty\">No diff to review.</div>" : diffHtml)</div>
+            </section>
+            <section id="source-viewer" class="pane"><div class="toolbar"><span id="source-title">Source</span><button id="source-raw-toggle" class="plain-button">Raw</button><button id="back-to-diff" class="plain-button">Diff</button></div><div id="source-body" class="source-body empty">Select a file from the Files tab.</div></section>
+            <section id="history-viewer" class="pane"><div class="toolbar"><span>History</span><button id="history-close" class="plain-button">Diff</button></div><div id="history-body" class="history-workspace">Loading history...</div></section>
+          </main>
+        </div>
         <div id="floating-dock" class="floating-dock hidden"></div>
         <div id="quick-open" class="modal-backdrop hidden"><section class="quick-open-panel"><input id="quick-open-input" autocomplete="off" placeholder="Search files"><div id="quick-open-list"></div></section></div>
         <div id="settings-modal" class="modal-backdrop hidden"><section class="settings-panel"><header><b>Settings</b><button id="settings-close" class="icon-btn" title="Close" aria-label="Close">\(miniIcon("x"))</button></header><label>Theme <button id="settings-theme" class="dropdown-trigger"></button></label><label>Language <button id="settings-language" class="dropdown-trigger"></button></label><label class="settings-text">Plan prompt <textarea id="settings-prompt-plan"></textarea></label><label class="settings-text">Question prompt <textarea id="settings-prompt-q"></textarea></label><label class="settings-text">Change prompt <textarea id="settings-prompt-c"></textarea></label><footer class="settings-actions"><button id="settings-reset">Reset</button><span id="settings-saved"></span></footer><div id="settings-theme-menu" class="mc-dropdown hidden"><button data-theme-option="darcula">Darcula</button><button data-theme-option="light">Light</button></div><div id="settings-language-menu" class="mc-dropdown hidden"><button data-language-option="en">English</button><button data-language-option="ko">한국어</button></div></section></div>
-        <section id="terminal-panel" class="terminal-panel hidden"><div class="terminal-bar"><span>Terminal</span><div id="terminal-tabs"></div><button id="terminal-split" class="icon-btn" title="Split terminal" aria-label="Split terminal">\(miniIcon("split"))</button><button id="terminal-rename" class="icon-btn" title="Rename pane" aria-label="Rename pane">\(miniIcon("edit"))</button><button id="terminal-close" class="icon-btn" title="Close terminal" aria-label="Close terminal">\(miniIcon("x"))</button></div><div id="terminal-panes"></div></section>
         <script>window.__momentermData = \(data);</script>
         <script>\(clientScript)</script>
         """)
@@ -119,6 +122,8 @@ enum NativeHTMLRenderer {
             body = #"<path d="M3.5 12s3-5 8.5-5 8.5 5 8.5 5-3 5-8.5 5-8.5-5-8.5-5z"/><circle cx="12" cy="12" r="2.4"/>"#
         case "split":
             body = #"<rect x="4" y="5" width="7" height="14" rx="1.4"/><rect x="13" y="5" width="7" height="14" rx="1.4"/>"#
+        case "plus":
+            body = #"<path d="M12 5v14M5 12h14"/>"#
         case "x":
             body = #"<path d="M6 6l12 12M18 6L6 18"/>"#
         default:
@@ -220,9 +225,12 @@ enum NativeHTMLRenderer {
     .icon-btn .icon{width:16px;height:16px}
     .icon-label-button{display:inline-flex;align-items:center;gap:5px}
     .plain-button{height:26px}
-    .sidebar{position:fixed;left:54px;top:44px;bottom:0;width:296px;background:#3c3f41;border-right:1px solid #242628;overflow:auto}
-    .workspace{margin-left:350px;padding-top:44px;min-height:100vh}
-    .toolbar{height:34px;display:flex;gap:6px;align-items:center;padding:0 10px;border-bottom:1px solid #242628;background:#343638;position:sticky;top:44px;z-index:2}
+    .review-overlay{position:fixed;left:68px;right:16px;top:58px;bottom:16px;z-index:6;display:grid;grid-template-columns:300px minmax(0,1fr);grid-template-rows:34px minmax(0,1fr);background:#3c3f41;border:1px solid #555a5e;box-shadow:0 18px 48px var(--shadow);min-width:0;min-height:0}
+    .review-overlay-bar{grid-column:1/3;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 8px;border-bottom:1px solid #242628;background:#343638;color:var(--muted)}
+    .review-overlay-bar span{font-weight:700;color:#c7cbd1}
+    .sidebar{grid-column:1;grid-row:2;position:static;width:auto;min-height:0;background:#3c3f41;border-right:1px solid #242628;overflow:auto}
+    .workspace{grid-column:2;grid-row:2;margin-left:0;padding-top:0;min-width:0;min-height:0;background:var(--bg);overflow:hidden}
+    .toolbar{height:34px;flex:0 0 34px;display:flex;gap:6px;align-items:center;padding:0 10px;border-bottom:1px solid #242628;background:#343638;position:static;top:auto;z-index:2}
     .toolbar span{color:var(--muted)}
     .toolbar button{padding:4px 8px}
     .status{padding:8px 10px;border-bottom:1px solid #2e3133;display:flex;gap:8px;align-items:center;background:#383b3d}
@@ -241,9 +249,9 @@ enum NativeHTMLRenderer {
     .source-link.not-embedded:hover{opacity:.72}
     .comment-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:10px;background:var(--blue);color:#fff;font-size:11px;margin-left:6px}
     .hidden{display:none!important}
-    .pane{display:none}
-    .pane.active{display:block}
-    .diff2html-container{padding:10px 12px;display:flex;flex-direction:column;background:var(--bg)}
+    .pane{display:none;height:100%;min-height:0;overflow:hidden}
+    .pane.active{display:flex;flex-direction:column}
+    .diff2html-container{padding:10px 12px;display:flex;flex:1;min-height:0;overflow:auto;flex-direction:column;background:var(--bg)}
     .d2h-file-wrapper{border:1px solid #4b4f52;border-radius:4px;background:var(--panel);overflow:hidden;margin-bottom:10px;flex-shrink:0;box-shadow:0 1px 0 rgba(255,255,255,.03) inset}
     .d2h-file-wrapper.viewed .diff-table{display:none}
     .d2h-file-wrapper.viewed .file-header{opacity:.72}
@@ -270,7 +278,7 @@ enum NativeHTMLRenderer {
     .mc-composer .mc-card{border-left-color:var(--green)}
     .mc-composer textarea{width:100%;min-height:82px;margin-top:6px;padding:8px;caret-color:auto}
     .mc-composer footer{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
-    .source-body{padding:10px 12px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:normal;background:var(--code);min-height:calc(100vh - 78px)}
+    .source-body{padding:10px 12px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:normal;background:var(--code);min-height:0;flex:1;overflow:auto}
     .source-row{display:grid;grid-template-columns:52px minmax(0,1fr);min-height:18px}
     .source-window-note{color:var(--muted);background:#303234;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
     .source-gutter{color:var(--muted);font-weight:400;text-align:right;padding-right:8px;border-right:1px solid var(--border);user-select:none}
@@ -291,26 +299,27 @@ enum NativeHTMLRenderer {
     .csv-head .source-code{font-weight:700}
     .source-body.image-body{display:flex;align-items:flex-start;justify-content:center;padding:24px}
     .image-view{display:flex;flex-direction:column;align-items:center;gap:12px;max-width:100%}
-    .image-preview{max-width:100%;max-height:calc(100vh - 230px);object-fit:contain;border:1px solid var(--border);border-radius:0;background:repeating-conic-gradient(#3a3a3a 0% 25%,#2f2f2f 0% 50%) 50%/20px 20px;cursor:zoom-in}
+    .image-preview{max-width:100%;max-height:calc(100vh - 250px);object-fit:contain;border:1px solid var(--border);border-radius:0;background:repeating-conic-gradient(#3a3a3a 0% 25%,#2f2f2f 0% 50%) 50%/20px 20px;cursor:zoom-in}
     .image-cap{color:var(--muted);font:11px Monaco,ui-monospace,SFMono-Regular,Menlo,monospace}
     .mc-lightbox{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.82);cursor:zoom-out;padding:32px}
     .mc-lightbox-img{max-width:100%;max-height:100%;object-fit:contain}
     .empty,.empty-nav{color:var(--muted);padding:18px}
-    .floating-dock{position:fixed;right:18px;bottom:18px;width:min(760px,calc(100vw - 382px));max-height:70vh;background:#3c3f41;border:1px solid #555a5e;border-radius:4px;box-shadow:0 18px 44px var(--shadow);z-index:8;display:flex;flex-direction:column}
-    .floating-dock.maximized{left:370px;right:20px;top:70px;bottom:20px;width:auto;max-height:none}
+    .floating-dock{position:fixed;right:18px;bottom:18px;width:min(760px,calc(100vw - 90px));max-height:70vh;background:#3c3f41;border:1px solid #555a5e;border-radius:4px;box-shadow:0 18px 44px var(--shadow);z-index:8;display:flex;flex-direction:column}
+    .floating-dock.maximized{left:70px;right:20px;top:70px;bottom:20px;width:auto;max-height:none}
     .floating-dock header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #4b4f52;background:#343638}
     .floating-dock header div{display:flex;gap:6px}
     .floating-dock textarea{min-height:240px;border:0;border-radius:0;background:#2b2b2b;color:#a9b7c6;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px;resize:vertical;caret-color:auto}
     .floating-dock form{display:grid;gap:8px;padding:12px}
     .floating-dock input,.floating-dock textarea{width:100%;padding:8px}
     .floating-dock pre{margin:0;padding:12px;max-height:220px;overflow:auto;background:var(--code);border-top:1px solid var(--border);white-space:pre-wrap}
-    .terminal-panel{position:fixed;left:350px;right:0;bottom:0;height:260px;background:#1f2021;color:#a9b7c6;border-top:1px solid #555a5e;z-index:7;display:flex;flex-direction:column}
+    .terminal-panel{position:fixed;left:54px;right:0;top:44px;bottom:0;height:auto;background:#1f2021;color:#a9b7c6;border-top:0;z-index:1;display:flex;flex-direction:column}
     .terminal-bar{min-height:32px;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;gap:6px;align-items:center;padding:0 8px;background:#313335;border-bottom:1px solid #242628}
     .terminal-bar button{background:#383b3d;border-color:#555a5e;color:#c7cbd1;padding:3px 7px}
     #terminal-tabs{display:flex;gap:6px;overflow:auto}
+    #terminal-tabs button{height:24px;min-width:92px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;background:#343638}
     #terminal-tabs button.active{background:#2b2b2b;color:#ffc66d;border-color:#4a88c7}
     #terminal-panes{position:relative;flex:1;min-height:0}
-    .terminal-output{display:none;margin:0;height:100%;overflow:auto;padding:8px;font:12px Monaco,ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;outline:none;background:#1f2021}
+    .terminal-output{display:none;margin:0;height:100%;overflow:auto;padding:12px;font:12px/1.45 Monaco,ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;outline:none;background:#1f2021}
     .terminal-output.active{display:block}
     .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.36);z-index:12;display:flex;align-items:flex-start;justify-content:center;padding-top:72px}
     .quick-open-panel,.settings-panel{width:min(720px,calc(100vw - 40px));background:#3c3f41;border:1px solid #555a5e;border-radius:4px;box-shadow:0 18px 52px var(--shadow);overflow:hidden}
@@ -326,7 +335,7 @@ enum NativeHTMLRenderer {
     .settings-actions{display:flex;align-items:center;justify-content:space-between;padding:0 12px 12px;color:var(--muted)}
     .mc-dropdown{position:absolute;right:12px;top:82px;display:grid;background:#3c3f41;border:1px solid #555a5e;border-radius:3px;box-shadow:0 8px 24px var(--shadow);z-index:13}
     .mc-dropdown button{border:0;border-bottom:1px solid var(--border);border-radius:0;text-align:left}
-    .history-workspace{display:grid;grid-template-columns:330px 240px minmax(0,1fr);min-height:calc(100vh - 78px);background:#2b2b2b}
+    .history-workspace{display:grid;grid-template-columns:330px 240px minmax(0,1fr);height:100%;min-height:0;background:#2b2b2b}
     #history-commits,#history-files{border-right:1px solid #4b4f52;overflow:auto;background:#3c3f41}
     .history-row,.history-file{display:grid;grid-template-columns:minmax(0,1fr) auto;width:100%;border:0;border-bottom:1px solid var(--border);border-radius:0;background:transparent;text-align:left}
     .history-row.active,.history-file.active{background:#2f4865;color:#d6e8ff}
@@ -357,7 +366,7 @@ enum NativeHTMLRenderer {
       var composing = false;
       var pendingUpdate = null;
       var selectedCommentId = null;
-      var current = { view: 'diff', path: '', row: null, line: 0, sourcePath: '' };
+      var current = { view: 'terminal', path: '', row: null, line: 0, sourcePath: '' };
       var sourceRaw = {};
       var openedPaths = loadJSON(recentKey, []);
       var viewed = loadJSON(viewedKey, {});
@@ -439,7 +448,29 @@ enum NativeHTMLRenderer {
       }
       applyTheme(getSetting('theme'));
 
+      function openReviewOverlay(){
+        var overlay = qs('#review-overlay');
+        if (!overlay) return;
+        overlay.classList.remove('hidden');
+        overlay.setAttribute('aria-hidden', 'false');
+      }
+      function reviewOverlayOpen(){
+        var overlay = qs('#review-overlay');
+        return !!(overlay && !overlay.classList.contains('hidden'));
+      }
+      function closeReviewOverlay(){
+        var overlay = qs('#review-overlay');
+        if (overlay) {
+          overlay.classList.add('hidden');
+          overlay.setAttribute('aria-hidden', 'true');
+        }
+        current.view = 'terminal';
+        document.body.dataset.view = 'terminal';
+        persist(uiKey, { view: current.view, path: current.path, sourcePath: current.sourcePath });
+        focusTerminal();
+      }
       function showPane(id){
+        openReviewOverlay();
         qsa('.pane').forEach(function(p){ p.classList.toggle('active', p.id === id); });
         current.view = id === 'source-viewer' ? 'source' : (id === 'history-viewer' ? 'history' : 'diff');
         document.body.dataset.view = current.view;
@@ -979,16 +1010,24 @@ enum NativeHTMLRenderer {
       function attachSidebarHandlers(){
         qsa('.source-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ openSource(b.dataset.path); }); b.addEventListener('keydown', sidebarKeydown); });
         qsa('.file-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ scrollToPath(b.dataset.path); }); b.addEventListener('keydown', sidebarKeydown); });
-        qsa('[data-tab]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ setSidebarTab(b.dataset.tab); }); });
-        qsa('[data-view]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ setSidebarTab(b.dataset.view); }); });
-        setSidebarTab(qs('#files-panel').classList.contains('hidden') ? 'changes' : 'files');
+        qsa('[data-tab]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ setSidebarTab(b.dataset.tab, true); }); });
+        qsa('[data-view]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ setSidebarTab(b.dataset.view, true); }); });
+        setSidebarTab(qs('#files-panel').classList.contains('hidden') ? 'changes' : 'files', false);
       }
-      function setSidebarTab(tab){
+      function setSidebarTab(tab, reveal){
+        if (reveal) {
+          if (current.view === 'terminal') showPane('diff-viewer');
+          else openReviewOverlay();
+        }
         var files = tab === 'files';
         qs('#changes-panel').classList.toggle('hidden', files);
         qs('#files-panel').classList.toggle('hidden', !files);
         qsa('[data-tab]').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === tab); });
         qsa('[data-view]').forEach(function(b){ b.classList.toggle('active', b.dataset.view === tab); });
+        if (reveal) {
+          var first = qs(files ? '#files-panel .source-link' : '#changes-panel .file-link');
+          if (first) first.focus();
+        }
       }
       function sidebarRows(){
         return qsa('#changes-panel:not(.hidden) .file-link,#files-panel:not(.hidden) .source-link');
@@ -1217,12 +1256,13 @@ enum NativeHTMLRenderer {
       }
 
       function renderTerminal(){
-        qs('#terminal-tabs').innerHTML = terminals.map(function(t){ return '<button class="' + (t.id === activeTerminalId ? 'active' : '') + '" data-term-tab="' + t.id + '">' + esc(t.name) + '</button>'; }).join('');
-        qs('#terminal-panes').innerHTML = terminals.map(function(t){ return '<pre class="terminal-output ' + (t.id === activeTerminalId ? 'active' : '') + '" data-term-id="' + t.id + '" tabindex="0">' + esc(t.output || '') + '</pre>'; }).join('');
+        qs('#terminal-tabs').innerHTML = terminals.map(function(t){ var label = t.name + (t.exited ? ' [exited]' : ''); return '<button class="' + (t.id === activeTerminalId ? 'active' : '') + '" data-term-tab="' + t.id + '" role="tab" aria-selected="' + (t.id === activeTerminalId ? 'true' : 'false') + '">' + esc(label) + '</button>'; }).join('');
+        qs('#terminal-panes').innerHTML = terminals.map(function(t){ return '<pre class="terminal-output ' + (t.id === activeTerminalId ? 'active' : '') + '" data-term-id="' + t.id + '" tabindex="0" role="tabpanel">' + esc(t.output || '') + '</pre>'; }).join('');
         qsa('[data-term-tab]').forEach(function(b){ b.onclick = function(){ activeTerminalId = Number(b.dataset.termTab); renderTerminal(); focusTerminal(); }; });
       }
       function stripAnsi(s){ return String(s || '').replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, ''); }
       function terminalById(id){ return terminals.filter(function(t){ return t.id === Number(id); })[0]; }
+      function writableTerminal(){ var t = terminalById(activeTerminalId); return t && !t.exited ? t : null; }
       function appendTerm(id, text){
         var t = terminalById(id);
         if (!t) return;
@@ -1236,7 +1276,7 @@ enum NativeHTMLRenderer {
         return window.momentermPty.spawn({ cols: 120, rows: 26 }).then(function(r){
           if (!r || !r.ok) return null;
           terminalSeq += 1;
-          var term = { id: Number(r.id), name: name || ('shell ' + terminalSeq), output: '' };
+          var term = { id: Number(r.id), name: name || ('tab ' + terminalSeq), output: '' };
           terminals.push(term);
           activeTerminalId = term.id;
           renderTerminal();
@@ -1246,16 +1286,15 @@ enum NativeHTMLRenderer {
       }
       function ensureTerminal(){
         qs('#terminal-panel').classList.remove('hidden');
-        if (activeTerminalId) { focusTerminal(); return Promise.resolve(terminalById(activeTerminalId)); }
+        if (writableTerminal()) { focusTerminal(); return Promise.resolve(terminalById(activeTerminalId)); }
         return spawnTerminal();
       }
       function toggleTerminal(){
-        var panel = qs('#terminal-panel');
-        var opening = panel.classList.contains('hidden');
-        panel.classList.toggle('hidden', !opening);
-        if (opening) ensureTerminal();
+        closeMenus();
+        closeReviewOverlay();
+        return ensureTerminal();
       }
-      function splitTerminal(){ spawnTerminal(); }
+      function splitTerminal(){ closeReviewOverlay(); spawnTerminal(); }
       function focusTerminalPane(delta){
         if (!terminals.length) return;
         var idx = terminals.findIndex(function(t){ return t.id === activeTerminalId; });
@@ -1269,10 +1308,21 @@ enum NativeHTMLRenderer {
       function renameTerminalPane(){
         var t = terminalById(activeTerminalId);
         if (!t) return;
-        var name = prompt('Pane name', t.name);
+        var name = prompt('Tab name', t.name);
         if (name) { t.name = name; renderTerminal(); }
       }
-      function writeActive(dataToWrite){ if (activeTerminalId) window.momentermPty.write({ id: activeTerminalId, data: dataToWrite }); }
+      function closeTerminalTab(){
+        var idx = terminals.findIndex(function(t){ return t.id === activeTerminalId; });
+        if (idx < 0) { ensureTerminal(); return; }
+        var closing = terminals[idx];
+        window.momentermPty.kill({ id: closing.id });
+        terminals.splice(idx, 1);
+        activeTerminalId = terminals.length ? terminals[Math.min(idx, terminals.length - 1)].id : null;
+        renderTerminal();
+        if (activeTerminalId) focusTerminal();
+        else spawnTerminal();
+      }
+      function writeActive(dataToWrite){ var t = writableTerminal(); if (t) window.momentermPty.write({ id: t.id, data: dataToWrite }); }
       function sendToTerminal(text){
         ensureTerminal().then(function(t){ if (t) window.momentermPty.write({ id: t.id, data: String(text || '') + '\\r' }); });
       }
@@ -1284,11 +1334,12 @@ enum NativeHTMLRenderer {
         else if (e.ctrlKey && e.key.toLowerCase() === 'c') { writeActive(String.fromCharCode(3)); e.preventDefault(); }
         else if (e.key.length === 1 && !e.metaKey) { writeActive(e.key); e.preventDefault(); }
       });
-      qs('#terminal-close').onclick = function(){ qs('#terminal-panel').classList.add('hidden'); };
+      qs('#terminal-close').onclick = closeTerminalTab;
       qs('#terminal-split').onclick = splitTerminal;
       qs('#terminal-rename').onclick = renameTerminalPane;
+      qs('#review-overlay-close').onclick = closeReviewOverlay;
       window.momentermPty.onData(function(m){ appendTerm(m.id, m.data); });
-      window.momentermPty.onExit(function(m){ appendTerm(m.id, '\\n[process exited]\\n'); if (activeTerminalId === Number(m.id)) activeTerminalId = null; });
+      window.momentermPty.onExit(function(m){ var t = terminalById(m.id); if (t) t.exited = true; appendTerm(m.id, '\\n[process exited]\\n'); renderTerminal(); });
 
       function openSettings(){
         var modal = qs('#settings-modal');
@@ -1385,7 +1436,8 @@ enum NativeHTMLRenderer {
         if (editing) return;
         if (e.key === 'Escape' && lightboxOpen()) { e.preventDefault(); closeLightbox(); return; }
         if (e.key === 'F7') { e.preventDefault(); navigateDiff(e.shiftKey ? -1 : 1); return; }
-        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === '0') { e.preventDefault(); qs('#changes-panel .file-link') && qs('#changes-panel .file-link').focus(); return; }
+        if (e.ctrlKey && e.key === '`') { e.preventDefault(); toggleTerminal(); return; }
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === '0') { e.preventDefault(); setSidebarTab('changes', true); qs('#changes-panel .file-link') && qs('#changes-panel .file-link').focus(); return; }
         if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === '1') { e.preventDefault(); openSource(current.path || firstChangedPath()); return; }
         if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === '9') { e.preventDefault(); loadHistory(); return; }
         if ((e.metaKey || e.ctrlKey) && e.key === 'ArrowDown') { e.preventDefault(); openSource(current.path || firstChangedPath(), current.line); return; }
@@ -1396,6 +1448,7 @@ enum NativeHTMLRenderer {
         }
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "'") { var d = qs('#floating-dock'); if (!d.classList.contains('hidden')) d.classList.toggle('maximized'); return; }
         if (e.key === 'Escape' && selectedCommentId) { e.preventDefault(); selectComment(null); return; }
+        if (e.key === 'Escape' && reviewOverlayOpen()) { e.preventDefault(); closeReviewOverlay(); return; }
         if (e.key === 'Backspace' && selectedCommentId) { e.preventDefault(); deleteSelectedComment(); return; }
         if (e.key === 'e' && selectedCommentId) { e.preventDefault(); editSelectedComment(); return; }
         if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && current.view !== 'history') {
@@ -1415,13 +1468,20 @@ enum NativeHTMLRenderer {
       attachDiffHandlers();
       refreshComments();
       var saved = loadJSON(uiKey, {});
-      if (saved && saved.view === 'source' && saved.sourcePath && sourceByPath(saved.sourcePath)) openSource(saved.sourcePath);
-      else if (!changedPaths().length && sourceFiles()[0]) openSource(sourceFiles()[0].path);
-      else current.path = firstChangedPath();
+      if (saved && saved.path) current.path = saved.path;
+      if (saved && saved.sourcePath) current.sourcePath = saved.sourcePath;
+      if (!current.path) current.path = firstChangedPath();
+      document.body.dataset.view = 'terminal';
+      ensureTerminal();
       if (window.momentermMenu) {
         window.momentermMenu.onMergedView(openMerged);
         window.momentermMenu.onOpenMemo(openMemo);
-        window.momentermMenu.onCloseTab(function(){ closeDock(); showPane('diff-viewer'); });
+        window.momentermMenu.onCloseTab(function(){
+          var dock = qs('#floating-dock');
+          if (dock && !dock.classList.contains('hidden')) { closeDock(); return; }
+          if (reviewOverlayOpen()) { closeReviewOverlay(); return; }
+          closeTerminalTab();
+        });
         window.momentermMenu.onTerminalToggle(toggleTerminal);
         window.momentermMenu.onTerminalSplit(splitTerminal);
         window.momentermMenu.onTerminalPaneFocus(focusTerminalPane);

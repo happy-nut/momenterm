@@ -151,12 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let terminalItem = NSMenuItem()
         let terminalMenu = NSMenu(title: "Terminal")
-        terminalMenu.addItem(targetedItem("Toggle Terminal", #selector(toggleTerminal), "`", [.control]))
-        terminalMenu.addItem(targetedItem("Split Terminal", #selector(splitTerminal), "d", [.command]))
+        terminalMenu.addItem(targetedItem("Focus Terminal", #selector(toggleTerminal), "`", [.control]))
+        terminalMenu.addItem(targetedItem("New Terminal Tab", #selector(splitTerminal), "d", [.command]))
         terminalMenu.addItem(NSMenuItem.separator())
-        terminalMenu.addItem(targetedItem("Focus Previous Pane", #selector(focusPreviousTerminalPane), "[", [.command, .option]))
-        terminalMenu.addItem(targetedItem("Focus Next Pane", #selector(focusNextTerminalPane), "]", [.command, .option]))
-        terminalMenu.addItem(targetedItem("Rename Pane", #selector(renameTerminalPane), "r", [.command, .option]))
+        terminalMenu.addItem(targetedItem("Focus Previous Tab", #selector(focusPreviousTerminalPane), "[", [.command, .option]))
+        terminalMenu.addItem(targetedItem("Focus Next Tab", #selector(focusNextTerminalPane), "]", [.command, .option]))
+        terminalMenu.addItem(targetedItem("Rename Tab", #selector(renameTerminalPane), "r", [.command, .option]))
         terminalItem.submenu = terminalMenu
         mainMenu.addItem(terminalItem)
 
