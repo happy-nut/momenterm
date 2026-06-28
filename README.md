@@ -54,6 +54,10 @@ This tests the riskiest host boundary first: a native macOS window and `WKScript
 
 The Monacori parity gap and verification contract are tracked in [docs/parity-gap.md](docs/parity-gap.md). The latest visual comparison is in [docs/ui-parity-review.md](docs/ui-parity-review.md).
 
+## Maintenance
+
+Clean-code, SOLID, UI parity, and verification gates are tracked in [docs/maintenance-checklist.md](docs/maintenance-checklist.md).
+
 ## Next Experiments
 
 1. Add code signing and notarization for distribution.

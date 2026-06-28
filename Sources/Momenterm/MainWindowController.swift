@@ -337,7 +337,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
 
     private func loadWelcome() {
         DispatchQueue.global(qos: .userInitiated).async {
-            let html = (try? self.service.welcome(recent: MainWindowController.loadRecentProjects())) ?? self.welcomeHtml()
+            let html = self.service.welcome(recent: MainWindowController.loadRecentProjects())
             DispatchQueue.main.async {
                 self.webView.loadHTMLString(html, baseURL: nil)
             }

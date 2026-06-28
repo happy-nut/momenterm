@@ -3,8 +3,14 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const root = new URL("..", import.meta.url);
-const corePath = new URL("Sources/Momenterm/NativeReviewCore.swift", root);
-const core = fs.readFileSync(corePath, "utf8");
+const sourceFiles = [
+  "Sources/Momenterm/NativeReviewCore.swift",
+  "Sources/Momenterm/NativeHTMLRenderer.swift",
+  "Sources/Momenterm/NativeReviewTypes.swift",
+  "Sources/Momenterm/UnifiedDiffParser.swift",
+  "Sources/Momenterm/NativeGitClient.swift"
+];
+const core = sourceFiles.map((path) => fs.readFileSync(new URL(path, root), "utf8")).join("\n");
 const scriptMatch = core.match(/private static let clientScript = """\n([\s\S]*?)\n    """\n\n    private static func escape/);
 if (!scriptMatch) {
   console.error("not ok - embedded client script was not found");

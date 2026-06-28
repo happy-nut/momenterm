@@ -47,7 +47,7 @@ do {
         fputs("smoke failed: source data missing\n", stderr)
         exit(1)
     }
-    let welcome = try core.welcome(recent: [.object(["path": .string(repo.path), "name": .string(repo.lastPathComponent)])])
+    let welcome = core.welcome(recent: [.object(["path": .string(repo.path), "name": .string(repo.lastPathComponent)])])
     guard welcome.contains("Review a Git repository"), welcome.contains("Recent projects") else {
         fputs("smoke failed: welcome HTML missing markers\n", stderr)
         exit(1)
