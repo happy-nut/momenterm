@@ -2,15 +2,15 @@
 
 Momenterm is a native macOS experiment for replacing Monacori's Electron host.
 
-The first prototype keeps the scope deliberately small:
+The prototype keeps Monacori's review renderer intact and replaces the Electron host boundary:
 
 - AppKit application shell
-- `WKWebView` diff viewer
-- native Swift bridge for web actions
+- `WKWebView` running Monacori's generated review HTML
+- native Swift bridge for Electron preload-style `window.monacori*` APIs
 - polling refresh for Git diff changes
-- native command panel for one-shot shell commands in the selected repository
+- Monacori lazy file/source loading and Git history through the native bridge
 
-It does not try to match Monacori feature parity yet. The integrated terminal is a command runner, not a PTY-backed interactive terminal.
+It does not ship a native PTY replacement yet, so Monacori's integrated terminal remains the main parity gap.
 
 ## Run
 
@@ -37,12 +37,12 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 
 This tests the riskiest host boundary first: replacing Electron's `BrowserWindow` and preload IPC with a native macOS window and `WKScriptMessageHandler`.
 
-The current Monacori rendering model can later be connected behind the same host contract:
+Monacori itself remains the review engine. `Support/monacori-bridge.mjs` imports `monacori/dist` and calls:
 
-- `reload` rebuilds the review document
-- `openFolder` changes the repository root
-- `reveal` opens the repository in Finder
-- WebKit loads generated review HTML
+- `buildDiffReview`
+- `readGitLog`
+- `readCommitDiff`
+- `performHttpRequest`
 
 ## Next Experiments
 
