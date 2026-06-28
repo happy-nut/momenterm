@@ -7,6 +7,7 @@ CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 MONACORI_DIST="${MONACORI_DIST:-$ROOT/../monacori/dist}"
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 
 if [[ ! -f "$MONACORI_DIST/build.js" ]]; then
   echo "monacori dist not found: $MONACORI_DIST" >&2
@@ -21,6 +22,20 @@ mkdir -p "$MACOS" "$RESOURCES/Support" "$RESOURCES/monacori"
 cp "$BIN" "$MACOS/Momenterm"
 cp "$ROOT/Support/monacori-bridge.mjs" "$RESOURCES/Support/monacori-bridge.mjs"
 rsync -a --delete "$MONACORI_DIST/" "$RESOURCES/monacori/dist/"
+
+if [[ -n "$NODE_BIN" && -x "$NODE_BIN" ]]; then
+  mkdir -p "$RESOURCES/bin" "$RESOURCES/lib"
+  cp "$NODE_BIN" "$RESOURCES/bin/node"
+  chmod +x "$RESOURCES/bin/node"
+  NODE_LIB_GLOB="$(dirname "$NODE_BIN")/../lib/libnode"*.dylib
+  for node_lib in $NODE_LIB_GLOB; do
+    if [[ -f "$node_lib" ]]; then
+      cp "$node_lib" "$RESOURCES/lib/"
+    fi
+  done
+else
+  echo "warning: node binary not found; packaged app will use PATH lookup" >&2
+fi
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

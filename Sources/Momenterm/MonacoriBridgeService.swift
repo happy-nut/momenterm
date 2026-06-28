@@ -130,8 +130,15 @@ final class MonacoriBridgeService {
 
     private func runBridge(command: String, root: URL?, payload: String) throws -> Data {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        var arguments = ["node", bridgePath().path, command]
+        let node = nodeExecutable()
+        var arguments: [String]
+        if node.hasPrefix("/") {
+            process.executableURL = URL(fileURLWithPath: node)
+            arguments = [bridgePath().path, command]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            arguments = [node, bridgePath().path, command]
+        }
         if let root = root {
             arguments.append(root.path)
         }
@@ -181,5 +188,15 @@ final class MonacoriBridgeService {
         }
 
         return sourceRoot.appendingPathComponent("Support/monacori-bridge.mjs")
+    }
+
+    private func nodeExecutable() -> String {
+        if
+            let resourceURL = Bundle.main.resourceURL,
+            FileManager.default.isExecutableFile(atPath: resourceURL.appendingPathComponent("bin/node").path)
+        {
+            return resourceURL.appendingPathComponent("bin/node").path
+        }
+        return "node"
     }
 }

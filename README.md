@@ -41,7 +41,7 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 open .build/Momenterm.app --args --repo /path/to/repo
 ```
 
-The package script copies `monacori/dist` into the app bundle so the native host can generate Monacori review HTML without Electron.
+The package script copies `monacori/dist` and the current `node` binary into the app bundle so the native host can generate Monacori review HTML without Electron.
 
 ## Why This Shape
 
