@@ -13,9 +13,9 @@ struct NativeSourceCollector {
         let changed = Set(files.map { $0.displayPath }.filter { !$0.isEmpty && $0 != "/dev/null" })
         let changedLinesByPath = changedLines(files)
         let vcsByPath = gitStatusMap(root: root)
-        let listed = try gitClient.run(root: root, arguments: ["ls-files", "--cached", "--others", "--exclude-standard"])
         var paths = Set<String>()
-        for path in listed.components(separatedBy: .newlines).map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) where isSourceCandidate(path) {
+        let listedPaths = gitListedSourcePaths(root: root) ?? filesystemSourcePaths(root: root)
+        for path in listedPaths where isSourceCandidate(path) {
             paths.insert(path)
         }
         for path in changed where isSourceCandidate(path) {
@@ -46,6 +46,57 @@ struct NativeSourceCollector {
             result.append(file)
         }
         return result
+    }
+
+    private func gitListedSourcePaths(root: URL) -> [String]? {
+        guard let listed = try? gitClient.run(root: root, arguments: ["ls-files", "--cached", "--others", "--exclude-standard"]) else {
+            return nil
+        }
+        return listed
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func filesystemSourcePaths(root: URL) -> [String] {
+        let root = root.standardizedFileURL
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsPackageDescendants]
+        ) else {
+            return []
+        }
+        var paths: [String] = []
+        for case let url as URL in enumerator {
+            let path = relativePath(url, root: root)
+            if path.isEmpty {
+                continue
+            }
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            if values?.isDirectory == true {
+                if !isSourceCandidate(path) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            if values?.isRegularFile == true, isSourceCandidate(path) {
+                paths.append(path)
+                if paths.count >= Self.sourceMaxFiles {
+                    break
+                }
+            }
+        }
+        return paths
+    }
+
+    private func relativePath(_ url: URL, root: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(rootPath + "/") else {
+            return ""
+        }
+        return String(path.dropFirst(rootPath.count + 1))
     }
 
     func fileStates(files: [DiffFile], sourceFiles: [SourceFile]) -> [JSONValue] {

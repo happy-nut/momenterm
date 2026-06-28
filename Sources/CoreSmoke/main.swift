@@ -71,6 +71,18 @@ do {
         fputs("smoke failed: HTTP validation payload malformed\n", stderr)
         exit(1)
     }
+    let nonGit = FileManager.default.temporaryDirectory
+        .appendingPathComponent("momenterm-non-git-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: nonGit, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: nonGit) }
+    try "hello from a plain folder\n".write(to: nonGit.appendingPathComponent("note.txt"), atomically: true, encoding: .utf8)
+    let nonGitReview = try core.build(root: nonGit, ignoreWhitespace: false)
+    guard nonGitReview.html.contains("Not a Git repository"),
+          nonGitReview.html.contains("review-overlay"),
+          nonGitReview.lazySourceData.contains("note.txt") else {
+        fputs("smoke failed: non-git folder should render diff guidance and file view data\n", stderr)
+        exit(1)
+    }
     print("smoke ok: \(review.files) files, \(review.hunks) hunks, signature \(review.signature)")
 } catch {
     fputs("smoke failed: \(error)\n", stderr)

@@ -144,6 +144,10 @@ enum NativeHTMLRenderer {
         }.joined(separator: "\n")
     }
 
+    static func renderNonGitChangesPanel() -> String {
+        #"<div class="empty-nav">No Git changes. Open the Files view to browse this folder.</div>"#
+    }
+
     static func renderFilesPanel(_ files: [SourceFile]) -> String {
         if files.isEmpty { return #"<div class="empty-nav">No files</div>"# }
         return files.map { file in
@@ -158,6 +162,16 @@ enum NativeHTMLRenderer {
 
     static func renderDiff(_ files: [DiffFile]) -> String {
         files.map(renderDiffFile).joined(separator: "\n")
+    }
+
+    static func renderNonGitDiffNotice(root: URL) -> String {
+        """
+        <section class="git-notice">
+          <b>Not a Git repository</b>
+          <p>Diff review needs a folder with a .git directory. The terminal still starts normally, and Files can browse this folder.</p>
+          <code>\(escape(root.path))</code>
+        </section>
+        """
     }
 
     static func renderDiffFile(_ file: DiffFile) -> String {
@@ -258,6 +272,10 @@ enum NativeHTMLRenderer {
     .file-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px;border-bottom:1px solid #4b4f52;background:#343638;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c7cbd1}
     .file-header-actions{display:flex;gap:6px;align-items:center}
     .file-header-actions .icon-btn{width:24px;height:24px}
+    .git-notice{align-self:center;margin:auto;width:min(620px,calc(100% - 40px));border:1px solid #555a5e;border-left:3px solid var(--yellow);background:#343638;padding:18px 20px;color:#a9b7c6;box-shadow:0 12px 32px var(--shadow)}
+    .git-notice b{display:block;margin-bottom:8px;color:#ffc66d;font-size:14px}
+    .git-notice p{margin:0 0 12px;line-height:1.5;color:#a9b7c6}
+    .git-notice code{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#808080;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
     .diff-table{width:100%;border-collapse:collapse;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code)}
     .ln{width:52px;text-align:right;color:var(--muted);padding:0 8px;border-right:1px solid var(--border);user-select:none}
     .code{white-space:pre-wrap;overflow-wrap:anywhere;padding-left:8px;color:#a9b7c6}

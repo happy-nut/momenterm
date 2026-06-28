@@ -11,6 +11,7 @@ This pass compares Momenterm against Monacori's visible review surface instead o
 - Settings looked incomplete and visually generic. It needed Darcula as the named default and controls for language and prompt templates, not just a theme switch.
 - Action exposure was wrong. Monacori keeps global review actions in an IntelliJ-style icon rail and exposes text buttons mostly inside the current context, while Momenterm had a visible topbar full of text actions, duplicated Quick Open entry points, text-only terminal controls, text-only dock controls, and per-file text buttons on every diff header.
 - The base surface was still review-first. Diff, source, history, changes, and file tree views occupied the permanent workspace, while the terminal was only a hideable lower panel.
+- Non-Git folders fell out of the terminal-first shell entirely. That made the Files view unavailable even though browsing files does not require Git metadata.
 - Existing parity smoke checked that controls existed, but not that the Darcula visual tokens and shortcut/settings matrix were actually present.
 
 ## Actions Taken
@@ -24,6 +25,7 @@ This pass compares Momenterm against Monacori's visible review surface instead o
 - Removed the visible Quick Open toolbar button and kept Quick Open on the double-Shift shortcut.
 - Converted terminal, settings close, dock maximize/close, and per-file source/viewed controls to icon buttons with titles/ARIA labels.
 - Made the native PTY terminal the default base surface. Review tools now open in a floating overlay, and terminal sessions are managed as tabs instead of a show/hide panel.
+- Kept new terminal tabs rooted at `~`, and made non-Git folders render Diff guidance while Files uses a native filesystem scan.
 - Added Darcula visual checks to `scripts/parity-smoke.mjs` so regressions fail automatically.
 
 ## Verification
@@ -41,5 +43,6 @@ This pass compares Momenterm against Monacori's visible review surface instead o
 - the diff `Viewed` control is hidden only until a selectable file exists
 - terminal, settings, dock, and file-header controls remain icon buttons
 - terminal-first layout markers remain present and review tools stay in a floating overlay
+- terminal tabs start from the home directory, and non-Git folder handling keeps Files available
 - deleted Quick Open toolbar wiring is guarded so WebView boot does not crash
 - Monacori/Electron/Node runtime markers are absent

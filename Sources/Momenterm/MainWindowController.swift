@@ -181,8 +181,11 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         case "pty.spawn":
             let cols = body?.objectValue?["cols"]?.intValue ?? 80
             let rows = body?.objectValue?["rows"]?.intValue ?? 24
+            let cwd = body?.objectValue?["cwd"]?.stringValue
+                .map { URL(fileURLWithPath: $0).standardizedFileURL }
+                ?? FileManager.default.homeDirectoryForCurrentUser
             do {
-                let ptyId = try ptyManager.spawn(cols: cols, rows: rows, cwd: root)
+                let ptyId = try ptyManager.spawn(cols: cols, rows: rows, cwd: cwd)
                 resolve(id: id, value: .object(["ok": .bool(true), "id": .number(Double(ptyId))]))
             } catch {
                 resolve(id: id, value: .object(["ok": .bool(false), "id": .number(-1), "error": .string(String(describing: error))]))

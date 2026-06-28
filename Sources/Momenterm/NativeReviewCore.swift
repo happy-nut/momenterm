@@ -12,9 +12,11 @@ final class NativeReviewCore {
     }
 
     func build(root requestedRoot: URL, ignoreWhitespace: Bool) throws -> ReviewDocument {
-        let root = try gitClient.repoRoot(from: requestedRoot)
-        let diffText = try workingTreeDiff(root: root, ignoreWhitespace: ignoreWhitespace)
-        var files = UnifiedDiffParser.parse(diffText)
+        let repoRoot = try? gitClient.repoRoot(from: requestedRoot)
+        let root = repoRoot ?? requestedRoot.standardizedFileURL
+        let isGitRepository = repoRoot != nil
+        let diffText = isGitRepository ? try workingTreeDiff(root: root, ignoreWhitespace: ignoreWhitespace) : ""
+        var files = isGitRepository ? UnifiedDiffParser.parse(diffText) : []
         let sourceCollector = NativeSourceCollector(gitClient: gitClient)
         let sourceFiles = try sourceCollector.collect(files: files, root: root)
         let sourceVcs = Dictionary(uniqueKeysWithValues: sourceFiles.compactMap { file in file.vcs.map { (file.path, $0) } })
@@ -24,17 +26,20 @@ final class NativeReviewCore {
         let fileStates = sourceCollector.fileStates(files: files, sourceFiles: sourceFiles)
         let httpEnvironments = NativeHttpEnvironmentReader.collect(root: root)
         let generatedAt = isoNow()
-        let branch = (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
-        let diffHtml = NativeHTMLRenderer.renderDiff(files)
-        let changesPanel = NativeHTMLRenderer.renderChangesPanel(files)
+        let branch = isGitRepository
+            ? (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
+            : "Not a Git repository"
+        let diffHtml = isGitRepository ? NativeHTMLRenderer.renderDiff(files) : NativeHTMLRenderer.renderNonGitDiffNotice(root: root)
+        let changesPanel = isGitRepository ? NativeHTMLRenderer.renderChangesPanel(files) : NativeHTMLRenderer.renderNonGitChangesPanel()
         let filesTree = NativeHTMLRenderer.renderFilesPanel(sourceFiles)
         let reviewStatus = NativeHTMLRenderer.renderReviewStatus(files: files.count, hunks: files.reduce(0) { $0 + $1.hunks.count }, generatedAt: generatedAt, ignoreWhitespace: ignoreWhitespace)
         let sourceJSON = JSONValue.array(sourceFiles.map { $0.jsonValue(includeContent: true) }).jsonString()
-        let signature = sha1([
+        let signaturePayload = [
             diffText,
             sourceCollector.signaturePayload(sourceFiles),
             httpEnvironments.stableJsonString()
-        ].joined(separator: "\n"))
+        ]
+        let signature = sha1((isGitRepository ? signaturePayload : ["non-git", root.path] + signaturePayload).joined(separator: "\n"))
         let html = NativeHTMLRenderer.renderReview(
             root: root,
             branch: branch,
@@ -78,7 +83,12 @@ final class NativeReviewCore {
     }
 
     func gitLog(root: URL, payload: JSONValue?) throws -> JSONValue {
-        let repo = try gitClient.repoRoot(from: root)
+        let repo: URL
+        do {
+            repo = try gitClient.repoRoot(from: root)
+        } catch MomentermError.notGitRepository {
+            return .array([])
+        }
         let limit = payload?.objectValue?["limit"]?.intValue ?? 200
         let skip = payload?.objectValue?["skip"]?.intValue ?? 0
         let fs = "\u{1f}"
@@ -115,7 +125,12 @@ final class NativeReviewCore {
     }
 
     func commitDiff(root: URL, payload: JSONValue?) throws -> JSONValue {
-        let repo = try gitClient.repoRoot(from: root)
+        let repo: URL
+        do {
+            repo = try gitClient.repoRoot(from: root)
+        } catch MomentermError.notGitRepository {
+            return .null
+        }
         guard let sha = payload?.objectValue?["sha"]?.stringValue, sha.range(of: #"^[0-9a-fA-F]{4,64}$"#, options: .regularExpression) != nil else {
             return .null
         }
