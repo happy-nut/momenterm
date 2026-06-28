@@ -21,3 +21,17 @@ process.stdin.on("end", () => {
   console.log(`smoke ok: ${review.files} files, ${review.hunks} hunks, signature ${review.signature}`);
 });
 '
+
+printf '{"recent":[{"path":"%s","name":"%s"}]}' "$REPO" "$(basename "$REPO")" |
+  node "$ROOT/Support/monacori-bridge.mjs" welcome |
+  node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => raw += chunk);
+process.stdin.on("end", () => {
+  const welcome = JSON.parse(raw);
+  if (!welcome.ok) throw new Error(welcome.error || "welcome bridge failed");
+  if (!welcome.html.includes("Review a Git repository") || !welcome.html.includes("Recent projects")) {
+    throw new Error("welcome HTML is missing expected Monacori markers");
+  }
+});
+'

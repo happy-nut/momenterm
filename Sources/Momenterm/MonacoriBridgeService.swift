@@ -19,6 +19,12 @@ struct MonacoriBridgeResponse: Decodable {
     let error: String?
 }
 
+struct MonacoriWelcomeResponse: Decodable {
+    let ok: Bool
+    let html: String?
+    let error: String?
+}
+
 enum JSONValue: Codable {
     case null
     case bool(Bool)
@@ -110,6 +116,16 @@ final class MonacoriBridgeService {
         let data = try runBridge(command: "http-send", root: nil, payload: payload?.jsonString() ?? "{}")
         let response = try decoder.decode(MonacoriBridgeResponse.self, from: data)
         return response.value ?? .null
+    }
+
+    func welcome(recent: [JSONValue]) throws -> String {
+        let payload = JSONValue.object(["recent": .array(recent)])
+        let data = try runBridge(command: "welcome", root: nil, payload: payload.jsonString())
+        let response = try decoder.decode(MonacoriWelcomeResponse.self, from: data)
+        if response.ok, let html = response.html {
+            return html
+        }
+        throw MomentermError.commandFailed("monacori bridge welcome", response.error ?? "missing welcome html")
     }
 
     private func runBridge(command: String, root: URL?, payload: String) throws -> Data {

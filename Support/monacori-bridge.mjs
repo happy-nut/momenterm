@@ -90,6 +90,11 @@ async function httpSend(payload) {
   json({ ok: true, value: await performHttpRequest(payload) });
 }
 
+async function welcome(payload = {}) {
+  const { renderWelcomeHtml } = await importDist("render.js");
+  json({ ok: true, html: renderWelcomeHtml(false, Array.isArray(payload.recent) ? payload.recent : []) });
+}
+
 async function main() {
   const [command, root] = process.argv.slice(2);
   const payload = await readStdinJson();
@@ -98,6 +103,7 @@ async function main() {
   if (command === "git-log") return gitLog(root, payload);
   if (command === "commit-diff") return commitDiff(root, payload);
   if (command === "http-send") return httpSend(payload);
+  if (command === "welcome") return welcome(payload);
 
   throw new Error(`Unknown command: ${command || "(missing)"}`);
 }

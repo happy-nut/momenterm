@@ -10,13 +10,16 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
     private var currentDocument: MonacoriReviewDocument?
     private var refreshTimer: Timer?
     private var ignoreWhitespace = false
+    private var persistedSettings: [String: JSONValue] = [:]
 
     init(initialRoot: URL?) {
         self.root = initialRoot
+        self.persistedSettings = MainWindowController.loadPersistedSettings()
 
         let configuration = WKWebViewConfiguration()
         let userContent = WKUserContentController()
-        userContent.addUserScript(WKUserScript(source: MainWindowController.preloadScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let settingsJSON = JSONValue.object(persistedSettings).jsonString()
+        userContent.addUserScript(WKUserScript(source: MainWindowController.preloadScript(settingsJSON: settingsJSON), injectionTime: .atDocumentStart, forMainFrameOnly: true))
         configuration.userContentController = userContent
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         self.webView = WKWebView(frame: .zero, configuration: configuration)
@@ -60,6 +63,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
             return
         }
         root = url
+        rememberRecent(url)
         loadDocument(forceReload: true)
     }
 
@@ -128,6 +132,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         case "app.openRecent":
             if let path = body?.objectValue?["path"]?.stringValue {
                 root = URL(fileURLWithPath: path)
+                rememberRecent(URL(fileURLWithPath: path))
                 loadDocument(forceReload: true)
                 resolve(id: id, value: .object(["ok": .bool(true)]))
             } else {
@@ -165,6 +170,10 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
             NSPasteboard.general.setString(text, forType: .string)
             resolve(id: id, value: .object(["ok": .bool(true)]))
         case "settings.set":
+            if let object = body?.objectValue, let key = object["key"]?.stringValue {
+                persistedSettings[key] = object["value"] ?? .null
+                savePersistedSettings()
+            }
             resolve(id: id, value: .object(["ok": .bool(true)]))
         case "pty.spawn":
             let cols = body?.objectValue?["cols"]?.intValue ?? 80
@@ -222,7 +231,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
 
     private func loadDocument(forceReload: Bool) {
         guard let root = root else {
-            webView.loadHTMLString(welcomeHtml(), baseURL: nil)
+            loadWelcome()
             window?.title = "Momenterm"
             return
         }
@@ -238,6 +247,9 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
             DispatchQueue.main.async {
                 switch result {
                 case .success(let document):
+                    if let root = self.root {
+                        self.rememberRecent(root)
+                    }
                     self.apply(document: document, forceReload: forceReload)
                 case .failure(let error):
                     self.webView.loadHTMLString(self.errorHtml(String(describing: error)), baseURL: nil)
@@ -323,6 +335,36 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 
+    private func loadWelcome() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let html = (try? self.service.welcome(recent: MainWindowController.loadRecentProjects())) ?? self.welcomeHtml()
+            DispatchQueue.main.async {
+                self.webView.loadHTMLString(html, baseURL: nil)
+            }
+        }
+    }
+
+    private func rememberRecent(_ url: URL) {
+        let path = url.path
+        var recents = MainWindowController.loadRecentProjects()
+            .filter { $0.objectValue?["path"]?.stringValue != path }
+        recents.insert(.object(["path": .string(path), "name": .string(url.lastPathComponent)]), at: 0)
+        if recents.count > 8 {
+            recents = Array(recents.prefix(8))
+        }
+        guard let data = try? JSONEncoder().encode(recents) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: MainWindowController.recentProjectsKey)
+    }
+
+    private func savePersistedSettings() {
+        guard let data = try? JSONEncoder().encode(persistedSettings) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: MainWindowController.settingsKey)
+    }
+
     private func resolve(id: String, ok: Bool = true, value: JSONValue) {
         let payload = value.jsonString()
         let escapedId = jsString(id)
@@ -398,7 +440,31 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
             .replacingOccurrences(of: ">", with: "&gt;")
     }
 
-    private static let preloadScript = """
+    private static let settingsKey = "monacori.settings"
+    private static let recentProjectsKey = "monacori.recentProjects"
+
+    private static func loadPersistedSettings() -> [String: JSONValue] {
+        guard
+            let data = UserDefaults.standard.data(forKey: settingsKey),
+            let settings = try? JSONDecoder().decode([String: JSONValue].self, from: data)
+        else {
+            return [:]
+        }
+        return settings
+    }
+
+    private static func loadRecentProjects() -> [JSONValue] {
+        guard
+            let data = UserDefaults.standard.data(forKey: recentProjectsKey),
+            let recents = try? JSONDecoder().decode([JSONValue].self, from: data)
+        else {
+            return []
+        }
+        return recents
+    }
+
+    private static func preloadScript(settingsJSON: String) -> String {
+        """
     (function () {
       if (window.__momentermInstalled) return;
       window.__momentermInstalled = true;
@@ -455,7 +521,7 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
       };
       window.monacoriClipboard = { write: function (text) { post('clipboard.write', { text: String(text) }); } };
       window.monacoriSettings = {
-        all: {},
+        all: \(settingsJSON),
         set: function (key, value) { post('settings.set', { key: key, value: value }); }
       };
       window.monacoriPty = {
@@ -469,4 +535,5 @@ final class MainWindowController: NSWindowController, WKScriptMessageHandler, Na
       };
     })();
     """
+    }
 }
