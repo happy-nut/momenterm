@@ -163,10 +163,35 @@ private final class NativePtySession {
 
     private func terminalEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
+        for key in env.keys where key.lowercased().hasPrefix("npm_") {
+            env.removeValue(forKey: key)
+        }
+        env.removeValue(forKey: "INIT_CWD")
+        env.removeValue(forKey: "NODE")
+        env.removeValue(forKey: "NODE_OPTIONS")
+        env.removeValue(forKey: "ELECTRON_RUN_AS_NODE")
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
-        env["LANG"] = env["LANG"].flatMap { $0.isEmpty ? nil : $0 } ?? "en_US.UTF-8"
-        env["LC_ALL"] = env["LC_ALL"].flatMap { $0.isEmpty ? nil : $0 } ?? env["LANG"]
+        let localeBase = NativePtySession.utf8LocaleBase(from: env["LANG"]) ?? "en_US"
+        let utf8Locale = "\(localeBase).UTF-8"
+        env["LANG"] = NativePtySession.isUTF8(env["LANG"]) ? env["LANG"] : utf8Locale
+        env["LC_ALL"] = NativePtySession.isUTF8(env["LC_ALL"]) ? env["LC_ALL"] : env["LANG"]
+        env["LC_CTYPE"] = NativePtySession.isUTF8(env["LC_CTYPE"]) ? env["LC_CTYPE"] : env["LANG"]
         return env
+    }
+
+    private static func isUTF8(_ value: String?) -> Bool {
+        guard let value = value, !value.isEmpty else {
+            return false
+        }
+        return value.range(of: "utf-?8", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func utf8LocaleBase(from value: String?) -> String? {
+        guard let value = value, !value.isEmpty else {
+            return nil
+        }
+        let base = value.components(separatedBy: ".").first ?? value
+        return base.range(of: #"^[A-Za-z]{2}_[A-Za-z]{2}$"#, options: .regularExpression) != nil ? base : nil
     }
 }

@@ -9,6 +9,29 @@ do {
         fputs("smoke failed: review HTML missing native markers\n", stderr)
         exit(1)
     }
+    let parityMarkers = [
+        "momenterm-comments:",
+        "momenterm-viewed:",
+        "reviewComments",
+        "diff-viewed-toggle",
+        "source-raw-toggle",
+        "quick-open",
+        "settings-modal",
+        "settings-theme",
+        "http-client",
+        "computeHistoryGraph",
+        "history-workspace",
+        "terminal-tabs",
+        "terminal-split",
+        "sendToTerminal",
+        "remapComments",
+        "caretLocation",
+        "gotoLineJump"
+    ]
+    for marker in parityMarkers where !review.html.contains(marker) {
+        fputs("smoke failed: native parity marker missing: \(marker)\n", stderr)
+        exit(1)
+    }
     guard review.lazySourceData.contains("\"path\"") || review.files == 0 else {
         fputs("smoke failed: source data missing\n", stderr)
         exit(1)

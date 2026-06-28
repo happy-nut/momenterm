@@ -9,6 +9,7 @@ The prototype keeps the review loop local and native:
 - native Swift bridge for app actions and PTY events
 - polling refresh for Git diff changes
 - Swift Git diff parsing, source loading, Git history, HTTP requests, and welcome/recent-project state
+- native review UI parity for comments, viewed files, source rendering, quick-open, history, settings, and terminal handoff
 
 The integrated terminal is backed by a native macOS PTY.
 
@@ -48,8 +49,11 @@ The package script builds a self-contained app bundle. It does not copy Node, El
 
 This tests the riskiest host boundary first: a native macOS window and `WKScriptMessageHandler`, with the review engine implemented in Swift.
 
+## Parity Tracking
+
+The Monacori parity gap and verification contract are tracked in [docs/parity-gap.md](docs/parity-gap.md).
+
 ## Next Experiments
 
-1. Add code signing and notarization.
-2. Expand native review UI parity for advanced comment navigation and source rendering.
-3. Add focused tests for history, comments, and HTTP request rendering.
+1. Add code signing and notarization for distribution.
+2. Add browser-level UI regression tests against the generated native review HTML.
