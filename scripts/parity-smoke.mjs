@@ -195,13 +195,26 @@ const darculaChecks = [
   ["darcula: type foreground", "--type:#a9b7c6"],
   ["darcula: decorator olive", "--decor:#bbb529"],
   ["darcula: topbar compact", ".topbar{position:fixed;left:0;right:0;top:0;height:44px"],
-  ["darcula: compact activity rail", ".activity{position:fixed;top:44px;bottom:0;left:0;width:54px"],
-  ["darcula: activity active state", ".activity button.active"],
+  ["darcula: compact activity rail", ".activity-rail{position:fixed;top:44px;bottom:0;left:0;width:54px"],
+  ["darcula: activity active state", ".rail-btn.active"],
   ["darcula: source editor background", ".source-body{padding:10px 12px"],
   ["darcula: diff editor background", ".diff2html-container{padding:10px 12px"],
   ["darcula: sidebar tab wiring", "function setSidebarTab"]
 ];
 for (const [name, pattern] of darculaChecks) check(name, has(pattern));
+
+const topbarMarkup = core.match(/<header class="topbar">([\s\S]*?)<\/header>/);
+check("action exposure: topbar has no global action buttons", !!topbarMarkup && !topbarMarkup[1].includes("data-action"));
+check("action exposure: activity rail buttons use SVG icons", /class="rail-btn"[\s\S]*miniIcon/.test(core));
+check("action exposure: rail tooltips carry shortcuts", /class="rail-tip"[\s\S]*<kbd>/.test(core));
+check("action exposure: rail action set matches Monacori app shell", (core.match(/railButton\(kind: "/g) || []).length === 8);
+check("action exposure: quick-open toolbar button removed", !core.includes('<button id="quick-open-button"'));
+check("action exposure: quick-open binding guarded", /var quickOpenButton = qs\('#quick-open-button'\);[\s\S]*if \(quickOpenButton\) quickOpenButton\.addEventListener/.test(clientScript));
+check("action exposure: viewed toggle is revealed from selection state", /function updateViewedToggle\(\)[\s\S]*toggle\.hidden = !path/.test(clientScript));
+check("action exposure: terminal controls are icon buttons", /id="terminal-split" class="icon-btn"/.test(core) && /id="terminal-rename" class="icon-btn"/.test(core) && /id="terminal-close" class="icon-btn"/.test(core));
+check("action exposure: settings close is icon button", /id="settings-close" class="icon-btn"/.test(core));
+check("action exposure: dock controls are icon buttons", /class="icon-btn" data-dock-maximize/.test(clientScript) && /class="icon-btn" data-dock-close/.test(clientScript));
+check("action exposure: file header controls are icon buttons", /class="icon-btn" data-view-file/.test(clientScript) && /class="icon-btn" data-viewed-file/.test(clientScript));
 
 const featureChecks = [
   ["feature: clean tree opens source", /!changedPaths\(\)\.length && sourceFiles\(\)\[0\].*openSource/s],

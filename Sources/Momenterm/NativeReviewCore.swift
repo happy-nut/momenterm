@@ -524,25 +524,13 @@ private enum NativeHTMLRenderer {
             "sourceFiles": .array(sourceFiles.map { $0.jsonValue(includeContent: true) }),
             "root": .string(root.path)
         ]).jsonString()
+        let activityRail = renderActivityRail()
         return page(title: "Momenterm - \(root.lastPathComponent)", body: """
         <div id="review-meta" data-lazy="false" data-lazy-load="false" data-watch="true" data-signature="\(escapeAttr(signature))"></div>
         <header class="topbar">
           <div><strong>Momenterm</strong><span>\(escape(root.path))</span></div>
-          <nav>
-            <button data-action="questions">Questions</button>
-            <button data-action="changes">Change Requests</button>
-            <button data-action="memo">Memo</button>
-            <button data-action="quick-open">Quick Open</button>
-            <button data-action="history">History</button>
-            <button data-action="http">HTTP</button>
-            <button data-action="terminal">Terminal</button>
-            <button data-action="settings">Settings</button>
-          </nav>
         </header>
-        <aside class="activity">
-          <button data-view="changes" title="Changes panel (Cmd+0)">Changes</button>
-          <button data-view="files" title="Files panel (Cmd+1)">Files</button>
-        </aside>
+        \(activityRail)
         <aside class="sidebar">
           <section id="review-status">\(reviewStatus)</section>
           <div class="tabs"><button data-tab="changes">Changes</button><button data-tab="files">Files</button></div>
@@ -551,19 +539,76 @@ private enum NativeHTMLRenderer {
         </aside>
         <main class="workspace">
           <section id="diff-viewer" class="pane active">
-            <div class="toolbar"><span class="branch-label">\(escape(branch))</span>\(ignoreWhitespace ? "<span>ignore whitespace</span>" : "")<button id="diff-viewed-toggle">Mark Viewed</button><button id="quick-open-button">Quick Open</button></div>
+            <div class="toolbar"><span class="branch-label">\(escape(branch))</span>\(ignoreWhitespace ? "<span>ignore whitespace</span>" : "")<button id="diff-viewed-toggle" class="diff-viewed-toggle icon-label-button" aria-pressed="false" title="Toggle viewed (<)" hidden>\(miniIcon("eye"))<span>Viewed</span></button></div>
             <div id="diff2html-container" class="diff2html-container">\(diffHtml.isEmpty ? "<div class=\"empty\">No diff to review.</div>" : diffHtml)</div>
           </section>
-          <section id="source-viewer" class="pane"><div class="toolbar"><span id="source-title">Source</span><button id="source-raw-toggle">Raw</button><button id="back-to-diff">Diff</button></div><div id="source-body" class="source-body empty">Select a file from the Files tab.</div></section>
-          <section id="history-viewer" class="pane"><div class="toolbar"><span>History</span><button id="history-close">Diff</button></div><div id="history-body" class="history-workspace">Loading history...</div></section>
+          <section id="source-viewer" class="pane"><div class="toolbar"><span id="source-title">Source</span><button id="source-raw-toggle" class="plain-button">Raw</button><button id="back-to-diff" class="plain-button">Diff</button></div><div id="source-body" class="source-body empty">Select a file from the Files tab.</div></section>
+          <section id="history-viewer" class="pane"><div class="toolbar"><span>History</span><button id="history-close" class="plain-button">Diff</button></div><div id="history-body" class="history-workspace">Loading history...</div></section>
         </main>
         <div id="floating-dock" class="floating-dock hidden"></div>
         <div id="quick-open" class="modal-backdrop hidden"><section class="quick-open-panel"><input id="quick-open-input" autocomplete="off" placeholder="Search files"><div id="quick-open-list"></div></section></div>
-        <div id="settings-modal" class="modal-backdrop hidden"><section class="settings-panel"><header><b>Settings</b><button id="settings-close">×</button></header><label>Theme <button id="settings-theme" class="dropdown-trigger"></button></label><label>Language <button id="settings-language" class="dropdown-trigger"></button></label><label class="settings-text">Plan prompt <textarea id="settings-prompt-plan"></textarea></label><label class="settings-text">Question prompt <textarea id="settings-prompt-q"></textarea></label><label class="settings-text">Change prompt <textarea id="settings-prompt-c"></textarea></label><footer class="settings-actions"><button id="settings-reset">Reset</button><span id="settings-saved"></span></footer><div id="settings-theme-menu" class="mc-dropdown hidden"><button data-theme-option="darcula">Darcula</button><button data-theme-option="light">Light</button></div><div id="settings-language-menu" class="mc-dropdown hidden"><button data-language-option="en">English</button><button data-language-option="ko">한국어</button></div></section></div>
-        <section id="terminal-panel" class="terminal-panel hidden"><div class="terminal-bar"><span>Terminal</span><div id="terminal-tabs"></div><button id="terminal-split">Split</button><button id="terminal-rename">Rename</button><button id="terminal-close">×</button></div><div id="terminal-panes"></div></section>
+        <div id="settings-modal" class="modal-backdrop hidden"><section class="settings-panel"><header><b>Settings</b><button id="settings-close" class="icon-btn" title="Close" aria-label="Close">\(miniIcon("x"))</button></header><label>Theme <button id="settings-theme" class="dropdown-trigger"></button></label><label>Language <button id="settings-language" class="dropdown-trigger"></button></label><label class="settings-text">Plan prompt <textarea id="settings-prompt-plan"></textarea></label><label class="settings-text">Question prompt <textarea id="settings-prompt-q"></textarea></label><label class="settings-text">Change prompt <textarea id="settings-prompt-c"></textarea></label><footer class="settings-actions"><button id="settings-reset">Reset</button><span id="settings-saved"></span></footer><div id="settings-theme-menu" class="mc-dropdown hidden"><button data-theme-option="darcula">Darcula</button><button data-theme-option="light">Light</button></div><div id="settings-language-menu" class="mc-dropdown hidden"><button data-language-option="en">English</button><button data-language-option="ko">한국어</button></div></section></div>
+        <section id="terminal-panel" class="terminal-panel hidden"><div class="terminal-bar"><span>Terminal</span><div id="terminal-tabs"></div><button id="terminal-split" class="icon-btn" title="Split terminal" aria-label="Split terminal">\(miniIcon("split"))</button><button id="terminal-rename" class="icon-btn" title="Rename pane" aria-label="Rename pane">\(miniIcon("edit"))</button><button id="terminal-close" class="icon-btn" title="Close terminal" aria-label="Close terminal">\(miniIcon("x"))</button></div><div id="terminal-panes"></div></section>
         <script>window.__momentermData = \(data);</script>
         <script>\(clientScript)</script>
         """)
+    }
+
+    private static func renderActivityRail() -> String {
+        let primary = [
+            railButton(kind: "view", value: "changes", label: "Changes", shortcut: "Cmd+0", icon: "changes"),
+            railButton(kind: "view", value: "files", label: "Files", shortcut: "Cmd+1", icon: "files"),
+            railButton(kind: "action", value: "questions", label: "Questions", shortcut: "Cmd+Shift+/", icon: "question"),
+            railButton(kind: "action", value: "changes", label: "Change requests", shortcut: "Cmd+Shift+.", icon: "edit"),
+            railButton(kind: "action", value: "memo", label: "Prompt memo", shortcut: "Cmd+Shift+N", icon: "memo")
+        ].joined(separator: "\n")
+        let secondary = [
+            railButton(kind: "action", value: "history", label: "History", shortcut: "Cmd+9", icon: "history"),
+            railButton(kind: "action", value: "terminal", label: "Terminal", shortcut: "Ctrl+`", icon: "terminal"),
+            railButton(kind: "action", value: "settings", label: "Settings", shortcut: "Cmd+,", icon: "settings")
+        ].joined(separator: "\n")
+        return """
+        <nav class="activity-rail" aria-label="Views">
+          <div class="rail-group">\(primary)</div>
+          <div class="rail-group rail-bottom">\(secondary)</div>
+        </nav>
+        """
+    }
+
+    private static func railButton(kind: String, value: String, label: String, shortcut: String, icon: String) -> String {
+        let data = kind == "view" ? #"data-view="\#(escapeAttr(value))""# : #"data-action="\#(escapeAttr(value))""#
+        return #"<button type="button" class="rail-btn" \#(data) aria-label="\#(escapeAttr(label))" title="\#(escapeAttr(label)) \#(escapeAttr(shortcut))">\#(miniIcon(icon))<span class="rail-tip"><span>\#(escape(label))</span><kbd>\#(escape(shortcut))</kbd></span></button>"#
+    }
+
+    private static func miniIcon(_ name: String) -> String {
+        let body: String
+        switch name {
+        case "changes":
+            body = #"<circle cx="12" cy="12" r="3.2"/><line x1="3.5" y1="12" x2="8.8" y2="12"/><line x1="15.2" y1="12" x2="20.5" y2="12"/>"#
+        case "files":
+            body = #"<path d="M4 7.5C4 6.7 4.7 6 5.5 6h3.2c.5 0 .9.2 1.2.6L11 8h7.3c.8 0 1.5.7 1.5 1.5v8c0 .8-.7 1.5-1.5 1.5h-13C4.7 19 4 18.3 4 17.5z"/>"#
+        case "question":
+            body = #"<path d="M5.5 5.5h13c.8 0 1.5.7 1.5 1.5v6.4c0 .8-.7 1.5-1.5 1.5H12l-4.5 3.6V16.4H5.5c-.8 0-1.5-.7-1.5-1.5V7c0-.8.7-1.5 1.5-1.5z"/><text x="12" y="13" text-anchor="middle" font-size="9.5" font-weight="700" fill="currentColor" stroke="none">?</text>"#
+        case "edit":
+            body = #"<path d="M14.5 5.5l4 4"/><path d="M4.5 19.5l1-4 10-10 3 3-10 10z"/>"#
+        case "memo":
+            body = #"<rect x="5.5" y="4" width="13" height="16" rx="1.5"/><line x1="8.5" y1="9" x2="15.5" y2="9"/><line x1="8.5" y1="12.5" x2="15.5" y2="12.5"/><line x1="8.5" y1="16" x2="12.5" y2="16"/>"#
+        case "history":
+            body = #"<circle cx="12" cy="12" r="8.3"/><path d="M12 7.4v5l3.2 1.9"/>"#
+        case "terminal":
+            body = #"<path d="M5 7l4 5-4 5"/><path d="M13 17h6"/>"#
+        case "settings":
+            body = #"<circle cx="12" cy="12" r="3.2"/><path d="M12 3.8v2.1M12 18.1v2.1M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M3.8 12h2.1M18.1 12h2.1M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5"/>"#
+        case "eye":
+            body = #"<path d="M3.5 12s3-5 8.5-5 8.5 5 8.5 5-3 5-8.5 5-8.5-5-8.5-5z"/><circle cx="12" cy="12" r="2.4"/>"#
+        case "split":
+            body = #"<rect x="4" y="5" width="7" height="14" rx="1.4"/><rect x="13" y="5" width="7" height="14" rx="1.4"/>"#
+        case "x":
+            body = #"<path d="M6 6l12 12M18 6L6 18"/>"#
+        default:
+            body = #"<circle cx="12" cy="12" r="7"/>"#
+        }
+        return #"<svg class="icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">\#(body)</svg>"#
     }
 
     static func renderReviewStatus(files: Int, hunks: Int, generatedAt: String, ignoreWhitespace: Bool) -> String {
@@ -633,15 +678,23 @@ private enum NativeHTMLRenderer {
     button{color:inherit;background:var(--panel-2);border:1px solid var(--border);border-radius:3px;padding:4px 8px}
     button:hover,button.active{border-color:var(--blue);background:#42474b;color:#d6e8ff}
     input,textarea{background:var(--code);color:var(--text);border:1px solid var(--border);border-radius:3px}
-    .topbar{position:fixed;left:0;right:0;top:0;height:44px;background:linear-gradient(#3c3f41,#343638);border-bottom:1px solid #232425;display:flex;align-items:center;justify-content:space-between;padding:0 10px;z-index:4;box-shadow:0 1px 0 rgba(255,255,255,.04) inset}
+    .topbar{position:fixed;left:0;right:0;top:0;height:44px;background:linear-gradient(#3c3f41,#343638);border-bottom:1px solid #232425;display:flex;align-items:center;justify-content:flex-start;padding:0 10px;z-index:4;box-shadow:0 1px 0 rgba(255,255,255,.04) inset}
     .topbar div{display:flex;gap:10px;align-items:baseline;min-width:0}
     .topbar strong{color:var(--strong);font-size:13px;letter-spacing:.01em}
     .topbar span{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .topbar nav{display:flex;gap:4px;align-items:center}
-    .topbar nav button{height:26px;padding:3px 8px;background:#36393b}
-    .activity{position:fixed;top:44px;bottom:0;left:0;width:54px;background:#313335;border-right:1px solid #242628;padding:6px;display:flex;flex-direction:column;gap:5px}
-    .activity button{height:42px;font-size:10px;line-height:1.05;padding:4px 2px;background:#343638;border-color:transparent;color:#b8c0c8}
-    .activity button.active,.activity button:hover{background:#3f464d;border-color:#4a88c7;color:#d6e8ff}
+    .activity-rail{position:fixed;top:44px;bottom:0;left:0;width:54px;background:#313335;border-right:1px solid #242628;padding:6px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;z-index:3}
+    .rail-group{display:flex;flex-direction:column;gap:5px}
+    .rail-btn{position:relative;width:42px;height:42px;display:grid;place-items:center;padding:0;background:#343638;border-color:transparent;color:#b8c0c8}
+    .rail-btn.active,.rail-btn:hover{background:#3f464d;border-color:#4a88c7;color:#d6e8ff}
+    .rail-btn .icon{width:19px;height:19px}
+    .rail-tip{position:absolute;left:48px;top:50%;transform:translateY(-50%);display:none;align-items:center;white-space:nowrap;background:#3c3f41;border:1px solid #555a5e;border-radius:3px;padding:5px 7px;box-shadow:0 8px 24px var(--shadow);z-index:20;color:#d6e8ff;pointer-events:none}
+    .rail-tip kbd{margin-left:8px;color:#ffc66d;font:11px ui-monospace,SFMono-Regular,Menlo,monospace}
+    .rail-btn:hover .rail-tip,.rail-btn:focus-visible .rail-tip{display:inline-flex}
+    .icon{display:block;pointer-events:none}
+    .icon-btn{width:26px;height:26px;display:grid;place-items:center;padding:0}
+    .icon-btn .icon{width:16px;height:16px}
+    .icon-label-button{display:inline-flex;align-items:center;gap:5px}
+    .plain-button{height:26px}
     .sidebar{position:fixed;left:54px;top:44px;bottom:0;width:296px;background:#3c3f41;border-right:1px solid #242628;overflow:auto}
     .workspace{margin-left:350px;padding-top:44px;min-height:100vh}
     .toolbar{height:34px;display:flex;gap:6px;align-items:center;padding:0 10px;border-bottom:1px solid #242628;background:#343638;position:sticky;top:44px;z-index:2}
@@ -666,7 +719,7 @@ private enum NativeHTMLRenderer {
     .d2h-file-wrapper.viewed .file-header{opacity:.72}
     .file-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px;border-bottom:1px solid #4b4f52;background:#343638;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#c7cbd1}
     .file-header-actions{display:flex;gap:6px;align-items:center}
-    .file-header-actions button{padding:3px 7px;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+    .file-header-actions .icon-btn{width:24px;height:24px}
     .diff-table{width:100%;border-collapse:collapse;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code)}
     .ln{width:52px;text-align:right;color:var(--muted);padding:0 8px;border-right:1px solid var(--border);user-select:none}
     .code{white-space:pre-wrap;overflow-wrap:anywhere;padding-left:8px;color:#a9b7c6}
@@ -709,7 +762,7 @@ private enum NativeHTMLRenderer {
     .floating-dock{position:fixed;right:18px;bottom:18px;width:min(760px,calc(100vw - 382px));max-height:70vh;background:#3c3f41;border:1px solid #555a5e;border-radius:4px;box-shadow:0 18px 44px var(--shadow);z-index:8;display:flex;flex-direction:column}
     .floating-dock.maximized{left:370px;right:20px;top:70px;bottom:20px;width:auto;max-height:none}
     .floating-dock header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid #4b4f52;background:#343638}
-    .floating-dock header div{display:flex;gap:8px}
+    .floating-dock header div{display:flex;gap:6px}
     .floating-dock textarea{min-height:240px;border:0;border-radius:0;background:#2b2b2b;color:#a9b7c6;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px;resize:vertical;caret-color:auto}
     .floating-dock form{display:grid;gap:8px;padding:12px}
     .floating-dock input,.floating-dock textarea{width:100%;padding:8px}
@@ -782,6 +835,16 @@ private enum NativeHTMLRenderer {
       function qsa(s, root){ return Array.prototype.slice.call((root || document).querySelectorAll(s)); }
       function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
       function attr(s){ return esc(s).replace(/'/g, '&#39;'); }
+      function svgIcon(name){
+        var icons = {
+          eye: '<path d="M3.5 12s3-5 8.5-5 8.5 5 8.5 5-3 5-8.5 5-8.5-5-8.5-5z"/><circle cx="12" cy="12" r="2.4"/>',
+          source: '<path d="M7 4.5h7l3 3v12H7z"/><path d="M14 4.5v3h3"/><path d="M9.5 12l2-2-2-2"/><path d="M13 14.5h2.5"/>',
+          maximize: '<path d="M8 4H4v4"/><path d="M16 4h4v4"/><path d="M4 16v4h4"/><path d="M20 16v4h-4"/>',
+          x: '<path d="M6 6l12 12M18 6L6 18"/>'
+        };
+        var body = icons[name] || '<circle cx="12" cy="12" r="7"/>';
+        return '<svg class="icon" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+      }
       function lines(s){ return String(s || '').split(/\\r?\\n/); }
       function nowId(){ return String(Date.now()) + '-' + Math.random().toString(16).slice(2); }
       function loadJSON(key, fallback){ try { var raw = localStorage.getItem(key); if (raw) return JSON.parse(raw); } catch(e) {} var bridged = settingsStore[key]; return bridged == null ? fallback : bridged; }
@@ -823,7 +886,7 @@ private enum NativeHTMLRenderer {
         closeMenus();
         var d = qs('#floating-dock');
         d.classList.remove('maximized');
-        d.innerHTML = '<header><b>' + esc(title) + '</b><div><button data-dock-maximize>Maximize</button><button data-dock-close>×</button></div></header>' + html;
+        d.innerHTML = '<header><b>' + esc(title) + '</b><div><button class="icon-btn" data-dock-maximize title="Maximize" aria-label="Maximize">' + svgIcon('maximize') + '</button><button class="icon-btn" data-dock-close title="Close" aria-label="Close">' + svgIcon('x') + '</button></div></header>' + html;
         d.classList.remove('hidden');
         qs('[data-dock-close]', d).onclick = function(){ d.classList.add('hidden'); d.classList.remove('maximized'); };
         qs('[data-dock-maximize]', d).onclick = function(){ d.classList.toggle('maximized'); };
@@ -831,6 +894,16 @@ private enum NativeHTMLRenderer {
       }
       function closeDock(){ var d = qs('#floating-dock'); if (d) d.classList.add('hidden'); }
       function closeMenus(){ qsa('.mc-dropdown.runtime').forEach(function(n){ n.remove(); }); }
+      function updateViewedToggle(){
+        var toggle = qs('#diff-viewed-toggle');
+        if (!toggle) return;
+        var path = current.path || firstChangedPath();
+        var active = !!(path && viewed[path]);
+        toggle.hidden = !path;
+        toggle.innerHTML = svgIcon('eye') + '<span>' + (active ? 'Unmark viewed' : 'Viewed') + '</span>';
+        toggle.setAttribute('aria-pressed', active ? 'true' : 'false');
+        toggle.classList.toggle('active', active);
+      }
 
       function markRow(row){
         qsa('tr.cursor-line,.source-row.cursor-line').forEach(function(r){ r.classList.remove('cursor-line'); });
@@ -840,8 +913,7 @@ private enum NativeHTMLRenderer {
         var wrap = row.closest && row.closest('.d2h-file-wrapper');
         if (wrap) current.path = wrap.dataset.path || current.path;
         current.line = rowLine(row);
-        var toggle = qs('#diff-viewed-toggle');
-        if (toggle) toggle.textContent = viewed[current.path] ? 'Unmark Viewed' : 'Mark Viewed';
+        updateViewedToggle();
       }
       function ensureCurrentRow(){
         if (current.row && document.contains(current.row) && !current.row.closest('.d2h-file-wrapper.viewed')) return current.row;
@@ -870,8 +942,7 @@ private enum NativeHTMLRenderer {
       function applyViewed(){
         qsa('.d2h-file-wrapper').forEach(function(w){ w.classList.toggle('viewed', !!viewed[w.dataset.path]); });
         qsa('.file-link,.source-link').forEach(function(b){ b.classList.toggle('viewed', !!viewed[b.dataset.path]); });
-        var toggle = qs('#diff-viewed-toggle');
-        if (toggle) toggle.textContent = viewed[current.path] ? 'Unmark Viewed' : 'Mark Viewed';
+        updateViewedToggle();
       }
       function navigateDiff(delta){
         showPane('diff-viewer');
@@ -1294,7 +1365,7 @@ private enum NativeHTMLRenderer {
           if (header && !qs('.file-header-actions', header)) {
             var actions = document.createElement('span');
             actions.className = 'file-header-actions';
-            actions.innerHTML = '<button data-view-file>Source</button><button data-viewed-file>Viewed</button>';
+            actions.innerHTML = '<button class="icon-btn" data-view-file title="Open source" aria-label="Open source">' + svgIcon('source') + '</button><button class="icon-btn" data-viewed-file title="Toggle viewed" aria-label="Toggle viewed">' + svgIcon('eye') + '</button>';
             header.appendChild(actions);
             qs('[data-view-file]', actions).onclick = function(){ openSource(w.dataset.path); };
             qs('[data-viewed-file]', actions).onclick = function(){ current.path = w.dataset.path; toggleViewed(w.dataset.path); };
@@ -1595,7 +1666,8 @@ private enum NativeHTMLRenderer {
       qs('#back-to-diff').addEventListener('click', function(){ showPane('diff-viewer'); ensureCurrentRow(); });
       qs('#source-raw-toggle').addEventListener('click', function(){ if (!current.sourcePath) return; sourceRaw[current.sourcePath] = !sourceRaw[current.sourcePath]; openSource(current.sourcePath, current.line); });
       qs('#diff-viewed-toggle').addEventListener('click', function(){ toggleViewed(current.path); });
-      qs('#quick-open-button').addEventListener('click', openQuickOpen);
+      var quickOpenButton = qs('#quick-open-button');
+      if (quickOpenButton) quickOpenButton.addEventListener('click', openQuickOpen);
       qs('#history-close').addEventListener('click', function(){ showPane('diff-viewer'); });
       qsa('[data-action]').forEach(function(b){
         b.onclick = function(){

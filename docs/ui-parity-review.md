@@ -9,6 +9,7 @@ This pass compares Momenterm against Monacori's visible review surface instead o
 - The activity rail looked passive. It did not clearly drive the Changes/Files tool-window state or show active feedback.
 - The diff/source work area did not read as an editor. It needed a darker editor plane, tighter file headers, compact gutters, and less card-like spacing.
 - Settings looked incomplete and visually generic. It needed Darcula as the named default and controls for language and prompt templates, not just a theme switch.
+- Action exposure was wrong. Monacori keeps global review actions in an IntelliJ-style icon rail and exposes text buttons mostly inside the current context, while Momenterm had a visible topbar full of text actions, duplicated Quick Open entry points, text-only terminal controls, text-only dock controls, and per-file text buttons on every diff header.
 - Existing parity smoke checked that controls existed, but not that the Darcula visual tokens and shortcut/settings matrix were actually present.
 
 ## Actions Taken
@@ -16,8 +17,11 @@ This pass compares Momenterm against Monacori's visible review surface instead o
 - Rebased the default UI palette on Darcula tokens and renamed the default theme to `darcula`.
 - Recolored syntax token classes to Darcula: keyword orange, string green, comment gray, number blue, function yellow, type foreground, decorator olive.
 - Tightened the topbar, activity rail, sidebar, toolbar, diff wrappers, source editor, quick-open, settings, dock, history, and terminal surfaces.
-- Wired activity rail buttons through `setSidebarTab`, with active visual state.
+- Replaced the topbar action row with a compact icon activity rail. The rail carries Changes/Files plus review, history, terminal, and settings actions through SVG icons, tooltips, and shortcut hints.
+- Wired activity rail buttons through `setSidebarTab` and existing action handlers, with active visual state.
 - Removed file-count/timestamp clutter from the diff toolbar so the editor header is quieter.
+- Removed the visible Quick Open toolbar button and kept Quick Open on the double-Shift shortcut.
+- Converted terminal, settings close, dock maximize/close, and per-file source/viewed controls to icon buttons with titles/ARIA labels.
 - Added Darcula visual checks to `scripts/parity-smoke.mjs` so regressions fail automatically.
 
 ## Verification
@@ -29,4 +33,10 @@ This pass compares Momenterm against Monacori's visible review surface instead o
 - all shortcut routes remain wired
 - settings surfaces persist through the native settings bridge
 - Darcula color tokens and compact layout anchors are present
+- topbar global action buttons stay removed
+- activity rail buttons use SVG icons with tooltip shortcuts
+- the rail action set stays aligned with the Monacori app shell
+- the diff `Viewed` control is hidden only until a selectable file exists
+- terminal, settings, dock, and file-header controls remain icon buttons
+- deleted Quick Open toolbar wiring is guarded so WebView boot does not crash
 - Monacori/Electron/Node runtime markers are absent
