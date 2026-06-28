@@ -32,6 +32,7 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 ./scripts/build.sh
 ./scripts/smoke.sh /path/to/repo
 ./scripts/pty-smoke.sh /path/to/repo
+./scripts/launch-smoke.sh /path/to/repo
 ```
 
 ## Package
