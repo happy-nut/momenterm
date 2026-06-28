@@ -287,18 +287,49 @@ final class NativeReviewCore {
     }
 
     private func collectSourceFiles(files: [DiffFile], root: URL) -> [SourceFile] {
-        files.map { file in
-            let path = file.displayPath
-            let url = root.appendingPathComponent(path)
-            guard let data = try? Data(contentsOf: url) else {
-                return SourceFile(path: path, size: 0, embedded: false, content: "", skippedReason: "file is not present in the working tree")
+        let paths: [String]
+        if files.isEmpty {
+            let tracked = ((try? git(root, ["ls-files"])) ?? "")
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            paths = tracked.sorted { left, right in
+                let l = sourceSortRank(left)
+                let r = sourceSortRank(right)
+                return l == r ? left.localizedStandardCompare(right) == .orderedAscending : l < r
             }
-            if data.count > 1_000_000 {
-                return SourceFile(path: path, size: data.count, embedded: false, content: "", skippedReason: "file is larger than 1 MB")
-            }
-            let content = String(data: data, encoding: .utf8) ?? ""
-            return SourceFile(path: path, size: data.count, embedded: true, content: content, skippedReason: "")
+            .prefix(200)
+            .map { String($0) }
+        } else {
+            paths = files.map { $0.displayPath }
         }
+
+        return paths.map { path in
+            sourceFile(path: path, root: root)
+        }
+    }
+
+    private func sourceFile(path: String, root: URL) -> SourceFile {
+        let url = root.appendingPathComponent(path)
+        guard let data = try? Data(contentsOf: url) else {
+            return SourceFile(path: path, size: 0, embedded: false, content: "", skippedReason: "file is not present in the working tree")
+        }
+        if data.count > 1_000_000 {
+            return SourceFile(path: path, size: data.count, embedded: false, content: "", skippedReason: "file is larger than 1 MB")
+        }
+        let content = String(data: data, encoding: .utf8) ?? ""
+        return SourceFile(path: path, size: data.count, embedded: true, content: content, skippedReason: "")
+    }
+
+    private func sourceSortRank(_ path: String) -> Int {
+        let lower = path.lowercased()
+        if lower == "readme.md" || lower == "readme.markdown" || lower == "readme.txt" {
+            return 0
+        }
+        if lower.hasPrefix("readme.") {
+            return 1
+        }
+        return 2
     }
 
     private func isoNow() -> String {
@@ -528,7 +559,7 @@ private enum NativeHTMLRenderer {
         </main>
         <div id="floating-dock" class="floating-dock hidden"></div>
         <div id="quick-open" class="modal-backdrop hidden"><section class="quick-open-panel"><input id="quick-open-input" autocomplete="off" placeholder="Search files"><div id="quick-open-list"></div></section></div>
-        <div id="settings-modal" class="modal-backdrop hidden"><section class="settings-panel"><header><b>Settings</b><button id="settings-close">×</button></header><label>Theme <button id="settings-theme" class="dropdown-trigger"></button></label><div id="settings-theme-menu" class="mc-dropdown hidden"><button data-theme-option="dark">Dark</button><button data-theme-option="light">Light</button></div></section></div>
+        <div id="settings-modal" class="modal-backdrop hidden"><section class="settings-panel"><header><b>Settings</b><button id="settings-close">×</button></header><label>Theme <button id="settings-theme" class="dropdown-trigger"></button></label><label>Language <button id="settings-language" class="dropdown-trigger"></button></label><label class="settings-text">Plan prompt <textarea id="settings-prompt-plan"></textarea></label><label class="settings-text">Question prompt <textarea id="settings-prompt-q"></textarea></label><label class="settings-text">Change prompt <textarea id="settings-prompt-c"></textarea></label><footer class="settings-actions"><button id="settings-reset">Reset</button><span id="settings-saved"></span></footer><div id="settings-theme-menu" class="mc-dropdown hidden"><button data-theme-option="dark">Dark</button><button data-theme-option="light">Light</button></div><div id="settings-language-menu" class="mc-dropdown hidden"><button data-language-option="en">English</button><button data-language-option="ko">한국어</button></div></section></div>
         <section id="terminal-panel" class="terminal-panel hidden"><div class="terminal-bar"><span>Terminal</span><div id="terminal-tabs"></div><button id="terminal-split">Split</button><button id="terminal-rename">Rename</button><button id="terminal-close">×</button></div><div id="terminal-panes"></div></section>
         <script>window.__momentermData = \(data);</script>
         <script>\(clientScript)</script>
@@ -642,6 +673,7 @@ private enum NativeHTMLRenderer {
     body.mc-composing tr.cursor-line td,body.mc-composing .source-row.cursor-line{outline-color:transparent}
     .mc-comment-row td{background:var(--panel)}
     .mc-card{margin:7px 8px;padding:8px 10px;border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:6px;background:var(--panel-2);font:12px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}
+    .mc-card.mc-row-selected{outline:2px solid var(--blue);outline-offset:1px}
     .mc-card.mc-c{border-left-color:var(--red)}
     .mc-card header{display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px;margin-bottom:5px}
     .mc-card p{margin:0;white-space:pre-wrap}
@@ -654,6 +686,23 @@ private enum NativeHTMLRenderer {
     .source-row{display:grid;grid-template-columns:52px minmax(0,1fr);min-height:18px}
     .source-gutter{color:var(--muted);font-weight:400;text-align:right;padding-right:8px;border-right:1px solid var(--border);user-select:none}
     .source-code{padding-left:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+    .code-cursor{display:inline-block;min-width:1px}
+    .tok-keyword{color:#ff7b72}
+    .tok-string{color:#a5d6ff}
+    .tok-comment{color:#8b949e;font-style:italic}
+    .tok-number{color:#79c0ff}
+    .tok-fn{color:#d2a8ff}
+    .tok-type{color:#ffa657}
+    .tok-decorator{color:#7ee787}
+    .tok-operator{color:#ff7b72}
+    html[data-theme="light"] .tok-keyword{color:#cf222e}
+    html[data-theme="light"] .tok-string{color:#0a3069}
+    html[data-theme="light"] .tok-comment{color:#6e7781}
+    html[data-theme="light"] .tok-number{color:#0550ae}
+    html[data-theme="light"] .tok-fn{color:#8250df}
+    html[data-theme="light"] .tok-type{color:#953800}
+    html[data-theme="light"] .tok-decorator{color:#116329}
+    html[data-theme="light"] .tok-operator{color:#cf222e}
     .md-row .source-code{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;white-space:normal}
     .md-row h1,.md-row h2,.md-row h3{margin:0;font-size:15px}
     .csv-table{border-collapse:collapse;width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -685,6 +734,9 @@ private enum NativeHTMLRenderer {
     .settings-panel{width:360px;padding-bottom:12px;position:relative}
     .settings-panel header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)}
     .settings-panel label{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:12px}
+    .settings-panel label.settings-text{display:grid;grid-template-columns:1fr;gap:6px;align-items:stretch}
+    .settings-panel textarea{min-height:74px;padding:8px;resize:vertical}
+    .settings-actions{display:flex;align-items:center;justify-content:space-between;padding:0 12px 12px;color:var(--muted)}
     .mc-dropdown{position:absolute;right:12px;top:82px;display:grid;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 8px 24px var(--shadow);z-index:13}
     .mc-dropdown button{border:0;border-bottom:1px solid var(--border);border-radius:0;text-align:left}
     .history-workspace{display:grid;grid-template-columns:330px 240px minmax(0,1fr);min-height:calc(100vh - 90px)}
@@ -708,8 +760,16 @@ private enum NativeHTMLRenderer {
       var uiKey = 'momenterm-ui:' + rootKey;
       var recentKey = 'momenterm-recent-files:' + rootKey;
       var settingsStore = (window.momentermSettings && window.momentermSettings.all) || {};
+      var settingDefaults = {
+        theme: 'dark',
+        language: 'en',
+        promptPlan: 'Review the current diff and propose the safest next implementation plan.',
+        promptQ: 'Please answer this review question using the referenced file and line.',
+        promptC: 'Please make this requested change using the referenced file and line.'
+      };
       var composing = false;
       var pendingUpdate = null;
+      var selectedCommentId = null;
       var current = { view: 'diff', path: '', row: null, line: 0, sourcePath: '' };
       var sourceRaw = {};
       var openedPaths = loadJSON(recentKey, []);
@@ -730,6 +790,10 @@ private enum NativeHTMLRenderer {
       function loadJSON(key, fallback){ try { var raw = localStorage.getItem(key); if (raw) return JSON.parse(raw); } catch(e) {} var bridged = settingsStore[key]; return bridged == null ? fallback : bridged; }
       function loadArray(key){ var value = loadJSON(key, []); return Array.isArray(value) ? value.slice() : []; }
       function persist(key, value){ try { localStorage.setItem(key, JSON.stringify(value)); } catch(e) {} if (window.momentermSettings) window.momentermSettings.set(key, value); }
+      function settingStorageKey(key){ return 'momenterm-setting-' + key; }
+      function getSetting(key){ var raw = null; try { raw = localStorage.getItem(settingStorageKey(key)); } catch(e) {} if (raw != null) return raw; return settingsStore[key] == null ? settingDefaults[key] : settingsStore[key]; }
+      function saveSetting(key, value){ try { localStorage.setItem(settingStorageKey(key), String(value)); } catch(e) {} settingsStore[key] = String(value); if (window.momentermSettings) window.momentermSettings.set(key, String(value)); showSettingsSaved(); }
+      function showSettingsSaved(){ var saved = qs('#settings-saved'); if (!saved) return; saved.textContent = 'Saved'; clearTimeout(showSettingsSaved.timer); showSettingsSaved.timer = setTimeout(function(){ saved.textContent = ''; }, 1200); }
       function persistComments(){ persist(commentsKey, reviewComments); }
       function persistViewed(){ persist(viewedKey, viewed); }
       function sourceFiles(){ return Array.isArray(data.sourceFiles) ? data.sourceFiles : []; }
@@ -745,12 +809,11 @@ private enum NativeHTMLRenderer {
       function applyTheme(theme){
         theme = theme === 'light' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', theme);
-        try { localStorage.setItem('momenterm-theme', theme); } catch(e) {}
-        if (window.momentermSettings) window.momentermSettings.set('theme', theme);
+        saveSetting('theme', theme);
         var trigger = qs('#settings-theme');
         if (trigger) trigger.textContent = theme;
       }
-      applyTheme(localStorage.getItem('momenterm-theme') || settingsStore.theme || 'dark');
+      applyTheme(getSetting('theme'));
 
       function showPane(id){
         qsa('.pane').forEach(function(p){ p.classList.toggle('active', p.id === id); });
@@ -945,12 +1008,56 @@ private enum NativeHTMLRenderer {
       function refreshCommentActions(){
         qsa('[data-delete-comment]').forEach(function(b){ b.onclick = function(){ deleteComment(b.dataset.deleteComment); }; });
         qsa('[data-edit-comment]').forEach(function(b){ b.onclick = function(){ var c = reviewComments.filter(function(x){ return x.id === b.dataset.editComment; })[0]; if (c) openComposer(c.kind, c); }; });
+        qsa('.mc-card[data-comment-id]').forEach(function(card){ card.onclick = function(){ selectComment(card.dataset.commentId); }; });
+      }
+      function selectComment(id){
+        selectedCommentId = id || null;
+        qsa('.mc-card.mc-row-selected,.mc-comment-row.mc-row-selected').forEach(function(n){ n.classList.remove('mc-row-selected'); });
+        if (!selectedCommentId) return false;
+        qsa('[data-comment-id="' + selectedCommentId + '"]').forEach(function(card){
+          card.classList.add('mc-row-selected');
+          var row = card.closest('.mc-comment-row');
+          if (row) row.classList.add('mc-row-selected');
+          card.scrollIntoView({ block: 'nearest' });
+        });
+        return true;
+      }
+      function currentCommentCandidates(){
+        var loc = targetFromCurrent();
+        return reviewComments.filter(function(c){
+          return c.path === loc.path && (!loc.line || Number(c.line || 0) === Number(loc.line || 0));
+        });
+      }
+      function selectAdjacentComment(delta){
+        var visible = qsa('.mc-card[data-comment-id]').map(function(card){ return card.dataset.commentId; });
+        if (!visible.length) return false;
+        var local = currentCommentCandidates().map(function(c){ return c.id; }).filter(function(id){ return visible.indexOf(id) >= 0; });
+        var ids = local.length ? local : visible;
+        var idx = selectedCommentId ? ids.indexOf(selectedCommentId) : -1;
+        idx += delta;
+        if (idx < 0) idx = ids.length - 1;
+        if (idx >= ids.length) idx = 0;
+        return selectComment(ids[idx]);
+      }
+      function editSelectedComment(){
+        var c = reviewComments.filter(function(x){ return x.id === selectedCommentId; })[0];
+        if (!c) return false;
+        openComposer(c.kind, c);
+        return true;
+      }
+      function deleteSelectedComment(){
+        if (!selectedCommentId) return false;
+        var id = selectedCommentId;
+        selectedCommentId = null;
+        deleteComment(id);
+        return true;
       }
       function refreshComments(){
         renderDiffComments();
         renderSourceComments();
         refreshBadges();
         refreshCommentActions();
+        if (selectedCommentId) selectComment(selectedCommentId);
       }
       window.refreshComments = refreshComments;
       function remapComments(){
@@ -981,6 +1088,88 @@ private enum NativeHTMLRenderer {
         });
         return box.innerHTML;
       }
+      var keywordSet = {
+        as:1, async:1, await:1, break:1, case:1, catch:1, class:1, const:1, continue:1, default:1, defer:1, do:1, else:1, enum:1, export:1, extends:1, false:1, final:1, for:1, from:1, func:1, function:1, guard:1, if:1, import:1, in:1, interface:1, let:1, mutating:1, nil:1, null:1, private:1, protocol:1, public:1, return:1, static:1, struct:1, switch:1, throws:1, true:1, try:1, typealias:1, var:1, while:1, yield:1
+      };
+      function isIdentStart(ch){ return /[A-Za-z_$]/.test(ch); }
+      function isIdent(ch){ return /[A-Za-z0-9_$]/.test(ch); }
+      function readIdentifier(text, start){ var i = start + 1; while (i < text.length && isIdent(text.charAt(i))) i++; return text.slice(start, i); }
+      function nextNonSpace(text, start){ var i = start; while (i < text.length && /\\s/.test(text.charAt(i))) i++; return text.charAt(i); }
+      function token(cls, value){ return '<span class="' + cls + '">' + esc(value) + '</span>'; }
+      function highlightIdentifier(word, next){
+        if (keywordSet[word]) return token('tok-keyword', word);
+        if (next === '(') return token('tok-fn', word);
+        if (/^[A-Z][A-Za-z0-9_$]*$/.test(word)) return token('tok-type', word);
+        return esc(word);
+      }
+      function highlightCode(raw, path){
+        var text = String(raw == null ? '' : raw);
+        if (text.length === 0) return '<span class="code-cursor">&nbsp;</span>';
+        var out = '';
+        for (var i = 0; i < text.length;) {
+          var ch = text.charAt(i);
+          var next = text.charAt(i + 1);
+          if (ch === '/' && next === '/') { out += token('tok-comment', text.slice(i)); break; }
+          if (ch === '#') { out += token('tok-comment', text.slice(i)); break; }
+          if (ch === '/' && next === '*') {
+            var endBlock = text.indexOf('*/', i + 2);
+            var stopBlock = endBlock < 0 ? text.length : endBlock + 2;
+            out += token('tok-comment', text.slice(i, stopBlock));
+            i = stopBlock;
+            continue;
+          }
+          if (ch === '"' || ch === "'" || ch === '`') {
+            var quote = ch;
+            var j = i + 1;
+            while (j < text.length) {
+              if (text.charAt(j) === '\\\\') { j += 2; continue; }
+              if (text.charAt(j) === quote) { j++; break; }
+              j++;
+            }
+            out += token('tok-string', text.slice(i, j));
+            i = j;
+            continue;
+          }
+          if (ch === '@' && isIdentStart(next)) {
+            var dec = '@' + readIdentifier(text, i + 1);
+            out += token('tok-decorator', dec);
+            i += dec.length;
+            continue;
+          }
+          if (/\\d/.test(ch)) {
+            var num = text.slice(i).match(/^\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?/)[0];
+            out += token('tok-number', num);
+            i += num.length;
+            continue;
+          }
+          if (isIdentStart(ch)) {
+            var word = readIdentifier(text, i);
+            out += highlightIdentifier(word, nextNonSpace(text, i + word.length));
+            i += word.length;
+            continue;
+          }
+          if (/[-+*/%=!<>|&?:]/.test(ch)) {
+            out += token('tok-operator', ch);
+          } else {
+            out += esc(ch);
+          }
+          i++;
+        }
+        return out || '<span class="code-cursor">&nbsp;</span>';
+      }
+      function applySyntaxHighlighting(root){
+        qsa('td.code', root || document).forEach(function(cell){
+          if (cell.dataset.highlighted === '1') return;
+          var wrap = cell.closest('.d2h-file-wrapper');
+          var marker = qs('.marker', cell);
+          var markerText = marker ? marker.textContent : '';
+          var raw = cell.textContent || '';
+          var code = markerText ? raw.slice(markerText.length) : raw;
+          cell.innerHTML = '<span class="marker">' + esc(markerText) + '</span>' + highlightCode(code, wrap ? wrap.dataset.path : '');
+          cell.dataset.highlighted = '1';
+        });
+      }
+      window.__momentermHighlightCode = highlightCode;
       function renderMarkdownLine(line){
         var trimmed = String(line || '').trim();
         if (!trimmed) return '&nbsp;';
@@ -1020,7 +1209,7 @@ private enum NativeHTMLRenderer {
           }).join('');
         }
         return all.map(function(line, i){
-          return '<div class="source-row" data-line="' + (i + 1) + '" data-line-index="' + i + '"><b class="source-gutter">' + (i + 1) + '</b><span class="source-code">' + (line === '' ? '&nbsp;' : esc(line)) + '</span></div>';
+          return '<div class="source-row" data-line="' + (i + 1) + '" data-line-index="' + i + '"><b class="source-gutter">' + (i + 1) + '</b><span class="source-code">' + highlightCode(line, path) + '</span></div>';
         }).join('');
       }
       function openSource(path, line){
@@ -1055,11 +1244,45 @@ private enum NativeHTMLRenderer {
       window.caretLocation = function(){ return { path: current.view === 'source' ? current.sourcePath : current.path, line: current.line || 0, view: current.view }; };
 
       function attachSidebarHandlers(){
-        qsa('.source-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ openSource(b.dataset.path); }); });
-        qsa('.file-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ scrollToPath(b.dataset.path); }); });
+        qsa('.source-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ openSource(b.dataset.path); }); b.addEventListener('keydown', sidebarKeydown); });
+        qsa('.file-link').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ scrollToPath(b.dataset.path); }); b.addEventListener('keydown', sidebarKeydown); });
         qsa('[data-tab]').forEach(function(b){ if (b.dataset.bound) return; b.dataset.bound = '1'; b.addEventListener('click', function(){ qs('#changes-panel').classList.toggle('hidden', b.dataset.tab !== 'changes'); qs('#files-panel').classList.toggle('hidden', b.dataset.tab !== 'files'); }); });
       }
+      function sidebarRows(){
+        return qsa('#changes-panel:not(.hidden) .file-link,#files-panel:not(.hidden) .source-link');
+      }
+      function sidebarKeydown(e){
+        var rows = sidebarRows();
+        var idx = rows.indexOf(e.currentTarget);
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!rows.length) return;
+          idx += e.key === 'ArrowDown' ? 1 : -1;
+          if (idx < 0) idx = rows.length - 1;
+          if (idx >= rows.length) idx = 0;
+          rows[idx].focus();
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          e.currentTarget.click();
+        } else if (e.altKey && e.key === 'Enter') {
+          e.preventDefault();
+          openFileActionMenu(e.currentTarget);
+        }
+      }
+      function openFileActionMenu(button){
+        closeMenus();
+        var menu = document.createElement('div');
+        menu.className = 'mc-dropdown runtime';
+        menu.style.left = '96px';
+        menu.style.top = Math.max(70, button.getBoundingClientRect().top) + 'px';
+        menu.innerHTML = '<button data-copy-path>Copy path</button><button data-reveal-path>Reveal in Finder</button><button data-terminal-path>Open terminal here</button>';
+        document.body.appendChild(menu);
+        qs('[data-copy-path]', menu).onclick = function(){ window.momentermClipboard.write(button.dataset.path || ''); closeMenus(); };
+        qs('[data-reveal-path]', menu).onclick = function(){ window.momentermApp.revealInFinder(button.dataset.path || ''); closeMenus(); };
+        qs('[data-terminal-path]', menu).onclick = function(){ window.momentermApp.openTerminalAt(button.dataset.path || ''); closeMenus(); };
+      }
       function attachDiffHandlers(){
+        applySyntaxHighlighting(qs('#diff2html-container'));
         qsa('.d2h-file-wrapper').forEach(function(w){
           var header = qs('.file-header', w);
           if (header && !qs('.file-header-actions', header)) {
@@ -1087,7 +1310,8 @@ private enum NativeHTMLRenderer {
         var title = kind === 'c' ? 'Change requests' : (kind === 'q' ? 'Questions' : 'Review comments');
         var selected = reviewComments.filter(function(c){ return !kind || c.kind === kind; });
         if (!selected.length) return '';
-        return '# ' + title + '\\n\\n' + selected.map(function(c){
+        var prompt = kind === 'c' ? getSetting('promptC') : (kind === 'q' ? getSetting('promptQ') : getSetting('promptPlan'));
+        return '# ' + title + '\\n\\n' + prompt + '\\n\\n' + selected.map(function(c){
           return '- ' + c.path + ':' + (c.line || '') + ' [' + commentLabel(c.kind) + ']\\n' + (c.code ? '  Code: ' + c.code + '\\n' : '') + '  ' + c.text;
         }).join('\\n\\n');
       }
@@ -1238,6 +1462,7 @@ private enum NativeHTMLRenderer {
         diff.textContent = 'Loading diff...';
         window.momentermGit.commitDiff(sha).then(function(d){
           diff.innerHTML = d && d.diffHtml ? d.diffHtml : '<div class="empty">No diff</div>';
+          applySyntaxHighlighting(diff);
           var files = qsa('.d2h-file-wrapper', diff).map(function(w){ return w.dataset.path; }).filter(Boolean);
           qs('#history-files').innerHTML = files.map(function(p, i){ return '<button class="history-file ' + (i === 0 ? 'active' : '') + '" data-file="' + attr(p) + '"><span>' + esc(p) + '</span></button>'; }).join('') || '<div class="empty">No files</div>';
           qsa('.history-file').forEach(function(b){ b.onclick = function(){ historyState.file = b.dataset.file; qsa('.history-file').forEach(function(x){ x.classList.toggle('active', x === b); }); qsa('#history-diff-container .d2h-file-wrapper').forEach(function(w){ w.classList.toggle('df-inactive', w.dataset.path !== historyState.file); }); }; });
@@ -1249,7 +1474,7 @@ private enum NativeHTMLRenderer {
         qs('#terminal-panes').innerHTML = terminals.map(function(t){ return '<pre class="terminal-output ' + (t.id === activeTerminalId ? 'active' : '') + '" data-term-id="' + t.id + '" tabindex="0">' + esc(t.output || '') + '</pre>'; }).join('');
         qsa('[data-term-tab]').forEach(function(b){ b.onclick = function(){ activeTerminalId = Number(b.dataset.termTab); renderTerminal(); focusTerminal(); }; });
       }
-      function stripAnsi(s){ return String(s || '').replace(new RegExp(String.fromCharCode(27) + '\\\\[[0-?]*[ -/]*[@-~]', 'g'), ''); }
+      function stripAnsi(s){ return String(s || '').replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, ''); }
       function terminalById(id){ return terminals.filter(function(t){ return t.id === Number(id); })[0]; }
       function appendTerm(id, text){
         var t = terminalById(id);
@@ -1320,14 +1545,28 @@ private enum NativeHTMLRenderer {
 
       function openSettings(){
         var modal = qs('#settings-modal');
-        var trigger = qs('#settings-theme');
-        trigger.textContent = document.documentElement.getAttribute('data-theme') || 'dark';
+        qs('#settings-theme').textContent = getSetting('theme');
+        qs('#settings-language').textContent = getSetting('language') === 'ko' ? '한국어' : 'English';
+        qs('#settings-prompt-plan').value = getSetting('promptPlan');
+        qs('#settings-prompt-q').value = getSetting('promptQ');
+        qs('#settings-prompt-c').value = getSetting('promptC');
+        qs('#settings-saved').textContent = '';
         modal.classList.remove('hidden');
       }
       qs('#settings-close').onclick = function(){ qs('#settings-modal').classList.add('hidden'); };
       qs('#settings-modal').addEventListener('click', function(e){ if (e.target.id === 'settings-modal') qs('#settings-modal').classList.add('hidden'); });
       qs('#settings-theme').onclick = function(){ qs('#settings-theme-menu').classList.toggle('hidden'); };
+      qs('#settings-language').onclick = function(){ qs('#settings-language-menu').classList.toggle('hidden'); };
       qsa('[data-theme-option]').forEach(function(b){ b.onclick = function(){ applyTheme(b.dataset.themeOption); qs('#settings-theme-menu').classList.add('hidden'); }; });
+      qsa('[data-language-option]').forEach(function(b){ b.onclick = function(){ saveSetting('language', b.dataset.languageOption); qs('#settings-language').textContent = b.dataset.languageOption === 'ko' ? '한국어' : 'English'; qs('#settings-language-menu').classList.add('hidden'); }; });
+      qs('#settings-prompt-plan').addEventListener('input', function(e){ saveSetting('promptPlan', e.target.value); });
+      qs('#settings-prompt-q').addEventListener('input', function(e){ saveSetting('promptQ', e.target.value); });
+      qs('#settings-prompt-c').addEventListener('input', function(e){ saveSetting('promptC', e.target.value); });
+      qs('#settings-reset').onclick = function(){
+        Object.keys(settingDefaults).forEach(function(key){ saveSetting(key, settingDefaults[key]); });
+        applyTheme(settingDefaults.theme);
+        openSettings();
+      };
 
       function applyDiffUpdate(update){
         if (!update) return;
@@ -1390,6 +1629,12 @@ private enum NativeHTMLRenderer {
           return;
         }
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "'") { var d = qs('#floating-dock'); if (!d.classList.contains('hidden')) d.classList.toggle('maximized'); return; }
+        if (e.key === 'Escape' && selectedCommentId) { e.preventDefault(); selectComment(null); return; }
+        if (e.key === 'Backspace' && selectedCommentId) { e.preventDefault(); deleteSelectedComment(); return; }
+        if (e.key === 'e' && selectedCommentId) { e.preventDefault(); editSelectedComment(); return; }
+        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && current.view !== 'history') {
+          if (selectAdjacentComment(e.key === 'ArrowDown' ? 1 : -1)) { e.preventDefault(); return; }
+        }
         if (e.key === 'q') { openComposer('q'); return; }
         if (e.key === 'c') { openComposer('c'); return; }
         if (e.key === 'v' || (e.shiftKey && e.key === '<')) { toggleViewed(current.path); return; }
@@ -1405,6 +1650,7 @@ private enum NativeHTMLRenderer {
       refreshComments();
       var saved = loadJSON(uiKey, {});
       if (saved && saved.view === 'source' && saved.sourcePath && sourceByPath(saved.sourcePath)) openSource(saved.sourcePath);
+      else if (!changedPaths().length && sourceFiles()[0]) openSource(sourceFiles()[0].path);
       else current.path = firstChangedPath();
       if (window.momentermMenu) {
         window.momentermMenu.onMergedView(openMerged);

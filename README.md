@@ -9,7 +9,7 @@ The prototype keeps the review loop local and native:
 - native Swift bridge for app actions and PTY events
 - polling refresh for Git diff changes
 - Swift Git diff parsing, source loading, Git history, HTTP requests, and welcome/recent-project state
-- native review UI parity for comments, viewed files, source rendering, quick-open, history, settings, and terminal handoff
+- native review UI parity for syntax highlighting, comments, viewed files, source rendering, quick-open, history, settings, shortcuts, and terminal handoff
 
 The integrated terminal is backed by a native macOS PTY.
 
@@ -32,6 +32,7 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 ```bash
 ./scripts/build.sh
 ./scripts/smoke.sh /path/to/repo
+./scripts/parity-smoke.sh
 ./scripts/pty-smoke.sh /path/to/repo
 ./scripts/launch-smoke.sh /path/to/repo
 ```
