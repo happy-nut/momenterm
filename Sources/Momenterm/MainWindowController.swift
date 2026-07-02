@@ -715,6 +715,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private var overlayCompactHeightConstraint: NSLayoutConstraint?
     private var overlayCompactCenterXConstraint: NSLayoutConstraint?
     private var overlayCompactCenterYConstraint: NSLayoutConstraint?
+    // US-12: when a right-edge side panel (memo / merged prompt) is open, overlays sit BESIDE it
+    // instead of covering it, so opening Settings never visually closes the memo. Trailing pins to
+    // the side panel's leading edge.
+    private var overlayTrailingToSidePanelConstraint: NSLayoutConstraint?
     private var overlaySidebarWidthConstraint: NSLayoutConstraint?
     private var overlaySidebarHeightConstraint: NSLayoutConstraint?
     private var diffEditorChromeHeightConstraint: NSLayoutConstraint?
@@ -4690,6 +4694,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     func memoSidePanelIsVisibleForSmokeTest() -> Bool {
         !memoSidePanel.isHidden
+    }
+
+    // US-12: opening Settings (or any overlay) must not close or cover the memo. Returns true when
+    // the memo is still visible AND the overlay has reflowed to sit beside it (no horizontal
+    // overlap), so the memo stays fully usable.
+    func memoStaysOpenAndUncoveredWhenOverlayShownForSmokeTest() -> Bool {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        guard !memoSidePanel.isHidden, !overlayView.isHidden else { return false }
+        let memoFrame = memoSidePanel.frame
+        let overlayFrame = overlayView.frame
+        // A 1pt tolerance covers sub-pixel rounding; the overlay's right edge must stop at or
+        // before the memo's left edge.
+        return overlayFrame.maxX <= memoFrame.minX + 1
+    }
+
+    func memoOverlayCoexistDiagnosticsForSmokeTest() -> String {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        return "memoHidden=\(memoSidePanel.isHidden) overlayHidden=\(overlayView.isHidden) memo=\(memoSidePanel.frame) overlay=\(overlayView.frame) backdropHidden=\(overlayBackdrop.isHidden)"
     }
 
     func memoSidePanelOccupiesRightSideForSmokeTest() -> Bool {
@@ -10710,7 +10732,33 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlayMode == .files || overlayMode == .changes
     }
 
+    // US-12: the right-edge side panel (memo, or the merged prompt panel) that an overlay must
+    // NOT cover, so opening Settings/Files/Changes while the memo is up leaves the memo visible
+    // and usable beside the overlay instead of appearing to close it. nil when none is docked.
+    private var overlayCoexistingSidePanel: NSView? {
+        if !memoSidePanel.isHidden { return memoSidePanel }
+        if isMergedPromptSidePanelActive() { return mergedPromptSidePanel }
+        return nil
+    }
+
     private func applyOverlayMaximizedState() {
+        // When a side panel is docked, the overlay reflows to the space left of it; a
+        // side-panel-aware trailing constraint (rebuilt each pass so it always targets the
+        // currently visible panel) replaces the normal root-trailing / maximized behavior.
+        let sidePanel = overlayCoexistingSidePanel
+        overlayTrailingToSidePanelConstraint?.isActive = false
+        overlayTrailingToSidePanelConstraint = nil
+        if let sidePanel = sidePanel {
+            let constraint = overlayView.trailingAnchor.constraint(
+                equalTo: sidePanel.leadingAnchor,
+                constant: -MomentermDesign.Metrics.panelOuterPadding
+            )
+            overlayTrailingToSidePanelConstraint = constraint
+        }
+        // A maximized (edge-to-edge, rail-hidden) overlay cannot coexist with a side panel, so the
+        // side panel wins: treat the overlay as un-maximized while a panel is docked.
+        let effectiveMaximized = overlayMaximized && sidePanel == nil
+
         let edgeConstraints = [
             overlayTopConstraint,
             overlayLeadingConstraint,
@@ -10725,34 +10773,58 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         ].compactMap { $0 }
 
         if compactOverlayModeActive {
-            NSLayoutConstraint.deactivate(edgeConstraints)
-            updateCompactOverlaySize()
-            NSLayoutConstraint.activate(compactConstraints)
+            if let sidePanelTrailing = overlayTrailingToSidePanelConstraint {
+                // Fill the region left of the side panel horizontally; keep the compact height and
+                // vertical centering so Settings still reads as a modal card, just shifted left.
+                NSLayoutConstraint.deactivate(edgeConstraints)
+                overlayCompactWidthConstraint?.isActive = false
+                overlayCompactCenterXConstraint?.isActive = false
+                overlayLeadingConstraint?.constant = MomentermDesign.Metrics.panelOuterPadding
+                overlayLeadingConstraint?.isActive = true
+                sidePanelTrailing.isActive = true
+                overlayCompactHeightConstraint?.isActive = true
+                overlayCompactCenterYConstraint?.isActive = true
+            } else {
+                NSLayoutConstraint.deactivate(edgeConstraints)
+                updateCompactOverlaySize()
+                NSLayoutConstraint.activate(compactConstraints)
+            }
         } else {
             NSLayoutConstraint.deactivate(compactConstraints)
             // Docked (Files/Changes) and maximized both fill edge-to-edge (padding 0); other
             // full-panel overlays keep the floating inset.
-            let docked = overlayMaximized || dockedOverlayModeActive
+            let docked = effectiveMaximized || dockedOverlayModeActive
             let padding = docked ? 0 : MomentermDesign.Metrics.panelOuterPadding
             overlayTopConstraint?.constant = padding
             overlayLeadingConstraint?.constant = padding
-            overlayTrailingConstraint?.constant = -padding
             overlayBottomConstraint?.constant = -padding
-            NSLayoutConstraint.activate(edgeConstraints)
+            if let sidePanelTrailing = overlayTrailingToSidePanelConstraint {
+                // Reflow left of the side panel: drop the root-trailing pin, keep top/leading/bottom.
+                overlayTrailingConstraint?.isActive = false
+                overlayTopConstraint?.isActive = true
+                overlayLeadingConstraint?.isActive = true
+                overlayBottomConstraint?.isActive = true
+                sidePanelTrailing.isActive = true
+            } else {
+                overlayTrailingConstraint?.constant = -padding
+                NSLayoutConstraint.activate(edgeConstraints)
+            }
         }
 
         // Docked panels drop the rounded card corners, but KEEP the hairline border so they
         // read as a framed region consistent with the terminal panes' white-line border. Only a
         // fully-maximized (rail hidden) panel goes fully borderless.
-        let seamless = dockedOverlayModeActive || overlayMaximized
+        let seamless = dockedOverlayModeActive || effectiveMaximized
         overlayView.layer?.cornerRadius = seamless ? 0 : MomentermDesign.Radius.medium
-        overlayView.layer?.borderWidth = overlayMaximized ? 0 : 1
+        overlayView.layer?.borderWidth = effectiveMaximized ? 0 : 1
         overlayView.layer?.borderColor = theme.panelBorder.cgColor
 
         // Only floating (compact) panels need the click-blocking backdrop; full/maximized
-        // overlays already cover the content and must leave the rail interactive.
-        overlayBackdrop.isHidden = !compactOverlayModeActive
-        railView.isHidden = overlayMaximized
+        // overlays already cover the content and must leave the rail interactive. With a side
+        // panel docked the overlay no longer covers the whole content, so the backdrop stays off
+        // to keep the memo (which sits beside the overlay) clickable.
+        overlayBackdrop.isHidden = !compactOverlayModeActive || sidePanel != nil
+        railView.isHidden = effectiveMaximized
         window?.contentView?.layoutSubtreeIfNeeded()
     }
 
@@ -13200,6 +13272,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         if let scroll = memoScrollView, let memoTextView = memoTextView {
             memoTextView.frame = NSRect(origin: .zero, size: scroll.contentSize)
         }
+        // US-12: if an overlay (Settings/Files/Changes) is already open, reflow it beside the memo
+        // so the memo does not overlap it when opened in this order.
+        if !overlayView.isHidden {
+            applyOverlayMaximizedState()
+        }
         focusMemoTextView()
     }
 
@@ -13216,6 +13293,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let finishClose = { [weak self] in
             guard let self = self else { return }
             self.memoSidePanel.isHidden = true
+            // US-12: a still-open overlay reclaims the space the memo vacated.
+            if !self.overlayView.isHidden {
+                self.applyOverlayMaximizedState()
+            }
             self.window?.makeKeyAndOrderFront(nil)
             if focusTerminalAfterClose {
                 self.focusTerminal()

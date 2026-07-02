@@ -1131,6 +1131,35 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo editable document does not fill viewport")
             return
         }
+        // US-12: opening Settings (Cmd+,) while the memo is up must NOT close or cover the memo.
+        // The memo stays open and the settings overlay reflows beside it.
+        controller.openSettings()
+        guard waitUntil("settings opens beside memo", timeout: 1, condition: {
+            !controller.overlayIsHiddenForSmokeTest()
+        }) else {
+            fail("Cmd+, did not open the settings overlay while the memo was open")
+            return
+        }
+        guard controller.memoSidePanelIsVisibleForSmokeTest() else {
+            fail("opening settings closed the prompt memo instead of keeping it open: \(controller.memoOverlayCoexistDiagnosticsForSmokeTest())")
+            return
+        }
+        guard controller.memoStaysOpenAndUncoveredWhenOverlayShownForSmokeTest() else {
+            fail("settings overlay overlapped the prompt memo instead of sitting beside it: \(controller.memoOverlayCoexistDiagnosticsForSmokeTest())")
+            return
+        }
+        controller.closeOverlayAndFocusTerminalForSmokeTest()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.memoSidePanelIsVisibleForSmokeTest() else {
+            fail("closing settings unexpectedly closed the prompt memo: \(controller.memoOverlayCoexistDiagnosticsForSmokeTest())")
+            return
+        }
+        controller.openMemo()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.memoIsFirstResponderForSmokeTest() else {
+            fail("prompt memo did not regain focus after the settings coexistence check")
+            return
+        }
         sendKey("n", keyCode: 45, window: memoWindow)
         sendKey("o", keyCode: 31, window: memoWindow)
         sendKey("t", keyCode: 17, window: memoWindow)
