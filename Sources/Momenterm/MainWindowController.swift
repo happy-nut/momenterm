@@ -1389,8 +1389,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
     }
 
+    // Cmd+T (and the Cmd+Tab compatibility path) create a brand-new terminal tab in
+    // the active workspace scope. Pane splitting is a separate feature owned by Cmd+D
+    // (splitTerminalPane) / Cmd+Shift+D (splitTerminalPaneBelow) and must not be invoked here.
     func newTerminalTab() {
-        splitTerminalPane()
+        createTerminalGroupForActiveScope()
     }
 
     private func createTerminalGroupForActiveScope() {
@@ -3809,6 +3812,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     func terminalTabCountForSmokeTest() -> Int {
         terminalTabs.count
+    }
+
+    // Closes the active terminal tab (disposing its panes) so smoke tests that intentionally
+    // open extra tabs via Cmd+T can restore the pre-test tab state for later shared-controller
+    // checks. Mirrors the production closeTerminalTab path used by tab switching/cleanup.
+    func closeActiveTerminalTabForSmokeTest() {
+        guard let tab = activeTab() else {
+            return
+        }
+        closeTerminalTab(tab)
     }
 
     func visibleTerminalTabCountForSmokeTest() -> Int {

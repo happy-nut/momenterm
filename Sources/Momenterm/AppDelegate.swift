@@ -334,8 +334,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let terminalItem = NSMenuItem()
         let terminalMenu = NSMenu(title: "Terminal")
         terminalMenu.addItem(targetedItem("Focus Terminal", #selector(toggleTerminal), functionKey(0xF70F), [.option]))
-        terminalMenu.addItem(targetedItem("Split Terminal Pane", #selector(newTerminalTab), "t", [.command]))
-        let cmdTabItem = targetedItem("Split Terminal Pane (Cmd+Tab compatibility)", #selector(newTerminalTab), "\t", [.command])
+        terminalMenu.addItem(targetedItem("New Terminal Tab", #selector(newTerminalTab), "t", [.command]))
+        let cmdTabItem = targetedItem("New Terminal Tab (Cmd+Tab compatibility)", #selector(newTerminalTab), "\t", [.command])
         cmdTabItem.isHidden = true
         terminalMenu.addItem(cmdTabItem)
         terminalMenu.addItem(targetedItem("Split Terminal Pane", #selector(splitTerminal), "d", [.command]))

@@ -549,7 +549,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
 
-        controller.newTerminalTab()
+        controller.splitTerminalPane()
         guard waitUntil("workspace A split panes", timeout: 2, condition: {
             controller.activeWorkspacePathForSmokeTest() == workspaceAPath
                 && controller.terminalPaneCountForSmokeTest() == 2
@@ -870,25 +870,40 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("terminal top path bar was still visible or pane header controls lacked shortcut hover tooltips")
             return
         }
+        // US-11: Cmd+T creates a brand-new terminal tab (activated, single fresh pane),
+        // it must NOT split the current pane. Pane splitting is Cmd+D only. The extra
+        // tab is closed afterward so later shared-controller checks see the original state.
+        _ = initialPanes
         sendShortcut("t", keyCode: 17, modifiers: [.command])
-        guard controller.terminalTabCountForSmokeTest() == initialTabs,
-              controller.terminalPaneCountForSmokeTest() == initialPanes + 1,
+        guard controller.terminalTabCountForSmokeTest() == initialTabs + 1,
+              controller.terminalPaneCountForSmokeTest() == 1,
               controller.terminalPaneHeadersAreVisibleForSmokeTest(),
               controller.terminalTabUiIsRemovedForSmokeTest(),
               controller.terminalTopPathBarIsRemovedForSmokeTest(),
               controller.terminalPaneHeaderControlsHaveShortcutTooltipsForSmokeTest() else {
-            fail("Cmd+T created tab UI/new tab instead of splitting a terminal pane: tabs \(initialTabs)->\(controller.terminalTabCountForSmokeTest()) panes \(initialPanes)->\(controller.terminalPaneCountForSmokeTest())")
+            fail("Cmd+T split a pane instead of creating a new terminal tab: tabs \(initialTabs)->\(controller.terminalTabCountForSmokeTest()) activeTabPanes \(controller.terminalPaneCountForSmokeTest())")
+            return
+        }
+        controller.closeActiveTerminalTabForSmokeTest()
+        guard controller.terminalTabCountForSmokeTest() == initialTabs else {
+            fail("closing the Cmd+T tab did not restore the original tab count: expected \(initialTabs) got \(controller.terminalTabCountForSmokeTest())")
             return
         }
 
-        let panesBeforeCmdTab = controller.terminalPaneCountForSmokeTest()
+        // Cmd+Tab compatibility path routes through newTerminalTab() as well, so it must
+        // also open a new tab rather than splitting the active pane.
         let tabsBeforeCmdTab = controller.terminalTabCountForSmokeTest()
         sendShortcut("\t", keyCode: 48, modifiers: [.command])
-        guard controller.terminalTabCountForSmokeTest() == tabsBeforeCmdTab,
-              controller.terminalPaneCountForSmokeTest() == panesBeforeCmdTab + 1,
+        guard controller.terminalTabCountForSmokeTest() == tabsBeforeCmdTab + 1,
+              controller.terminalPaneCountForSmokeTest() == 1,
               controller.terminalPaneHeadersAreVisibleForSmokeTest(),
               controller.terminalTabUiIsRemovedForSmokeTest() else {
-            fail("Cmd+Tab event created tab UI/new tab instead of splitting a terminal pane: tabs \(tabsBeforeCmdTab)->\(controller.terminalTabCountForSmokeTest()) panes \(panesBeforeCmdTab)->\(controller.terminalPaneCountForSmokeTest())")
+            fail("Cmd+Tab event split a pane instead of creating a new terminal tab: tabs \(tabsBeforeCmdTab)->\(controller.terminalTabCountForSmokeTest()) activeTabPanes \(controller.terminalPaneCountForSmokeTest())")
+            return
+        }
+        controller.closeActiveTerminalTabForSmokeTest()
+        guard controller.terminalTabCountForSmokeTest() == tabsBeforeCmdTab else {
+            fail("closing the Cmd+Tab tab did not restore the original tab count: expected \(tabsBeforeCmdTab) got \(controller.terminalTabCountForSmokeTest())")
             return
         }
 
@@ -968,24 +983,30 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
 
         let tabsBeforeDirectNew = controller.terminalTabCountForSmokeTest()
-        let panesBeforeDirectNew = controller.terminalPaneCountForSmokeTest()
         controller.newTerminalTab()
         let afterNewTab = controller.terminalTabCountForSmokeTest()
         let panesAfterDirectNew = controller.terminalPaneCountForSmokeTest()
-        guard afterNewTab == tabsBeforeDirectNew,
-              panesAfterDirectNew == panesBeforeDirectNew + 1,
+        guard afterNewTab == tabsBeforeDirectNew + 1,
+              panesAfterDirectNew == 1,
               controller.terminalPaneHeadersAreVisibleForSmokeTest(),
               controller.terminalTabUiIsRemovedForSmokeTest() else {
-            fail("newTerminalTab created a tab instead of a split pane: tabs \(tabsBeforeDirectNew)->\(afterNewTab) panes \(panesBeforeDirectNew)->\(panesAfterDirectNew)")
+            fail("newTerminalTab split a pane instead of creating a new tab: tabs \(tabsBeforeDirectNew)->\(afterNewTab) activeTabPanes \(panesAfterDirectNew)")
+            return
+        }
+        // Restore the original tab so the direct-split checks below run against it.
+        controller.closeActiveTerminalTabForSmokeTest()
+        guard controller.terminalTabCountForSmokeTest() == tabsBeforeDirectNew else {
+            fail("closing the direct newTerminalTab tab did not restore the original tab count: expected \(tabsBeforeDirectNew) got \(controller.terminalTabCountForSmokeTest())")
             return
         }
 
+        let tabsBeforeSplit = controller.terminalTabCountForSmokeTest()
         let panesBeforeSplit = controller.terminalPaneCountForSmokeTest()
         controller.splitTerminalPane()
         let panesAfterSplit = controller.terminalPaneCountForSmokeTest()
         let tabsAfterSplit = controller.terminalTabCountForSmokeTest()
-        guard tabsAfterSplit == afterNewTab else {
-            fail("split terminal pane changed tab count: \(afterNewTab) -> \(tabsAfterSplit)")
+        guard tabsAfterSplit == tabsBeforeSplit else {
+            fail("split terminal pane changed tab count: \(tabsBeforeSplit) -> \(tabsAfterSplit)")
             return
         }
         guard panesAfterSplit == panesBeforeSplit + 1 else {
@@ -1595,7 +1616,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
 
-        controller.newTerminalTab()
+        controller.splitTerminalPane()
         guard controller.activeTerminalCwdForSmokeTest() == workspacePath,
               controller.activeTerminalWorkspacePathForSmokeTest() == workspacePath else {
             fail("new terminal pane inside workspace did not start at workspace path")
@@ -1681,7 +1702,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
 
         let secondWorkspacePanesBeforeNew = controller.terminalPaneCountForSmokeTest()
-        controller.newTerminalTab()
+        controller.splitTerminalPane()
         guard controller.workspaceTerminalTabCountForSmokeTest(secondWorkspacePath) == 1,
               controller.visibleTerminalTabCountForSmokeTest() == 1,
               controller.terminalPaneCountForSmokeTest() == secondWorkspacePanesBeforeNew + 1,
