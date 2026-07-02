@@ -253,6 +253,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let path: String
         let line: Int?
         let text: String
+
+        // US-05: persist merged-prompt review notes per workspace. Encoded into the
+        // workspace-scoped settings blob alongside the prompt memo and merge prompts.
+        func jsonValue() -> JSONValue {
+            var value: [String: JSONValue] = [
+                "kind": .string(kind),
+                "path": .string(path),
+                "text": .string(text)
+            ]
+            if let line = line {
+                value["line"] = .number(Double(line))
+            }
+            return .object(value)
+        }
+
+        init(kind: String, path: String, line: Int?, text: String) {
+            self.kind = kind
+            self.path = path
+            self.line = line
+            self.text = text
+        }
+
+        init?(from value: JSONValue) {
+            guard let object = value.objectValue,
+                  let kind = object["kind"]?.stringValue,
+                  let path = object["path"]?.stringValue,
+                  let text = object["text"]?.stringValue
+            else {
+                return nil
+            }
+            self.init(kind: kind, path: path, line: object["line"]?.intValue, text: text)
+        }
     }
 
     private final class TerminalSession {
@@ -589,7 +621,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private var quickOpenContentSearchLoading = false
     private var goToLineBuffer = ""
     private var viewedFilePaths = Set<String>()
-    private var reviewNotes: [ReviewNote] = []
+    // US-05: mutations flow through every append/remove call site, so a didSet is the single
+    // choke point that keeps the workspace-scoped persisted copy in sync. Loading from disk sets
+    // isRestoringReviewNotes to avoid an immediate redundant write-back.
+    private var reviewNotes: [ReviewNote] = [] {
+        didSet {
+            guard !isRestoringReviewNotes else { return }
+            saveCurrentReviewNotes()
+        }
+    }
+    private var isRestoringReviewNotes = false
     private var selectedReviewNoteIndex: Int?
     private var inlineReviewCommentViews: [NSView] = []
     private weak var reviewLineHighlightView: NSView?
@@ -2322,6 +2363,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             root = nil
             persistActiveWorkspacePath()
         }
+        // US-05: recover the active workspace's saved merged-prompt review notes on launch.
+        reloadReviewNotesForCurrentWorkspace()
     }
 
     private func restoreOrCreateInitialTerminal() {
@@ -6207,6 +6250,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     func reviewNoteCountForSmokeTest() -> Int {
         reviewNotes.count
+    }
+
+    // US-05: drive a workspace-scoped review note without needing the full inline-editor UI so
+    // the persistence/isolation smoke can add, switch workspaces, and assert recovery.
+    @discardableResult
+    func addReviewNoteForSmokeTest(kind: String, path: String, line: Int, text: String) -> Int {
+        reviewNotes.append(ReviewNote(kind: kind, path: path, line: line, text: text))
+        return reviewNotes.count
+    }
+
+    func reviewNoteTextsForSmokeTest() -> [String] {
+        reviewNotes.map { $0.text }
     }
 
     func inlineReviewEditorIsVisibleForSmokeTest(kind: String) -> Bool {
@@ -13194,6 +13249,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return false
         }
         saveCurrentPromptMemoText()
+        saveCurrentReviewNotes()
         return true
     }
 
@@ -13202,6 +13258,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
         reloadPromptMemoForCurrentWorkspace()
+        reloadReviewNotesForCurrentWorkspace()
         if overlayMode == .settings {
             populateOverlay()
         }
@@ -13231,6 +13288,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
         memoTextView.replaceTextWithoutSaving(storedPromptMemoText())
+    }
+
+    // US-05: merged-prompt review notes (the Questions / Change requests that feed the
+    // merged prompt) are stored per workspace under a { workspaceScopeKey -> [note] } map so
+    // they neither leak across workspaces nor vanish on restart.
+    private func storedReviewNotes() -> [ReviewNote] {
+        let scoped = workspaceScopedSettings(rootKey: Self.reviewNotesSettingsKey)
+        guard let notes = scoped[currentWorkspaceScopeKey()]?.arrayValue else {
+            return []
+        }
+        return notes.compactMap(ReviewNote.init(from:))
+    }
+
+    private func saveCurrentReviewNotes() {
+        var scoped = workspaceScopedSettings(rootKey: Self.reviewNotesSettingsKey)
+        scoped[currentWorkspaceScopeKey()] = .array(reviewNotes.map { $0.jsonValue() })
+        persistedSettings[Self.reviewNotesSettingsKey] = .object(scoped)
+        savePersistedSettings()
+    }
+
+    private func reloadReviewNotesForCurrentWorkspace() {
+        isRestoringReviewNotes = true
+        reviewNotes = storedReviewNotes()
+        isRestoringReviewNotes = false
+        selectedReviewNoteIndex = nil
     }
 
     private func savePersistedSettings() {
@@ -14287,6 +14369,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private static let recentProjectsKey = "momenterm.recentProjects"
     private static let mergePromptsSettingsKey = "monacori-merge-prompts"
     private static let promptMemoSettingsKey = "momenterm.prompt-memo.by-workspace"
+    private static let reviewNotesSettingsKey = "momenterm.review-notes.by-workspace"
 
     private static func loadPersistedSettings() -> [String: JSONValue] {
         guard !statePersistenceDisabled else {

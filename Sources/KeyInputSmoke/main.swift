@@ -703,6 +703,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             verifyWorkspaceAndReviewShortcuts(controller)
             verifyNativeShortcutEvents(controller)
             verifyCloseLastHomeTerminalShortcut(controller)
+            verifyWorkspaceScopedReviewNotesPersist()
             timer?.invalidate()
             smokeControllers.forEach { controller in
                 controller.disposeForSmokeTest()
@@ -1921,6 +1922,93 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
 
+    }
+
+    // US-05: merged-prompt review notes (the Questions / Change requests that build the merged
+    // prompt) must be stored per workspace and survive an app restart. Uses its own controllers
+    // and temp workspaces, then relaunches a fresh controller against the live persisted state.
+    private func verifyWorkspaceScopedReviewNotesPersist() {
+        clearPersistedState()
+        let workspaceA = makeTempDirectory(name: "momenterm-review-notes-a")
+        let workspaceB = makeTempDirectory(name: "momenterm-review-notes-b")
+        let pathA = workspaceA.path
+        let pathB = workspaceB.path
+
+        let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+        controller.showWindow(nil)
+        defer {
+            controller.disposeForSmokeTest()
+            controller.close()
+        }
+
+        controller.openWorkspaceForSmokeTest(workspaceA)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.activeWorkspacePathForSmokeTest() == pathA else {
+            fail("review-note persistence: could not activate workspace A; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") expected=\(pathA)")
+            return
+        }
+        _ = controller.addReviewNoteForSmokeTest(kind: "question", path: "src/a.swift", line: 12, text: "workspace-A question note")
+        _ = controller.addReviewNoteForSmokeTest(kind: "change", path: "src/a.swift", line: 20, text: "workspace-A change note")
+        guard controller.reviewNoteCountForSmokeTest() == 2,
+              controller.reviewNoteTextsForSmokeTest().contains("workspace-A question note"),
+              controller.reviewNoteTextsForSmokeTest().contains("workspace-A change note") else {
+            fail("review-note persistence: workspace A did not hold its two review notes; count=\(controller.reviewNoteCountForSmokeTest()) texts=\(controller.reviewNoteTextsForSmokeTest())")
+            return
+        }
+
+        // Switching to workspace B must present that workspace's own (empty) notes, never A's.
+        controller.openWorkspaceForSmokeTest(workspaceB)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.activeWorkspacePathForSmokeTest() == pathB,
+              controller.reviewNoteCountForSmokeTest() == 0,
+              !controller.reviewNoteTextsForSmokeTest().contains("workspace-A question note") else {
+            fail("review-note persistence: workspace B leaked workspace A review notes; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") count=\(controller.reviewNoteCountForSmokeTest()) texts=\(controller.reviewNoteTextsForSmokeTest())")
+            return
+        }
+        _ = controller.addReviewNoteForSmokeTest(kind: "question", path: "src/b.swift", line: 3, text: "workspace-B question note")
+        guard controller.reviewNoteCountForSmokeTest() == 1 else {
+            fail("review-note persistence: workspace B did not record its own note; count=\(controller.reviewNoteCountForSmokeTest()) texts=\(controller.reviewNoteTextsForSmokeTest())")
+            return
+        }
+
+        // Returning to workspace A must restore exactly A's notes (not B's, not merged).
+        controller.openWorkspaceForSmokeTest(workspaceA)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.activeWorkspacePathForSmokeTest() == pathA,
+              controller.reviewNoteCountForSmokeTest() == 2,
+              controller.reviewNoteTextsForSmokeTest().contains("workspace-A question note"),
+              controller.reviewNoteTextsForSmokeTest().contains("workspace-A change note"),
+              !controller.reviewNoteTextsForSmokeTest().contains("workspace-B question note") else {
+            fail("review-note persistence: returning to workspace A did not restore its scoped notes; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") count=\(controller.reviewNoteCountForSmokeTest()) texts=\(controller.reviewNoteTextsForSmokeTest())")
+            return
+        }
+
+        controller.disposeForSmokeTest()
+        controller.close()
+
+        // Simulate an app restart: a brand-new controller reads the same live persisted store and
+        // must recover workspace A's review notes (A is still the active workspace on disk).
+        let relaunched = registerSmokeController(MainWindowController(initialRoot: nil))
+        relaunched.showWindow(nil)
+        defer {
+            relaunched.disposeForSmokeTest()
+            relaunched.close()
+        }
+        guard waitUntil("review notes recovered after relaunch", timeout: 2, condition: {
+            relaunched.activeWorkspacePathForSmokeTest() == pathA
+                && relaunched.reviewNoteCountForSmokeTest() == 2
+        }) else {
+            fail("review-note persistence: relaunch did not recover workspace A review notes; active=\(relaunched.activeWorkspacePathForSmokeTest() ?? "nil") count=\(relaunched.reviewNoteCountForSmokeTest()) texts=\(relaunched.reviewNoteTextsForSmokeTest())")
+            return
+        }
+        guard relaunched.reviewNoteTextsForSmokeTest().contains("workspace-A question note"),
+              relaunched.reviewNoteTextsForSmokeTest().contains("workspace-A change note"),
+              !relaunched.reviewNoteTextsForSmokeTest().contains("workspace-B question note") else {
+            fail("review-note persistence: relaunch recovered the wrong review notes for workspace A; texts=\(relaunched.reviewNoteTextsForSmokeTest())")
+            return
+        }
+
+        clearPersistedState()
     }
 
     private func verifyCloseLastHomeTerminalShortcut(_ controller: MainWindowController) {
