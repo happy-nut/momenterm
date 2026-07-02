@@ -73,17 +73,16 @@ Run these before claiming a behavior or cleanup change is complete:
 
 ```bash
 ./scripts/build.sh
-./scripts/parity-smoke.sh
-./scripts/ab-parity-smoke.sh
-./scripts/smoke.sh /path/to/repo
-./scripts/pty-smoke.sh /path/to/repo
-./scripts/pane-layout-smoke.sh
-./scripts/perf-smoke.sh
+./scripts/smoke-all.sh /path/to/repo   # full suite: core smoke + all 22 *-smoke.sh, non-zero on any failure
 ./scripts/package-app.sh
 ./scripts/package-dmg.sh
-./scripts/launch-smoke.sh /path/to/repo
 git diff --check
 ```
+
+`scripts/smoke-all.sh` is the single entry point that runs every smoke and aggregates
+pass/fail. Under headless CI, GUI smokes are skipped via `SMOKE_SKIP="launch-smoke.sh"`
+(see `.github/workflows/ci.yml`). To run one smoke in isolation, call it directly, e.g.
+`./scripts/parity-smoke.sh` or `./scripts/pty-smoke.sh /path/to/repo`.
 
 For dependency-removal or native-port parity work, also scan for forbidden runtime markers:
 

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-smoke:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          node --version
+
+      # build.sh downloads libghostty from a pinned GitHub release (checksum-verified)
+      # into .build/vendor, so no extra setup is needed on the runner.
+      - name: Build
+        run: ./scripts/build.sh
+
+      # launch-smoke boots the AppKit app and is skipped under the headless runner;
+      # every other smoke (isolated swiftc + node parity) runs.
+      - name: Smoke suite
+        run: SMOKE_SKIP="launch-smoke.sh" ./scripts/smoke-all.sh
