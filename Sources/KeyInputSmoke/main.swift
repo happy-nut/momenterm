@@ -2553,6 +2553,55 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
 
+        // US-08: the panel dropped the "Send target" header + terminal list; the selected send
+        // target instead wears an accent ring and a faint centered "Enter" hint on its pane.
+        guard controller.mergedPromptSendTargetUIRemovedForSmokeTest(),
+              controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
+              !controller.mergedPromptIsCollapsedToFloatingForSmokeTest(),
+              controller.mergedPromptEnterOverlayTerminalIdForSmokeTest() == mergedPromptTargetId,
+              controller.mergedPromptEnterOverlayLabelIsVisibleForSmokeTest(),
+              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() == mergedPromptTargetId else {
+            fail("US-08 merged prompt did not remove the send-target UI or mark the selected terminal; removed=\(controller.mergedPromptSendTargetUIRemovedForSmokeTest()) overlay=\(controller.mergedPromptEnterOverlayTerminalIdForSmokeTest().map(String.init) ?? "nil") ring=\(controller.mergedPromptSelectionRingTerminalIdForSmokeTest().map(String.init) ?? "nil") target=\(mergedPromptTargetId)")
+            return
+        }
+
+        // US-08 goal 2: collapse the panel into the floating icon button (animated). While
+        // collapsed the panel is off-screen but the send target + "Enter" hint stay live.
+        controller.collapseMergedPromptToFloatingForSmokeTest()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.35))
+        guard controller.mergedPromptIsCollapsedToFloatingForSmokeTest(),
+              controller.mergedPromptFloatingButtonIsVisibleForSmokeTest(),
+              controller.mergedPromptFloatingButtonUsesSlidingAnimationForSmokeTest(),
+              !controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
+              controller.mergedPromptEnterOverlayTerminalIdForSmokeTest() == mergedPromptTargetId,
+              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() == mergedPromptTargetId else {
+            fail("US-08 merged prompt did not collapse to a floating icon button; collapsed=\(controller.mergedPromptIsCollapsedToFloatingForSmokeTest()) floating=\(controller.mergedPromptFloatingButtonIsVisibleForSmokeTest()) panelVisible=\(controller.mergedPromptSidePanelIsVisibleForSmokeTest()) overlay=\(controller.mergedPromptEnterOverlayTerminalIdForSmokeTest().map(String.init) ?? "nil")")
+            return
+        }
+
+        // US-08 goal 3: arrow keys move the send target across the workspace terminals while
+        // collapsed, and the "Enter" hint + selection ring follow to the newly selected pane.
+        sendShortcut(String(UnicodeScalar(0xF703)!), keyCode: 124, modifiers: [.option])
+        let movedTargetId = controller.mergedPromptSelectedTerminalIdForSmokeTest()
+        guard let movedTargetId = movedTargetId,
+              movedTargetId != mergedPromptTargetId,
+              controller.mergedPromptEnterOverlayTerminalIdForSmokeTest() == movedTargetId,
+              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() == movedTargetId else {
+            fail("US-08 Option+Right did not move the collapsed send target + Enter hint; moved=\(movedTargetId.map(String.init) ?? "nil") overlay=\(controller.mergedPromptEnterOverlayTerminalIdForSmokeTest().map(String.init) ?? "nil") ring=\(controller.mergedPromptSelectionRingTerminalIdForSmokeTest().map(String.init) ?? "nil")")
+            return
+        }
+
+        // US-08 goal 2: tapping the floating pill re-expands the panel to the same kind.
+        controller.expandMergedPromptFromFloatingForSmokeTest()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.35))
+        guard controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
+              controller.mergedPromptSidePanelTitleForSmokeTest() == "Change Requests",
+              !controller.mergedPromptIsCollapsedToFloatingForSmokeTest(),
+              !controller.mergedPromptFloatingButtonIsVisibleForSmokeTest() else {
+            fail("US-08 merged prompt did not re-expand from the floating icon button; panelVisible=\(controller.mergedPromptSidePanelIsVisibleForSmokeTest()) collapsed=\(controller.mergedPromptIsCollapsedToFloatingForSmokeTest()) floating=\(controller.mergedPromptFloatingButtonIsVisibleForSmokeTest())")
+            return
+        }
+
         sendShortcut("0", keyCode: 29, modifiers: [.command])
         guard controller.overlayTitleForSmokeTest() == "Changes" else {
             fail("Cmd+0 did not return to Changes before viewed toggle; title=\(controller.overlayTitleForSmokeTest())")

@@ -655,8 +655,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private let mergedPromptSidePanel = NSView()
     private let mergedPromptTitleLabel = NSTextField(labelWithString: "")
     private let mergedPromptSubtitleLabel = NSTextField(labelWithString: "")
-    private let mergedPromptTargetStack = NSStackView()
     private let mergedPromptTextView = NativeCodeTextView()
+    // The merged prompt collapses (with animation) into this floating pill button. Tapping it
+    // re-expands the panel; while collapsed the user picks the send-target terminal with the
+    // arrow keys and a translucent "Enter" hint marks the focused pane.
+    private let mergedPromptFloatingButton = MomentermCompactButton(title: "", target: nil, action: nil)
+    private var mergedPromptFloatingButtonVisibleConstraint: NSLayoutConstraint?
+    private var mergedPromptFloatingButtonHiddenConstraint: NSLayoutConstraint?
+    // true when the panel has been folded away to the floating icon (kind still set so it can
+    // re-expand to the same Questions/Change-Requests body).
+    private var mergedPromptCollapsedToFloating = false
+    // Per-pane translucent "Enter" overlays, keyed by terminal session id, layered above each
+    // pane's content so the currently selected send target shows a faint centered "Enter".
+    private var mergedPromptEnterOverlayViews: [Int: NSView] = [:]
     private let overlayTitleLabel = NSTextField(labelWithString: "")
     private let overlaySubtitleLabel = NSTextField(labelWithString: "")
     // Header toggle shown only in the file view for renderable files (Markdown /
@@ -1491,10 +1502,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         activeTerminalTabId = tab.id
         setActiveTerminal(id: tab.activePaneId ?? tab.panes.first?.id, focus: !mergedActive)
         if mergedActive {
+            // Switching tabs invalidates the previously chosen send target; recompute it and
+            // refresh the on-pane selection highlight + "Enter" hint against the new tab.
             selectedMergedPromptTerminalId = nil
-            resetMergedPromptTargetRows()
-            addMergedPromptTerminalTargetRows(to: mergedPromptTargetStack)
             _ = ensureMergedPromptTerminalTarget()
+            refreshMergedPromptTerminalSelectionOverlays()
         }
     }
 
@@ -2202,27 +2214,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         close.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(close)
 
-        let targetHeader = NSTextField(labelWithString: "Send target  Option+Enter")
-        targetHeader.translatesAutoresizingMaskIntoConstraints = false
-        targetHeader.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        targetHeader.textColor = theme.secondaryText
-        mergedPromptSidePanel.addSubview(targetHeader)
+        // US-08: the panel folds into a floating pill instead of listing terminal targets.
+        let collapse = smallIconButton(symbol: "arrow.right.to.line.compact", fallback: "»", action: #selector(collapseMergedPromptPanelAction), label: "Collapse to floating icon", shortcut: "⌥Enter")
+        collapse.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(collapse)
 
-        let targetDocument = NSView()
-        targetDocument.translatesAutoresizingMaskIntoConstraints = false
-        mergedPromptTargetStack.translatesAutoresizingMaskIntoConstraints = false
-        mergedPromptTargetStack.orientation = .vertical
-        mergedPromptTargetStack.alignment = .leading
-        mergedPromptTargetStack.spacing = 6
-        targetDocument.addSubview(mergedPromptTargetStack)
-
-        let targetScroll = NSScrollView()
-        targetScroll.translatesAutoresizingMaskIntoConstraints = false
-        MomentermDesign.styleMinimalScrollbars(targetScroll)
-        targetScroll.borderType = .noBorder
-        targetScroll.drawsBackground = false
-        targetScroll.documentView = targetDocument
-        mergedPromptSidePanel.addSubview(targetScroll)
+        configureMergedPromptFloatingButton()
 
         configureCodeTextView(mergedPromptTextView)
         mergedPromptTextView.onEscapeKey = { [weak self] in
@@ -2256,25 +2253,48 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             close.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -10),
             close.centerYAnchor.constraint(equalTo: header.centerYAnchor),
 
-            targetHeader.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 10),
-            targetHeader.leadingAnchor.constraint(equalTo: mergedPromptSidePanel.leadingAnchor, constant: 14),
-            targetHeader.trailingAnchor.constraint(equalTo: mergedPromptSidePanel.trailingAnchor, constant: -14),
+            collapse.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -4),
+            collapse.centerYAnchor.constraint(equalTo: header.centerYAnchor),
 
-            targetScroll.topAnchor.constraint(equalTo: targetHeader.bottomAnchor, constant: 6),
-            targetScroll.leadingAnchor.constraint(equalTo: mergedPromptSidePanel.leadingAnchor, constant: 14),
-            targetScroll.trailingAnchor.constraint(equalTo: mergedPromptSidePanel.trailingAnchor, constant: -14),
-            targetScroll.heightAnchor.constraint(equalToConstant: 108),
-
-            targetDocument.widthAnchor.constraint(equalTo: targetScroll.contentView.widthAnchor),
-            mergedPromptTargetStack.topAnchor.constraint(equalTo: targetDocument.topAnchor),
-            mergedPromptTargetStack.leadingAnchor.constraint(equalTo: targetDocument.leadingAnchor),
-            mergedPromptTargetStack.trailingAnchor.constraint(equalTo: targetDocument.trailingAnchor),
-            mergedPromptTargetStack.bottomAnchor.constraint(equalTo: targetDocument.bottomAnchor),
-
-            promptScroll.topAnchor.constraint(equalTo: targetScroll.bottomAnchor, constant: 10),
+            promptScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
             promptScroll.leadingAnchor.constraint(equalTo: mergedPromptSidePanel.leadingAnchor, constant: 14),
             promptScroll.trailingAnchor.constraint(equalTo: mergedPromptSidePanel.trailingAnchor, constant: -14),
             promptScroll.bottomAnchor.constraint(equalTo: mergedPromptSidePanel.bottomAnchor, constant: -14)
+        ])
+    }
+
+    // The floating pill the merged prompt collapses into (US-08). Lives on rootView above the
+    // terminal, hidden until the panel is folded away. Tapping it re-expands the panel.
+    private func configureMergedPromptFloatingButton() {
+        mergedPromptFloatingButton.target = self
+        mergedPromptFloatingButton.action = #selector(expandMergedPromptFromFloatingAction)
+        mergedPromptFloatingButton.translatesAutoresizingMaskIntoConstraints = false
+        mergedPromptFloatingButton.bezelStyle = .regularSquare
+        mergedPromptFloatingButton.isBordered = false
+        mergedPromptFloatingButton.imagePosition = .imageLeading
+        mergedPromptFloatingButton.image = fixedRailSymbolImage(symbol: "paperplane.fill", label: "Merged prompt")
+        mergedPromptFloatingButton.imageScaling = .scaleProportionallyDown
+        mergedPromptFloatingButton.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        mergedPromptFloatingButton.contentTintColor = theme.primaryText
+        mergedPromptFloatingButton.wantsLayer = true
+        mergedPromptFloatingButton.layer?.cornerRadius = MomentermDesign.Radius.large
+        mergedPromptFloatingButton.layer?.backgroundColor = theme.accent.withAlphaComponent(0.92).cgColor
+        mergedPromptFloatingButton.layer?.borderColor = theme.accent.cgColor
+        mergedPromptFloatingButton.layer?.borderWidth = 1
+        mergedPromptFloatingButton.toolTip = tooltipText(label: "Expand merged prompt", shortcut: "⌥Enter")
+        mergedPromptFloatingButton.isHidden = true
+        MomentermDesign.applyElevation(mergedPromptFloatingButton, .medium)
+        mergedPromptFloatingButton.layer?.zPosition = 22
+        rootView.addSubview(mergedPromptFloatingButton)
+
+        // Slide-in animation anchor: parked just off the right edge when hidden, tucked inside
+        // the trailing edge when shown (mirrors the panel's own off-screen park).
+        mergedPromptFloatingButtonHiddenConstraint = mergedPromptFloatingButton.leadingAnchor.constraint(equalTo: rootView.trailingAnchor)
+        mergedPromptFloatingButtonVisibleConstraint = mergedPromptFloatingButton.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -18)
+        mergedPromptFloatingButtonHiddenConstraint?.isActive = true
+        NSLayoutConstraint.activate([
+            mergedPromptFloatingButton.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -18),
+            mergedPromptFloatingButton.heightAnchor.constraint(equalToConstant: 34)
         ])
     }
 
@@ -2986,7 +3006,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             hideMemoPanel(focusTerminalAfterClose: true)
             return true
         }
-        if isMergedPromptSidePanelActive(), !command, !control, !option, !shift, (lowerKey == "\u{1b}" || event.keyCode == 53) {
+        if (isMergedPromptSidePanelActive() || isMergedPromptFloatingCollapsedActive()), !command, !control, !option, !shift, (lowerKey == "\u{1b}" || event.keyCode == 53) {
             hideMergedPromptSidePanel(focusTerminalAfterClose: true)
             return true
         }
@@ -3658,6 +3678,82 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     func mergedPromptSelectedTerminalIdForSmokeTest() -> Int? {
         ensureMergedPromptTerminalTarget()
+    }
+
+    // US-08 goal 1: the "Send target" header + in-panel terminal target list are gone. True when
+    // neither the panel nor the overlay renders any of the removed target UI.
+    func mergedPromptSendTargetUIRemovedForSmokeTest() -> Bool {
+        func hasSendTargetRow(_ view: NSView) -> Bool {
+            if let field = view as? NSTextField, field.stringValue.contains("Send target") {
+                return true
+            }
+            if let identifier = view.identifier?.rawValue, identifier.hasPrefix("merged-terminal:") {
+                return true
+            }
+            return view.subviews.contains(where: hasSendTargetRow)
+        }
+        return !hasSendTargetRow(mergedPromptSidePanel) && !hasSendTargetRow(overlaySidebarStack)
+    }
+
+    // US-08 goal 2: the panel has folded into the floating pill.
+    func mergedPromptIsCollapsedToFloatingForSmokeTest() -> Bool {
+        isMergedPromptFloatingCollapsedActive()
+    }
+
+    // The floating pill is on screen and tucked against the trailing edge (its "shown" park).
+    func mergedPromptFloatingButtonIsVisibleForSmokeTest() -> Bool {
+        !mergedPromptFloatingButton.isHidden
+            && mergedPromptFloatingButtonVisibleConstraint?.isActive == true
+    }
+
+    // The pill slides in/out via constraint swap + the shared panel animation duration.
+    func mergedPromptFloatingButtonUsesSlidingAnimationForSmokeTest() -> Bool {
+        memoPanelAnimationDuration > 0
+            && mergedPromptFloatingButtonVisibleConstraint != nil
+            && mergedPromptFloatingButtonHiddenConstraint != nil
+    }
+
+    // US-08 goal 4: which terminal currently shows the faint centered "Enter" hint (nil = none).
+    func mergedPromptEnterOverlayTerminalIdForSmokeTest() -> Int? {
+        let ids = mergedPromptEnterOverlayViews.compactMap { paneId, overlay -> Int? in
+            overlay.superview != nil && !overlay.isHidden ? paneId : nil
+        }
+        return ids.count == 1 ? ids.first : (ids.isEmpty ? nil : ids.sorted().first)
+    }
+
+    // True when exactly one "Enter" hint exists and it carries the visible "Enter" label.
+    func mergedPromptEnterOverlayLabelIsVisibleForSmokeTest() -> Bool {
+        guard mergedPromptEnterOverlayViews.count == 1,
+              let overlay = mergedPromptEnterOverlayViews.values.first else {
+            return false
+        }
+        return overlay.superview != nil
+            && overlay.subviews.contains { ($0 as? NSTextField)?.stringValue == "Enter" }
+    }
+
+    // US-08 goal 3: the selected send-target pane wears the accent selection ring.
+    func mergedPromptSelectionRingTerminalIdForSmokeTest() -> Int? {
+        guard let tab = activeTab() else {
+            return nil
+        }
+        let accent = theme.accent.cgColor
+        let ringed = tab.panes.filter { pane in
+            guard let layer = pane.paneContainerView?.layer,
+                  let borderColor = layer.borderColor,
+                  layer.borderWidth >= MomentermDesign.Border.emphasis - 0.01 else {
+                return false
+            }
+            return borderColor == accent
+        }
+        return ringed.count == 1 ? ringed.first?.id : nil
+    }
+
+    func collapseMergedPromptToFloatingForSmokeTest() {
+        collapseMergedPromptToFloating()
+    }
+
+    func expandMergedPromptFromFloatingForSmokeTest() {
+        expandMergedPromptFromFloating()
     }
 
     func appendActiveTerminalOutputForSmokeTest(_ text: String) {
@@ -6930,6 +7026,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             pane.scrollView?.alphaValue = 1.0
             pane.ghosttyView?.setFocused(active)
         }
+        // US-08 goal 3: the merged-prompt send target overrides the neutral pane border with an
+        // accent selection ring, even when it is also the focused pane. Painted last so it wins.
+        if isMergedPromptPanelActive(),
+           let targetId = selectedMergedPromptTerminalId,
+           let targetPane = tab.panes.first(where: { $0.id == targetId }) {
+            paintMergedPromptSelectionRing(on: targetPane)
+        }
+    }
+
+    private func paintMergedPromptSelectionRing(on pane: TerminalSession) {
+        guard let container = pane.paneContainerView else {
+            return
+        }
+        container.wantsLayer = true
+        if container.layer == nil {
+            container.layer = CALayer()
+        }
+        container.layer?.cornerRadius = MomentermDesign.Radius.hairline
+        container.layer?.borderWidth = MomentermDesign.Border.emphasis
+        container.layer?.borderColor = theme.accent.cgColor
     }
 
     private func balanceTerminalPaneSplit() {
@@ -8295,7 +8411,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
 
-        addMergedPromptTerminalTargetRows()
+        // US-08: no in-panel Send target list; keep the send-target model in sync silently.
+        ensureMergedPromptTerminalTarget()
         let content = mergedPromptContent(title: title)
         overlaySubtitleLabel.stringValue = content.subtitle
         for note in content.notes {
@@ -8318,8 +8435,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             && mergedPromptPanelVisibleTrailingConstraint?.isActive == true
     }
 
+    // US-08: the merged prompt folded into the floating pill. Still "active" for send-target
+    // arrow navigation and Option+Enter — the body just lives behind the pill.
+    private func isMergedPromptFloatingCollapsedActive() -> Bool {
+        mergedPromptCollapsedToFloating && mergedPromptSidePanelKind != nil
+    }
+
     private func isMergedPromptPanelActive() -> Bool {
-        isMergedPromptOverlayActive() || isMergedPromptSidePanelActive()
+        isMergedPromptOverlayActive()
+            || isMergedPromptSidePanelActive()
+            || isMergedPromptFloatingCollapsedActive()
     }
 
     private func mergedPromptContent(title: String) -> MergedPromptContent {
@@ -8372,93 +8497,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return fallback
     }
 
-    private func addMergedPromptTerminalTargetRows(to stack: NSStackView? = nil) {
-        let targetStack = stack ?? overlaySidebarStack
-        let candidates = mergedPromptTerminalCandidates()
-        guard !candidates.isEmpty else {
-            if stack == nil {
-                addSidebarMessage("No terminal session")
-            } else {
-                let message = NSTextField(labelWithString: "No terminal session")
-                message.translatesAutoresizingMaskIntoConstraints = false
-                message.font = NSFont.systemFont(ofSize: 11, weight: .regular)
-                message.textColor = theme.secondaryText
-                targetStack.addArrangedSubview(message)
-            }
-            return
-        }
-
-        let targetId = ensureMergedPromptTerminalTarget()
-        if stack == nil {
-            let title = NSTextField(labelWithString: "Send target  Option+Enter")
-            title.translatesAutoresizingMaskIntoConstraints = false
-            title.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-            title.textColor = theme.secondaryText
-            title.widthAnchor.constraint(equalToConstant: 224).isActive = true
-            targetStack.addArrangedSubview(title)
-        }
-
-        for candidate in candidates {
-            targetStack.addArrangedSubview(mergedPromptTerminalTargetButton(
-                session: candidate.session,
-                index: candidate.index,
-                selected: candidate.session.id == targetId
-            ))
-        }
-    }
-
-    private func mergedPromptTerminalTargetButton(session: TerminalSession, index: Int, selected: Bool) -> NSButton {
-        let button = NSButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
-        button.identifier = NSUserInterfaceItemIdentifier("merged-terminal:\(session.id)")
-        button.isBordered = false
-        button.bezelStyle = .regularSquare
-        button.alignment = .left
-        button.wantsLayer = true
-        button.layer?.cornerRadius = MomentermDesign.Metrics.controlRadius
-        button.layer?.backgroundColor = selected ? theme.accent.withAlphaComponent(0.16).cgColor : theme.codeBackground.withAlphaComponent(0.24).cgColor
-        button.layer?.borderColor = selected ? theme.accent.cgColor : theme.panelBorder.withAlphaComponent(0.5).cgColor
-        button.layer?.borderWidth = selected ? 1 : 0
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.widthAnchor.constraint(equalToConstant: 224).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 42).isActive = true
-
-        let nameLabel = NSTextField(labelWithString: "Terminal \(index)")
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = NSFont.systemFont(ofSize: 12, weight: selected ? .semibold : .regular)
-        nameLabel.textColor = selected ? theme.primaryText : theme.secondaryText
-        nameLabel.lineBreakMode = .byTruncatingTail
-
-        let cwdLabel = NSTextField(labelWithString: compactTerminalDirectory(session.cwd))
-        cwdLabel.translatesAutoresizingMaskIntoConstraints = false
-        cwdLabel.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        cwdLabel.textColor = theme.secondaryText.withAlphaComponent(selected ? 0.95 : 0.70)
-        cwdLabel.lineBreakMode = .byTruncatingMiddle
-
-        button.addSubview(nameLabel)
-        button.addSubview(cwdLabel)
-        NSLayoutConstraint.activate([
-            nameLabel.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 8),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: button.trailingAnchor, constant: -8),
-            nameLabel.topAnchor.constraint(equalTo: button.topAnchor, constant: 6),
-            cwdLabel.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 8),
-            cwdLabel.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -8),
-            cwdLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 3)
-        ])
-        return button
-    }
-
-    private func compactTerminalDirectory(_ url: URL) -> String {
-        let path = url.standardizedFileURL.path
-        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
-        if path == home {
-            return "~"
-        }
-        if path.hasPrefix(home + "/") {
-            return "~/" + String(path.dropFirst(home.count + 1))
-        }
-        return path
-    }
-
     @discardableResult
     private func selectMergedPromptTerminal(id: Int) -> Bool {
         guard mergedPromptTerminalCandidates().contains(where: { $0.session.id == id }) else {
@@ -8470,6 +8508,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         } else if isMergedPromptOverlayActive() {
             populateOverlay()
         }
+        // US-08: reflect the newly chosen send target on the workspace terminals — highlight
+        // border on the selected pane and move the translucent "Enter" hint onto it.
+        refreshMergedPromptTerminalSelectionOverlays()
         return true
     }
 
@@ -8501,7 +8542,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             setMergedPromptPanelStatus("No terminal session available")
             return true
         }
-        let rawText = isMergedPromptSidePanelActive() ? mergedPromptTextView.string : codePane.oldPaneString
+        // Side-panel (expanded or folded to the floating pill) holds the body in the text view;
+        // the older full overlay keeps it in the diff code pane.
+        let usesSidePanelBody = isMergedPromptSidePanelActive() || isMergedPromptFloatingCollapsedActive()
+        let rawText = usesSidePanelBody ? mergedPromptTextView.string : codePane.oldPaneString
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text != "No matches." else {
             setMergedPromptPanelStatus("No merged prompt text to send")
@@ -8511,6 +8555,95 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         writeToTerminal(id: targetId, data: text + "\r")
         setMergedPromptPanelStatus("Sent to Terminal \(candidate.index)")
         return true
+    }
+
+    // US-08 goals 3 & 4: while the merged prompt is active, mark the chosen send-target
+    // terminal on the workspace with an accent selection ring and a faint centered "Enter"
+    // hint. Called whenever the selection moves or the panel opens/collapses.
+    private func refreshMergedPromptTerminalSelectionOverlays() {
+        guard isMergedPromptPanelActive() else {
+            clearMergedPromptTerminalSelectionOverlays()
+            return
+        }
+        let selectedId = ensureMergedPromptTerminalTarget()
+        let liveIds = Set(mergedPromptTerminalCandidates().map { $0.session.id })
+        // Drop "Enter" hints for panes that no longer exist or are no longer selected.
+        for (paneId, overlay) in mergedPromptEnterOverlayViews where paneId != selectedId || !liveIds.contains(paneId) {
+            overlay.removeFromSuperview()
+            mergedPromptEnterOverlayViews.removeValue(forKey: paneId)
+        }
+        // Repaints every pane's border, then paints the accent selection ring on the target.
+        applyTerminalPaneSelectionStyles()
+        if let selectedId = selectedId,
+           let targetPane = mergedPromptTerminalCandidates().first(where: { $0.session.id == selectedId })?.session {
+            ensureMergedPromptEnterOverlay(for: targetPane)
+        }
+    }
+
+    // Remove every US-08 "Enter" hint and restore normal pane focus styling (which drops the
+    // accent ring because isMergedPromptPanelActive() is false once the panel is closed).
+    private func clearMergedPromptTerminalSelectionOverlays() {
+        for (_, overlay) in mergedPromptEnterOverlayViews {
+            overlay.removeFromSuperview()
+        }
+        mergedPromptEnterOverlayViews.removeAll()
+        applyTerminalPaneSelectionStyles()
+    }
+
+    private func ensureMergedPromptEnterOverlay(for pane: TerminalSession) {
+        guard let container = pane.paneContainerView else {
+            return
+        }
+        if let existing = mergedPromptEnterOverlayViews[pane.id] {
+            if existing.superview === container {
+                // Already parented to this pane — just keep it on top.
+                existing.layer?.zPosition = 30
+            } else {
+                // Pane view was rebuilt: re-parent and re-center against the new container.
+                existing.removeFromSuperview()
+                container.addSubview(existing)
+                existing.layer?.zPosition = 30
+                centerMergedPromptEnterOverlay(existing, in: container)
+            }
+            return
+        }
+        let overlay = MomentermPassthroughView()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.wantsLayer = true
+        if overlay.layer == nil {
+            overlay.layer = CALayer()
+        }
+        overlay.identifier = NSUserInterfaceItemIdentifier("mergedPromptEnterOverlay")
+        overlay.layer?.backgroundColor = theme.accent.withAlphaComponent(0.14).cgColor
+        overlay.layer?.cornerRadius = MomentermDesign.Radius.medium
+        overlay.layer?.borderColor = theme.accent.withAlphaComponent(0.5).cgColor
+        overlay.layer?.borderWidth = 1
+        overlay.layer?.zPosition = 30
+
+        let label = NSTextField(labelWithString: "Enter")
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+        // Faint / translucent, per the feedback ("가운데에 흐릿하게").
+        label.textColor = theme.primaryText.withAlphaComponent(0.55)
+        label.alignment = .center
+        overlay.addSubview(label)
+
+        container.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: overlay.leadingAnchor, constant: 18),
+            label.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -18),
+            label.topAnchor.constraint(equalTo: overlay.topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: overlay.bottomAnchor, constant: -8)
+        ])
+        centerMergedPromptEnterOverlay(overlay, in: container)
+        mergedPromptEnterOverlayViews[pane.id] = overlay
+    }
+
+    private func centerMergedPromptEnterOverlay(_ overlay: NSView, in container: NSView) {
+        NSLayoutConstraint.activate([
+            overlay.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            overlay.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+        ])
     }
 
     private func sourceMarkerMatches(document: ReviewDocument, markers: [String]) -> (matches: [(String, Int, String)], scannedFiles: Int, capped: Bool) {
@@ -13109,6 +13242,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         // sits alongside it (like the memo panel), not a replacement for it.
         saveCurrentPromptMemoText()
         memoSidePanel.isHidden = true
+        // Re-opening always starts expanded (not folded to the floating pill).
+        mergedPromptCollapsedToFloating = false
+        setMergedPromptFloatingButtonShown(false, animated: !wasHidden)
         mergedPromptSidePanelKind = normalizedKind
         populateMergedPromptSidePanel()
         mergedPromptSidePanel.isHidden = false
@@ -13119,17 +13255,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         mergedPromptPanelHiddenLeadingConstraint?.isActive = false
         mergedPromptPanelVisibleTrailingConstraint?.isActive = true
         animateMemoPanelLayout(animated: wasHidden)
+        // Highlight + "Enter" hint on the chosen send-target terminal the moment the panel opens.
+        refreshMergedPromptTerminalSelectionOverlays()
         focusMergedPromptPanel()
     }
 
     private func hideMergedPromptSidePanel(focusTerminalAfterClose: Bool, animated: Bool = true) {
-        guard !mergedPromptSidePanel.isHidden else {
+        guard !mergedPromptSidePanel.isHidden || mergedPromptCollapsedToFloating else {
             mergedPromptSidePanelKind = nil
+            clearMergedPromptTerminalSelectionOverlays()
             if focusTerminalAfterClose {
                 focusTerminal()
             }
             return
         }
+        // Closing tears down every US-08 affordance: the panel, the floating pill, and the
+        // on-pane selection highlight + "Enter" hint.
+        mergedPromptCollapsedToFloating = false
+        setMergedPromptFloatingButtonShown(false, animated: animated)
+        clearMergedPromptTerminalSelectionOverlays()
         mergedPromptPanelVisibleTrailingConstraint?.isActive = false
         mergedPromptPanelHiddenLeadingConstraint?.isActive = true
         mergedPromptSidePanelKind = nil
@@ -13137,7 +13281,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             guard let self = self else { return }
             guard self.mergedPromptPanelHiddenLeadingConstraint?.isActive == true else { return }
             self.mergedPromptSidePanel.isHidden = true
-            self.resetMergedPromptTargetRows()
             self.window?.makeKeyAndOrderFront(nil)
             if focusTerminalAfterClose,
                self.overlayMode == .hidden,
@@ -13155,39 +13298,85 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
     }
 
+    // US-08 goal 2: fold the expanded panel away to the floating pill with a slide animation.
+    // The kind is kept so the pill (and a later expand) restores the same body.
+    private func collapseMergedPromptToFloating() {
+        guard isMergedPromptSidePanelActive(), !mergedPromptCollapsedToFloating else {
+            return
+        }
+        mergedPromptCollapsedToFloating = true
+        // Slide the panel off the right edge, exactly like the close animation, but keep the
+        // model alive so it can be re-expanded.
+        mergedPromptPanelVisibleTrailingConstraint?.isActive = false
+        mergedPromptPanelHiddenLeadingConstraint?.isActive = true
+        setMergedPromptFloatingButtonShown(true, animated: true)
+        let finishCollapse = { [weak self] in
+            guard let self = self else { return }
+            guard self.mergedPromptCollapsedToFloating,
+                  self.mergedPromptPanelHiddenLeadingConstraint?.isActive == true else { return }
+            self.mergedPromptSidePanel.isHidden = true
+        }
+        // Focus a terminal so the arrow keys drive the send-target selection while collapsed.
+        focusTerminal()
+        refreshMergedPromptTerminalSelectionOverlays()
+        animateMemoPanelLayout(animated: true, completion: finishCollapse)
+        DispatchQueue.main.asyncAfter(deadline: .now() + memoPanelAnimationDuration + 0.03, execute: finishCollapse)
+    }
+
+    // US-08 goal 2: re-expand from the floating pill back to the full side panel.
+    private func expandMergedPromptFromFloating() {
+        guard mergedPromptCollapsedToFloating, let kind = mergedPromptSidePanelKind else {
+            return
+        }
+        showMergedPromptSidePanel(kind: kind)
+    }
+
+    // Slide the floating pill in from / out to the right edge (mirrors the panel's own park).
+    private func setMergedPromptFloatingButtonShown(_ shown: Bool, animated: Bool) {
+        updateMergedPromptFloatingButtonTitle()
+        if shown {
+            mergedPromptFloatingButton.isHidden = false
+            mergedPromptFloatingButtonHiddenConstraint?.isActive = false
+            mergedPromptFloatingButtonVisibleConstraint?.isActive = true
+        } else {
+            mergedPromptFloatingButtonVisibleConstraint?.isActive = false
+            mergedPromptFloatingButtonHiddenConstraint?.isActive = true
+        }
+        let settle = { [weak self] in
+            guard let self = self else { return }
+            if !shown, self.mergedPromptFloatingButtonHiddenConstraint?.isActive == true {
+                self.mergedPromptFloatingButton.isHidden = true
+            }
+        }
+        animateMemoPanelLayout(animated: animated, completion: settle)
+        if animated {
+            DispatchQueue.main.asyncAfter(deadline: .now() + memoPanelAnimationDuration + 0.03, execute: settle)
+        }
+    }
+
     private func populateMergedPromptSidePanel() {
-        resetMergedPromptTargetRows()
         let title = mergedPromptSidePanelKind == "c" ? "Change Requests" : "Questions"
         mergedPromptTitleLabel.stringValue = title
+        // US-08 removed the in-panel Send target list; the send target is now chosen by arrow
+        // keys against the workspace terminals, so keep the selection model in sync silently.
+        ensureMergedPromptTerminalTarget()
+        updateMergedPromptFloatingButtonTitle()
         guard currentDocument != nil else {
             mergedPromptSubtitleLabel.stringValue = "No workspace selected"
-            addMergedPromptSidePanelMessage("Open a workspace first.")
             mergedPromptTextView.textStorage?.setAttributedString(styledText("Open a workspace first.", color: theme.primaryText))
             return
         }
 
         let content = mergedPromptContent(title: title)
         mergedPromptSubtitleLabel.stringValue = content.subtitle
-        addMergedPromptTerminalTargetRows(to: mergedPromptTargetStack)
         mergedPromptTextView.textStorage?.setAttributedString(styledText(content.body, color: theme.primaryText))
         mergedPromptTextView.setSelectedRange(NSRange(location: 0, length: 0))
         mergedPromptTextView.scrollToBeginningOfDocument(nil)
     }
 
-    private func resetMergedPromptTargetRows() {
-        for view in mergedPromptTargetStack.arrangedSubviews {
-            mergedPromptTargetStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-    }
-
-    private func addMergedPromptSidePanelMessage(_ text: String) {
-        let message = NSTextField(labelWithString: text)
-        message.translatesAutoresizingMaskIntoConstraints = false
-        message.font = NSFont.systemFont(ofSize: 11, weight: .regular)
-        message.textColor = theme.secondaryText
-        message.lineBreakMode = .byTruncatingTail
-        mergedPromptTargetStack.addArrangedSubview(message)
+    private func updateMergedPromptFloatingButtonTitle() {
+        let kindLabel = mergedPromptSidePanelKind == "c" ? "Change Requests" : "Questions"
+        mergedPromptFloatingButton.title = " \(kindLabel)"
     }
 
     private func focusMergedPromptPanel() {
@@ -13742,6 +13931,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         hideMergedPromptSidePanel(focusTerminalAfterClose: true)
     }
 
+    @objc private func collapseMergedPromptPanelAction() {
+        collapseMergedPromptToFloating()
+    }
+
+    @objc private func expandMergedPromptFromFloatingAction() {
+        expandMergedPromptFromFloating()
+    }
+
     @objc private func showSettingsAction() {
         showOverlay(.settings)
     }
@@ -13945,8 +14142,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             }
         } else if value.hasPrefix("recent-category:") {
             activateRecentFilesCategory(String(value.dropFirst("recent-category:".count)))
-        } else if value.hasPrefix("merged-terminal:"), let id = Int(value.dropFirst("merged-terminal:".count)) {
-            _ = selectMergedPromptTerminal(id: id)
         } else if value.hasPrefix("workspace-picker:"), let index = Int(value.dropFirst(17)) {
             selectedWorkspacePickerIndex = index
             populateWorkspacePickerOverlay()
