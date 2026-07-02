@@ -1,6 +1,7 @@
 .build/
 .swiftpm/
 .omx/
+.omc/
 DerivedData/
 *.xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/

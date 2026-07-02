@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"./scripts/shell-integration-smoke.sh 2>&1\",\"description\":\"Re-run new shell-integration smoke\"}",
-  "error": "Exit code 1\nshell-integration smoke failed: live TRAPWINCH does not call `zle reset-prompt`: SENTINEL=alive\nTRAPWINCH () {\n\t: momenterm_user_winch_marker\n}\n\nshell-integration smoke: overlay files ok",
-  "timestamp": "2026-07-02T00:45:37.232Z",
-  "retry_count": 2
-}
