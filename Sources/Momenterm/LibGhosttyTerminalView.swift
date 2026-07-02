@@ -301,6 +301,7 @@ final class LibGhosttyTerminalView: NSView {
         onGridResize?(columns, rows)
     }
 
+#if DEBUG
     func isSurfaceAttachedForSmokeTest() -> Bool {
         surface != nil
     }
@@ -316,6 +317,7 @@ final class LibGhosttyTerminalView: NSView {
         return className.localizedCaseInsensitiveContains("IOSurface")
             || className.localizedCaseInsensitiveContains("Metal")
     }
+#endif
 
     func gridSize() -> (columns: Int, rows: Int)? {
         guard lastColumns > 0, lastRows > 0 else {
@@ -426,8 +428,10 @@ final class LibGhosttyTerminalView: NSView {
     func requestRender() {}
     func applyGridResize(columns: Int, rows: Int) {}
     func releaseSurface() {}
+#if DEBUG
     func isSurfaceAttachedForSmokeTest() -> Bool { false }
     func usesMetalLayerForSmokeTest() -> Bool { false }
+#endif
     func gridSize() -> (columns: Int, rows: Int)? { nil }
 }
 #endif

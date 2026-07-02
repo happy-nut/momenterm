@@ -17,6 +17,7 @@ for file in "$ROOT"/Sources/Momenterm/*.swift; do
 done
 
 swiftc \
+  -D DEBUG \
   -o "$OUT/momenterm-key-input-smoke" \
   "${MOMENTERM_LIBGHOSTTY_SWIFTC_FLAGS[@]}" \
   "${sources[@]}" \

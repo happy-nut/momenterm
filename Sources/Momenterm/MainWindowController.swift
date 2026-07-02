@@ -3525,6 +3525,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
     }
 
+#if DEBUG
     func terminalOutputForSmokeTest() -> String {
         activeSession()?.output.string ?? ""
     }
@@ -3616,6 +3617,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         processTerminalOutput(Data(text.utf8), for: session)
     }
 
+#endif
+
     func terminalIsFirstResponderForSmokeTest() -> Bool {
         guard let textView = activeSession()?.textView else {
             return false
@@ -3623,6 +3626,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return window?.firstResponder === textView
     }
 
+#if DEBUG
     func terminalUsesLibGhosttyRendererForSmokeTest() -> Bool {
         guard LibGhosttyTerminalView.isCompiledIn,
               let session = activeSession(),
@@ -4097,6 +4101,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             && !output.string.contains("\n\(String(timestamp.dropFirst(4)))")
             && line.count <= expected.cols + columnTolerance
     }
+#endif
 
     func seedTerminalRightPromptsForRepeatedSplitSmokeTest() {
         window?.contentView?.layoutSubtreeIfNeeded()
@@ -4128,6 +4133,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
     }
 
+#if DEBUG
     func terminalRightPromptsStayInsidePanesAfterRepeatedSplitForSmokeTest() -> Bool {
         terminalRightPromptLayoutDiagnosticsForSmokeTest().hasPrefix("ok=true")
     }
@@ -4822,6 +4828,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
         return failures.isEmpty ? "ok" : failures.joined(separator: "; ")
     }
+#endif
 
     private static func attributedStringContainsColor(_ value: NSAttributedString, color expected: NSColor) -> Bool {
         guard value.length > 0 else {
@@ -4851,6 +4858,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             && abs(left.blueComponent - right.blueComponent) < 0.01
     }
 
+#if DEBUG
     func overlaySidebarTextIsReadableForSmokeTest() -> Bool {
         showOverlay(.changes)
         let buttons = collectButtons(in: overlaySidebarStack)
@@ -5060,6 +5068,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         // advancing to the next file" behavior it signaled is what this now verifies.
         awaitingNextFileAfterLastHunk
     }
+#endif
 
     private func codeTextViewHasVisibleCursor(_ textView: NSTextView) -> Bool {
         guard let storage = textView.textStorage, storage.length > 0 else {
@@ -5103,6 +5112,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return false
     }
 
+#if DEBUG
     func changesSidebarShowsReviewStateBadgesForSmokeTest() -> Bool {
         showOverlay(.changes)
         overlaySidebarStack.layoutSubtreeIfNeeded()
@@ -5357,6 +5367,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         focusFileSidebar()
         return true
     }
+#endif
 
     private func syntheticFolderSourceFile(path: String) -> SourceFile {
         SourceFile(
@@ -5374,6 +5385,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         )
     }
 
+#if DEBUG
     func fileOverlaySelectedSourceHasScrollMarginForSmokeTest() -> Bool {
         guard overlayMode == .files else {
             return false
@@ -5846,6 +5858,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
         return hasTableHeaderBackground
     }
+#endif
 
     private func fileTreeButton(containing text: String) -> NSButton? {
         collectButtons(in: overlaySidebarStack).first { button in
@@ -5930,6 +5943,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         view.subviews.compactMap { $0 as? NSImageView }
     }
 
+#if DEBUG
     func overlayTitleForSmokeTest() -> String {
         overlayTitleLabel.stringValue
     }
@@ -6080,10 +6094,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         activeWorkspacePath
     }
 
+#endif
+
     func activeTerminalCwdForSmokeTest() -> String? {
         activeSession()?.cwd.path
     }
 
+#if DEBUG
     func activeTerminalProcessCwdForSmokeTest() -> String? {
         guard let activeTerminalId = activeTerminalId else {
             return nil
@@ -6314,6 +6331,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
         return !collapsedMetrics.isEmpty && collapsedMetrics == expandedMetrics
     }
+#endif
 
     private func workspaceRailActionIconSizeMetrics() -> [String] {
         railStack.arrangedSubviews.enumerated().compactMap { index, row in
@@ -6331,6 +6349,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         "\(Int(round(size.width)))x\(Int(round(size.height)))"
     }
 
+#if DEBUG
     func workspaceRailActionRowLayoutDiagnosticsForSmokeTest() -> String {
         window?.contentView?.layoutSubtreeIfNeeded()
         return railStack.arrangedSubviews.enumerated().map { index, row in
@@ -6411,6 +6430,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     func openWorkspaceForSmokeTest(_ url: URL) {
         openWorkspace(url.standardizedFileURL, revealReview: false)
     }
+#endif
 
     // MARK: - Control socket (cmux axis 4)
 
@@ -6440,6 +6460,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
     }
 
+#if DEBUG
     func clickWorkspaceButtonForSmokeTest(path: String) -> Bool {
         let normalizedPath = normalizedWorkspacePath(path)
         guard let button = workspaceStack.arrangedSubviews
@@ -6513,6 +6534,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         fileListingRoot = nil
         showOverlay(.changes)
     }
+#endif
 
     private func collectVisibleText(in view: NSView) -> [String] {
         guard !view.isHidden else {
@@ -10960,6 +10982,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         codePane.setNewContent(newOutput)
         codePane.scrollOldToTop()
         codePane.scrollNewToTop()
+        // Apply the gutter text-container insets (padding + the new pane's inner exclusion strip)
+        // BEFORE placing the cursor, so the caret's glyph layout is computed against the final
+        // exclusion geometry instead of being invalidated by a later async reflow.
+        applyDiffGutterTextInsets()
         placeDiffHunkCursor(for: file)
         balanceOverlayDiffSplit()
         layoutDiffLineGutters(oldNumbers: diffOldGutterNumbers, newNumbers: diffNewGutterNumbers)
@@ -13249,24 +13275,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         codePane.newPaneCodeView.textContainer?.exclusionPaths = []
     }
 
+    // Text-container geometry (inner padding + the new pane's inner exclusion strip) that the
+    // review cursor's glyph layout depends on. MUST run synchronously BEFORE placeDiffHunkCursor
+    // in renderDiffFile: mutating exclusion paths AFTER the caret is placed invalidates the
+    // caret's glyph rect, so the diff cursor would read as not-visible. The new pane's exclusion
+    // is bounds-independent (x:0), so it is correct here before bounds settle; the old pane's
+    // bounds-dependent strip is applied later in layoutDiffLineGutters once layout settles.
+    private func applyDiffGutterTextInsets() {
+        let oldView = codePane.oldPaneCodeView
+        let newView = codePane.newPaneCodeView
+        let width = diffGutterWidth
+        let tall: CGFloat = 1_000_000
+        oldView.textContainer?.lineFragmentPadding = 6
+        newView.textContainer?.lineFragmentPadding = 6
+        newView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: tall))]
+    }
+
     private func layoutDiffLineGutters(oldNumbers: [Int?], newNumbers: [Int?]) {
         oldLineGutter.isHidden = false
         newLineGutter.isHidden = false
-        // Frames depend on the panes' laid-out size, which settles after balanceOverlayDiffSplit;
-        // position on the next tick so bounds are final, then let autoresizing track resizes.
+        // Frames and the old pane's outer-edge exclusion depend on the panes' laid-out size, which
+        // settles after balanceOverlayDiffSplit; position on the next tick so bounds are final,
+        // then let autoresizing track resizes. The new pane's inner exclusion + padding were
+        // already applied synchronously in applyDiffGutterTextInsets (before the cursor was
+        // placed), so we must not re-mutate the new pane's container here.
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             let oldView = self.codePane.oldPaneCodeView
             let newView = self.codePane.newPaneCodeView
             let width = self.diffGutterWidth
             let tall: CGFloat = 1_000_000
-            // Carve the gutter strip out of the text only on the INNER edge, so code never
-            // underlaps the numbers but the outer edge keeps just a small padding.
-            oldView.textContainer?.lineFragmentPadding = 6
-            newView.textContainer?.lineFragmentPadding = 6
+            // Old pane: gutter hugs the right edge (toward the center divider); its strip depends on bounds.
             oldView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: max(oldView.bounds.width - width, 0), y: 0, width: width, height: tall))]
-            newView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: tall))]
-            // Old pane: gutter hugs the right edge (toward the center divider).
             self.oldLineGutter.frame = NSRect(x: max(oldView.bounds.width - width, 0), y: 0, width: width, height: max(oldView.bounds.height, 0))
             // New pane: gutter hugs the left edge (toward the center divider).
             self.newLineGutter.frame = NSRect(x: 0, y: 0, width: width, height: max(newView.bounds.height, 0))

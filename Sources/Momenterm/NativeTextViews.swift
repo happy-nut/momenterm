@@ -386,9 +386,11 @@ final class NativeInlineReviewCommentBox: NSView {
         textView.string
     }
 
+#if DEBUG
     func replaceTextForSmokeTest(_ text: String) {
         textView.string = text
     }
+#endif
 }
 
 final class NativeInlineReviewCommentTextView: NSTextView {
@@ -732,10 +734,12 @@ final class NativeSettingsPromptTextView: NSTextView {
         suppressChange = false
     }
 
+#if DEBUG
     func replaceTextForSmokeTest(_ text: String) {
         string = text
         onTextChange?(text)
     }
+#endif
 }
 
 final class NativeOverlaySidebarScrollView: NSScrollView {
@@ -848,6 +852,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
         suppressChange = false
     }
 
+#if DEBUG
     func replaceTextForSmokeTest(_ text: String) {
         string = text
         if renderMarkdown {
@@ -855,6 +860,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
         }
         onTextChange?(string)
     }
+#endif
 
     func applyMarkdownRendering() {
         guard renderMarkdown, !isRenderingMarkdown else {

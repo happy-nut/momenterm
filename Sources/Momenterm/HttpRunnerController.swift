@@ -178,9 +178,11 @@ final class HttpRunnerController: NSObject {
 
     // MARK: - Smoke-test surface (delegated from MainWindowController)
 
+#if DEBUG
     func setTransportForSmokeTest(_ transport: NativeHttpClient.Transport?) {
         httpClientTransportForSmokeTest = transport
     }
+#endif
 
     var runButtonCountForSmokeTest: Int { httpRunButtons.count }
 
