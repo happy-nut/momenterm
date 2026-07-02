@@ -26,7 +26,7 @@ let anchors: [(name: String, color: NSColor, expected: (Int, Int, Int))] = [
     ("syntaxNumber", theme.syntaxNumber, (122, 168, 199)),
     ("syntaxComment", theme.syntaxComment, (146, 146, 146)),
     ("syntaxMetadata", theme.syntaxMetadata, (199, 191, 53)),
-    ("codeBackground", theme.codeBackground, (57, 57, 57)),
+    ("codeBackground", theme.codeBackground, (35, 35, 35)),
     ("codeText", theme.codeText, (183, 196, 209)),
 ]
 

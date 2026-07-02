@@ -4301,13 +4301,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             }
         }
 
-        if let expected = NSColor(hex: "#222831") {
+        if let expected = NSColor(hex: "#12151A") {
             expect("dark.primary", dark.primary, expected)
             expect("dark.background", dark.background, expected)
         } else {
             failures.append("dark.background-hex")
         }
-        if let expected = NSColor(hex: "#393E46") {
+        if let expected = NSColor(hex: "#22262C") {
             expect("dark.secondary", dark.secondary, expected)
             expect("dark.surface", dark.surface, expected)
         } else {
@@ -4367,7 +4367,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         } else {
             failures.append("app.vcs.untracked-hex")
         }
-        if let expected = NSColor(hex: "#2B2B2B") {
+        if let expected = NSColor(hex: "#1A1A1A") {
             expect("darcula.background", darculaSyntax.background, expected)
         } else {
             failures.append("darcula.background-hex")

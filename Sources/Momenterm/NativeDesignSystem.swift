@@ -115,8 +115,8 @@ enum MomentermDesign {
         /// Back-compat alias: existing smoke/diagnostic code referenced the old name.
         typealias DarculaSyntaxColors = SyntaxColors
 
-        static let darkBase = rgb(34, 40, 49)          // #222831
-        static let darkSurface = rgb(57, 62, 70)       // #393E46
+        static let darkBase = rgb(18, 21, 26)          // #12151A
+        static let darkSurface = rgb(34, 38, 44)       // #22262C
         static let darkAccent = rgb(255, 211, 105)     // #FFD369
         static let darkForeground = rgb(238, 238, 238) // #EEEEEE
 
@@ -245,7 +245,7 @@ enum MomentermDesign {
         static let appDark = derive(uiPalette: dark)
 
         static let darculaSyntax = SyntaxColors(
-            background: rgb(43, 43, 43),     // #2B2B2B
+            background: rgb(26, 26, 26),     // #1A1A1A
             foreground: rgb(169, 183, 198),  // #A9B7C6
             keyword: rgb(204, 120, 50),      // #CC7832
             string: rgb(106, 135, 89),       // #6A8759
