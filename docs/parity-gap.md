@@ -1,6 +1,12 @@
-# Monacori Parity Gap
+# Monacori Parity Gap (Closed)
 
-Momenterm is a native macOS port experiment. The target is functional parity with Monacori's local review loop without Electron, Node, or Monacori runtime artifacts.
+> Status: **closed**. The Monacori→native parity effort is complete — every item
+> below is a shipped, verified capability, not an open gap. This file is kept as
+> the historical completion log and as the forbidden-runtime-marker scan contract
+> (see Verification). Current improvement work lives in
+> [maintenance-backlog.md](maintenance-backlog.md).
+
+Momenterm is a native macOS port experiment. The target was functional parity with Monacori's local review loop without Electron, Node, or Monacori runtime artifacts.
 
 ## Closed Action Items
 

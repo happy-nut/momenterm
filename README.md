@@ -61,11 +61,11 @@ This tests the riskiest host boundary first: a native macOS window and `WKScript
 
 ## Parity Tracking
 
-The Monacori parity gap and verification contract are tracked in [docs/parity-gap.md](docs/parity-gap.md). The latest visual comparison is in [docs/ui-parity-review.md](docs/ui-parity-review.md).
+The original Monacori→native parity gap is closed; [docs/parity-gap.md](docs/parity-gap.md) is kept as the completed-items log and the forbidden-runtime-marker scan contract. The latest visual comparison is in [docs/ui-parity-review.md](docs/ui-parity-review.md).
 
 ## Maintenance
 
-Clean-code, SOLID, UI parity, and verification gates are tracked in [docs/maintenance-checklist.md](docs/maintenance-checklist.md).
+The prioritized maintenance backlog is tracked in [docs/maintenance-backlog.md](docs/maintenance-backlog.md). Clean-code, SOLID, UI parity, and verification gates are in [docs/maintenance-checklist.md](docs/maintenance-checklist.md), the God View Controller decomposition plan in [docs/refactor-plan.md](docs/refactor-plan.md), keyboard-shortcut parity in [docs/shortcut-parity.md](docs/shortcut-parity.md), and the workspace / agent-notification plan in [docs/cmux-workspace-plan.md](docs/cmux-workspace-plan.md).
 
 ## Next Experiments
 
