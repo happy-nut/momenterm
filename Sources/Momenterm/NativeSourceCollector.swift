@@ -239,7 +239,12 @@ struct NativeSourceCollector {
         if let mime = imageMime(for: path) {
             if size <= Self.imageMaxBytes, let data = try? Data(contentsOf: url) {
                 let image = "data:\(mime);base64,\(data.base64EncodedString())"
-                return SourceFile(path: path, size: data.count, embedded: false, content: "", skippedReason: "", language: language, changed: changed, changedLines: changedLines, signature: sha1("\(path)\0image\0\(data.count)"), image: image, vcs: vcs)
+                // SVG is XML text, so keep its source alongside the rendered image. The
+                // file view renders the image by default but can toggle to raw source;
+                // other (binary) image formats have no meaningful raw text, so they stay
+                // empty and the raw toggle is not offered for them.
+                let rawText = mime == "image/svg+xml" ? (String(data: data, encoding: .utf8) ?? "") : ""
+                return SourceFile(path: path, size: data.count, embedded: false, content: rawText, skippedReason: "", language: language, changed: changed, changedLines: changedLines, signature: sha1("\(path)\0image\0\(data.count)"), image: image, vcs: vcs)
             }
             return skippedSource(path: path, size: size, reason: "image larger than \(formatBytes(Self.imageMaxBytes))", signatureKind: "image-large", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
         }

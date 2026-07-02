@@ -1440,6 +1440,50 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("SVG file preview did not render a native image view")
             return
         }
+        // US-14: rendered files (SVG here) expose a raw/rendered toggle. In rendered
+        // mode the toggle button offers "Raw"; toggling shows the SVG's XML source in
+        // the code pane instead of the image; toggling back restores the image.
+        guard controller.sourceRawToggleVisibleForSmokeTest(),
+              controller.sourceRawToggleTitleForSmokeTest() == "Raw",
+              !controller.sourceRawModeForSmokeTest() else {
+            fail("SVG rendered preview did not expose a Raw toggle; visible=\(controller.sourceRawToggleVisibleForSmokeTest()) title=\(controller.sourceRawToggleTitleForSmokeTest())")
+            return
+        }
+        controller.toggleSourceRawMode()
+        guard controller.sourceRawModeForSmokeTest(),
+              controller.sourceRawToggleTitleForSmokeTest() == "Rendered",
+              !controller.imagePreviewIsVisibleForSmokeTest(),
+              controller.reviewOverlayTextForSmokeTest().contains("<svg") else {
+            fail("SVG raw toggle did not show the XML source in the code pane; rawMode=\(controller.sourceRawModeForSmokeTest()) title=\(controller.sourceRawToggleTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        controller.toggleSourceRawMode()
+        guard !controller.sourceRawModeForSmokeTest(),
+              controller.imagePreviewIsVisibleForSmokeTest() else {
+            fail("SVG raw toggle did not restore the rendered image view; rawMode=\(controller.sourceRawModeForSmokeTest())")
+            return
+        }
+        // US-14: Markdown raw toggle shows the unrendered source (heading marker and
+        // bold/inline-code markers become visible again).
+        guard controller.previewSourceFileForSmokeTest("docs/note.md"),
+              controller.markdownPreviewIsRenderedForSmokeTest(),
+              controller.sourceRawToggleVisibleForSmokeTest() else {
+            fail("Markdown preview did not expose a raw toggle before switching to raw; visible=\(controller.sourceRawToggleVisibleForSmokeTest())")
+            return
+        }
+        controller.toggleSourceRawMode()
+        guard controller.sourceRawModeForSmokeTest(),
+              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title"),
+              controller.reviewOverlayTextForSmokeTest().contains("**bold**") else {
+            fail("Markdown raw toggle did not show the unrendered Markdown source; text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        controller.toggleSourceRawMode()
+        guard !controller.sourceRawModeForSmokeTest(),
+              controller.markdownPreviewIsRenderedForSmokeTest() else {
+            fail("Markdown raw toggle did not restore the rendered Markdown preview")
+            return
+        }
         guard !FileManager.default.fileExists(atPath: repoIcon.path)
                 || (controller.previewSourceFileForSmokeTest("assets/icon.icns") && controller.imagePreviewIsVisibleForSmokeTest()) else {
             fail("ICNS file preview did not render a native image view")

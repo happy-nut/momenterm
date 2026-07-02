@@ -98,6 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         focusedController()?.toggleHistory()
     }
 
+    @objc private func toggleRawView() {
+        focusedController()?.toggleSourceRawMode()
+    }
+
     @objc private func showSettings() {
         focusedController()?.openSettings()
     }
@@ -283,6 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         reviewMenu.addItem(targetedItem("Changes", #selector(showChanges), "0", [.command]))
         reviewMenu.addItem(targetedItem("Files", #selector(showFiles), "1", [.command]))
         reviewMenu.addItem(targetedItem("History", #selector(showHistory), "9", [.command]))
+        reviewMenu.addItem(targetedItem("Toggle Raw/Rendered", #selector(toggleRawView), "R", [.command, .shift]))
         reviewMenu.addItem(NSMenuItem.separator())
         reviewMenu.addItem(targetedItem("Next Change", #selector(nextChange), functionKey(0xF70A), []))
         reviewMenu.addItem(targetedItem("Previous Change", #selector(previousChange), functionKey(0xF70A), [.shift]))

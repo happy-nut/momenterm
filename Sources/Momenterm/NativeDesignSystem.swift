@@ -626,10 +626,18 @@ enum MomentermDesign {
         ]
         textView.textContainerInset = Metrics.codeTextInset
         textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        // Code/diff panes clip long lines instead of wrapping them. When the window is
+        // narrowed below a line's width the overflow is hidden at the right edge (the
+        // enclosing scroll view keeps hasHorizontalScroller = false), which reads more
+        // naturally for code than reflowing a diff line onto the next row. The container
+        // is given an unbounded width and the text view is allowed to grow horizontally
+        // so glyph layout never word-wraps; byClipping truncates the trailing overflow.
+        textView.isHorizontallyResizable = true
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.autoresizingMask = [.width, .height]
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.lineBreakMode = .byClipping
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
     }

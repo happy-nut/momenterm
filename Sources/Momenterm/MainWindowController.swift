@@ -570,6 +570,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return currentDocument?.diffFiles ?? []
     }
     private var selectedSourceIndex = 0
+    // When true the file view shows the raw source text of a renderable file
+    // (Markdown / CSV / TSV / SVG) instead of its rendered form. Toggled via
+    // #selector(toggleSourceRawMode) and the header "Raw"/"Rendered" button.
+    private var sourceRawMode = false
     private var selectedHistoryIndex = 0
     private var selectedQuickOpenIndex = 0
     private var selectedWorkspacePickerIndex = 0
@@ -655,6 +659,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private let mergedPromptTextView = NativeCodeTextView()
     private let overlayTitleLabel = NSTextField(labelWithString: "")
     private let overlaySubtitleLabel = NSTextField(labelWithString: "")
+    // Header toggle shown only in the file view for renderable files (Markdown /
+    // CSV / TSV / SVG): switches between the rendered preview and the raw source.
+    private let sourceRawToggleButton = NSButton(title: "", target: nil, action: nil)
     private let overlaySidebarStack = NSStackView()
     private weak var overlaySidebarScrollView: NSScrollView?
     private let overlayBodySplitView = NSSplitView()
@@ -1613,6 +1620,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlayView.layer?.borderColor = theme.panelBorder.cgColor
         overlayTitleLabel.textColor = theme.primaryText
         overlaySubtitleLabel.textColor = theme.tertiaryText
+        sourceRawToggleButton.contentTintColor = theme.secondaryText
         overlayContentView.layer?.backgroundColor = theme.panelBackground.cgColor
         diffEditorChromeView.layer?.backgroundColor = theme.codeHeaderBackground.cgColor
         diffEditorPathLabel.textColor = theme.primaryText
@@ -1792,6 +1800,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let close = smallIconButton(symbol: "xmark", fallback: "X", action: #selector(closeOverlayAction), label: "Close", shortcut: "Esc")
         close.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(close)
+
+        sourceRawToggleButton.translatesAutoresizingMaskIntoConstraints = false
+        sourceRawToggleButton.bezelStyle = .rounded
+        sourceRawToggleButton.controlSize = .small
+        sourceRawToggleButton.font = MomentermDesign.Fonts.UI.caption.font
+        sourceRawToggleButton.target = self
+        sourceRawToggleButton.action = #selector(toggleSourceRawModeAction)
+        sourceRawToggleButton.isHidden = true
+        sourceRawToggleButton.setContentHuggingPriority(.required, for: .horizontal)
+        sourceRawToggleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        header.addSubview(sourceRawToggleButton)
 
         // Hairline under the overlay header: one consistent divider so every overlay
         // (diff / files / history / settings) has the same chrome rhythm separating
@@ -2048,8 +2067,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             overlayTitleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
             overlaySubtitleLabel.leadingAnchor.constraint(equalTo: overlayTitleLabel.trailingAnchor, constant: 12),
-            overlaySubtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -10),
+            overlaySubtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: sourceRawToggleButton.leadingAnchor, constant: -10),
             overlaySubtitleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
+
+            sourceRawToggleButton.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -10),
+            sourceRawToggleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
             close.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding),
             close.centerYAnchor.constraint(equalTo: header.centerYAnchor),
@@ -4236,10 +4258,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             guard let scrollView = textView.enclosingScrollView else {
                 return false
             }
+            // Diff/source panes clip overflow (no wrap, no horizontal scrollbar): the
+            // container no longer tracks the view width and long lines are truncated
+            // with byClipping. Vertical scrolling still works for tall content.
             return (scrollView.isHidden || scrollView.hasVerticalScroller)
                 && !scrollView.hasHorizontalScroller
-                && !textView.isHorizontallyResizable
-                && (textView.textContainer?.widthTracksTextView ?? false)
+                && (textView.textContainer?.widthTracksTextView == false)
+                && (textView.textContainer?.lineBreakMode == .byClipping)
         }
     }
 
@@ -11144,6 +11169,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func renderSourceFile(_ file: SourceFile, preferredLine: Int? = nil, focus: Bool = false) {
         httpRunner.clearRunButtons()
         if file.language == "folder" {
+            updateSourceRawToggle(canToggle: false)
             overlaySubtitleLabel.stringValue = "\(file.path)  |  folder"
             sourcePreviewScrollView.isHidden = true
             overlayDiffSplitView.isHidden = false
@@ -11162,11 +11188,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         } else {
             renderedFile = file
         }
-        overlaySubtitleLabel.stringValue = "\(renderedFile.path)  |  \(formatBytes(renderedFile.size))"
         sourcePreviewScrollView.isHidden = true
         overlayDiffSplitView.isHidden = false
         setSingleCodePaneVisible(true)
         codePane.clearReviewCursors()
+        // A file is "renderable" when it has a form distinct from its raw source:
+        // Markdown, CSV/TSV, and SVG all render (formatted text / table / image) and
+        // also have raw text the user can switch to. Other images have no raw text.
+        let canToggleRaw = sourceFileSupportsRawToggle(renderedFile)
+        updateSourceRawToggle(canToggle: canToggleRaw)
+        let showRaw = canToggleRaw && sourceRawMode
+        let modeSuffix = canToggleRaw ? (showRaw ? "  |  raw" : "  |  rendered") : ""
+        overlaySubtitleLabel.stringValue = "\(renderedFile.path)  |  \(formatBytes(renderedFile.size))\(modeSuffix)"
+        if showRaw {
+            let rawLanguage = rawPreviewLanguage(for: renderedFile.language)
+            codePane.setOldContent(NativeSyntaxHighlighter.highlight(renderedFile.content, language: rawLanguage, theme: theme))
+            codePane.setNewContent(styledText("", color: theme.primaryText))
+            let contentCursorLine = preferredLine ?? renderedFile.changedLines.first ?? 1
+            codePane.scrollOldToTop()
+            codePane.scrollNewToTop()
+            placeCodeCursor(in: codePane.oldPaneCodeView, preferredLine: contentCursorLine, focus: focus)
+            refreshInlineReviewCommentBoxes()
+            return
+        }
         if !renderedFile.image.isEmpty, let image = nativeImage(fromDataURL: renderedFile.image) {
             renderImagePreview(image)
             codePane.setOldString("")
@@ -11198,6 +11242,74 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         codePane.scrollNewToTop()
         placeCodeCursor(in: codePane.oldPaneCodeView, preferredLine: renderedCursorLine, focus: focus)
         refreshInlineReviewCommentBoxes()
+    }
+
+    // A renderable file whose rendered form differs from its raw source and whose
+    // raw text is available: Markdown, CSV/TSV (embedded with content), and SVG
+    // (an image that also carries its XML source). Binary images are excluded —
+    // they have a rendered form but no raw text to fall back to.
+    private func sourceFileSupportsRawToggle(_ file: SourceFile) -> Bool {
+        guard !file.content.isEmpty else {
+            return false
+        }
+        // .language is the syntax token from NativeLanguageRegistry (e.g. "svg",
+        // "markdown"), not the image MIME type used for the rendered dataURL.
+        switch file.language {
+        case "markdown", "csv", "tsv", "svg":
+            return true
+        default:
+            return false
+        }
+    }
+
+    // The language used to syntax-highlight a file's RAW source. SVG is XML; the
+    // rendered languages keep their own highlighting; everything else is passed
+    // through unchanged.
+    private func rawPreviewLanguage(for language: String) -> String {
+        language == "svg" ? "xml" : language
+    }
+
+    private func updateSourceRawToggle(canToggle: Bool) {
+        sourceRawToggleButton.isHidden = !canToggle
+        guard canToggle else {
+            return
+        }
+        // The button shows the action it performs: in rendered mode it offers "Raw",
+        // in raw mode it offers "Rendered".
+        sourceRawToggleButton.title = sourceRawMode ? "Rendered" : "Raw"
+        sourceRawToggleButton.toolTip = sourceRawMode
+            ? "Show the rendered preview (⇧⌘R)"
+            : "Show the raw source text (⇧⌘R)"
+    }
+
+    @objc func toggleSourceRawModeAction() {
+        toggleSourceRawMode()
+    }
+
+    // Flip between rendered and raw source for the current file view file. No-op
+    // outside the file view; re-renders the selected source so the pane, subtitle,
+    // and toggle button reflect the new mode.
+    func toggleSourceRawMode() {
+        guard overlayMode == .files,
+              let document = activeFilesDocument(),
+              document.sourceFiles.indices.contains(selectedSourceIndex)
+        else {
+            return
+        }
+        sourceRawMode.toggle()
+        renderSourceFile(document.sourceFiles[selectedSourceIndex])
+    }
+
+    func sourceRawModeForSmokeTest() -> Bool {
+        sourceRawMode
+    }
+
+    func sourceRawToggleVisibleForSmokeTest() -> Bool {
+        !sourceRawToggleButton.isHidden
+    }
+
+    func sourceRawToggleTitleForSmokeTest() -> String {
+        sourceRawToggleButton.title
     }
 
     private func sourcePreviewWithReviewNotes(_ content: NSAttributedString, path: String) -> NSAttributedString {
