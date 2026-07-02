@@ -3079,6 +3079,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
         if overlayMode != .hidden {
             if lowerKey == "\u{1b}" || event.keyCode == 53 {
+                // Two-stage Esc (US-07). When the review cursor lives in a preview code
+                // pane (entered via Enter from the list), the first Esc returns focus to
+                // the sidebar list and keeps the docked panel open. A second Esc — now with
+                // focus back on the list — closes the panel. Applies to Changes/Files and to
+                // a git-history commit diff (which renders into the .changes overlay).
+                if overlayCodeCursorIsFocused() {
+                    returnFocusFromOverlayPreviewToSidebar()
+                    return true
+                }
                 // From a git-history commit diff, Esc returns to the commit log (like IntelliJ)
                 // rather than closing the panel outright.
                 if overlayMode == .changes, historyDiffOverride != nil {
@@ -8312,6 +8321,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             let success = self.window?.makeFirstResponder(self.overlaySidebarScrollView) ?? false
             self.lastSidebarFocusDiagnostic = "async mode=\(self.overlayMode) success=\(success) before=\(before) after=\(String(describing: self.window?.firstResponder))"
         }
+    }
+
+    // True when a preview code pane holds the review cursor (the user entered a file/diff
+    // via Enter). This is the "stage 1" condition for the two-stage Esc: the first Esc pops
+    // focus back to the sidebar list before a second Esc closes the docked panel.
+    private func overlayCodeCursorIsFocused() -> Bool {
+        guard overlayMode == .files || overlayMode == .changes else {
+            return false
+        }
+        return codePane.isOldPaneFirstResponder(in: window)
+            || codePane.isNewPaneFirstResponder(in: window)
+    }
+
+    // Stage 1 of the two-stage Esc: drop the preview review cursor and move focus back to
+    // the sidebar list without closing the panel.
+    private func returnFocusFromOverlayPreviewToSidebar() {
+        codePane.clearReviewCursors()
+        focusFileSidebar()
     }
 
     private func updateVisibleFileTreeSelection(selectedIndex: Int) -> Bool {

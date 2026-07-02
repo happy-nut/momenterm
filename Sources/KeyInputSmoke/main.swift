@@ -1996,6 +1996,27 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
 
+        // US-07 two-stage Esc for Changes: reviewCodePanesShowCursorForSmokeTest leaves the
+        // overlay in Changes with the review cursor focused in the diff code pane. The first
+        // Esc must return focus to the change list and keep the docked panel open; only the
+        // second Esc (focus back on the list) closes it.
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("Changes first Esc returns to change list", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Changes"
+                && controller.changesSidebarIsFirstResponderForSmokeTest()
+                && !controller.changesDiffCodePaneHasVisibleCursorForSmokeTest()
+        }) else {
+            fail("First Esc in Changes did not return focus to the change list while keeping the panel open; title=\(controller.overlayTitleForSmokeTest()) sidebar=\(controller.changesSidebarIsFirstResponderForSmokeTest()) cursor=\(controller.changesDiffCodePaneHasVisibleCursorForSmokeTest())")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("Changes second Esc closes panel", timeout: 2, condition: {
+            controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
+        }) else {
+            fail("Second Esc in Changes did not close the docked panel; hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
+            return
+        }
+
         let fileListingLoadsBeforeCmd1 = controller.fileListingLoadCountForSmokeTest()
         sendShortcut("1", keyCode: 18, modifiers: [.command])
         guard controller.overlayTitleForSmokeTest() == "Files" else {
@@ -2139,6 +2160,44 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("file view Down arrow changed the file tree selection instead of moving the file-view cursor; selected \(selectedSourceIndexBeforePreviewArrow)->\(controller.selectedSourceIndexForSmokeTest()) cursorLine \(previewCursorLineBeforeArrow)->\(previewCursorLineAfterArrow)")
             return
         }
+        // US-07 two-stage Esc for Files: the review cursor is focused in the file preview.
+        // First Esc returns focus to the file tree sidebar and keeps the panel open; second
+        // Esc closes it.
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("Files first Esc returns to file tree", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Files"
+                && controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
+                && !controller.fileOverlayPreviewHasVisibleReviewCursorForSmokeTest()
+        }) else {
+            fail("First Esc in Files did not return focus to the file tree while keeping the panel open; title=\(controller.overlayTitleForSmokeTest()) sidebar=\(controller.fileOverlaySidebarIsFirstResponderForSmokeTest()) previewCursor=\(controller.fileOverlayPreviewHasVisibleReviewCursorForSmokeTest())")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("Files second Esc closes panel", timeout: 2, condition: {
+            controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
+        }) else {
+            fail("Second Esc in Files did not close the docked panel; hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
+            return
+        }
+        // Re-enter the file preview so the following Cmd+1-from-code-pane close check keeps
+        // its precondition (focus in the file view code pane).
+        sendShortcut("1", keyCode: 18, modifiers: [.command])
+        guard waitUntil("reopen Files before Cmd+1 close-from-code-pane check", timeout: 5, condition: {
+            controller.overlayTitleForSmokeTest() == "Files"
+                && controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
+        }) else {
+            fail("could not reopen Files after two-stage Esc; title=\(controller.overlayTitleForSmokeTest())")
+            return
+        }
+        guard controller.selectSourcePathForSmokeTest("src/app.swift") else {
+            fail("could not reselect the multi-line source fixture after two-stage Esc")
+            return
+        }
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard controller.fileOverlayPreviewIsFirstResponderForSmokeTest() else {
+            fail("re-entering the file preview after two-stage Esc did not focus the file view code pane")
+            return
+        }
         sendShortcut("1", keyCode: 18, modifiers: [.command])
         guard waitUntil("Cmd+1 close Files from code pane", timeout: 2, condition: {
             controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
@@ -2181,6 +2240,54 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         guard controller.overlayTitleForSmokeTest() == "History",
               controller.reviewOverlayTextForSmokeTest().contains("initial") else {
             fail("Cmd+9 did not open native history; title=\(controller.overlayTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
+
+        // US-07 two-stage Esc from a Cmd+9 history commit. Enter opens the selected commit's
+        // diff (rendered into the Changes overlay); a second Enter moves the review cursor
+        // into the diff code pane. From there:
+        //   Esc #1 -> return focus to the commit's file list, panel stays on the commit diff
+        //   Esc #2 -> back to the history commit log (like IntelliJ)
+        //   Esc #3 -> close the docked panel
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard waitUntil("history commit diff opens", timeout: 3, condition: {
+            controller.overlayTitleForSmokeTest() == "Changes"
+        }) else {
+            fail("Enter on a history commit did not open its diff in the Changes overlay; title=\(controller.overlayTitleForSmokeTest())")
+            return
+        }
+        // A second Enter drives the review cursor from the commit file list into the diff
+        // code pane (activateOverlaySelection focuses the new pane), establishing the stage-1
+        // condition for the two-stage Esc.
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard waitUntil("history commit diff cursor enters code pane", timeout: 2, condition: {
+            controller.changesDiffCodePaneHasVisibleCursorForSmokeTest()
+        }) else {
+            fail("Enter in the history commit diff did not move the review cursor into the code pane; cursor=\(controller.changesDiffCodePaneHasVisibleCursorForSmokeTest())")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("history commit diff first Esc returns to file list", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Changes"
+                && controller.changesSidebarIsFirstResponderForSmokeTest()
+                && !controller.changesDiffCodePaneHasVisibleCursorForSmokeTest()
+        }) else {
+            fail("First Esc in the history commit diff did not return focus to the commit file list; title=\(controller.overlayTitleForSmokeTest()) sidebar=\(controller.changesSidebarIsFirstResponderForSmokeTest()) cursor=\(controller.changesDiffCodePaneHasVisibleCursorForSmokeTest())")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("history commit diff second Esc returns to log", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "History"
+                && controller.reviewOverlayTextForSmokeTest().contains("initial")
+        }) else {
+            fail("Second Esc in the history commit diff did not return to the commit log; title=\(controller.overlayTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest().prefix(120))")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("history third Esc closes panel", timeout: 2, condition: {
+            controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
+        }) else {
+            fail("Third Esc from history did not close the docked panel; hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
             return
         }
 
