@@ -635,6 +635,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private let systemStatsBar = SystemStatsBarView()
     private let railView = NSView()
     private let railStack = NSStackView()
+    // Bottom-pinned rail actions (Settings) that sit at the very bottom of the
+    // icon rail, below the workspace picker, separated from the top action stack.
+    private let railBottomStack = NSStackView()
     private let workspaceStack = NativeWorkspaceRailListView()
     private weak var workspaceToastLabel: NSTextField?
     private var lastTerminalSpawnError: String?
@@ -1542,20 +1545,28 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             rootView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             rootView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         ])
-        if statsBarEnabled {
-            NSLayoutConstraint.activate([
-                systemStatsBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-                systemStatsBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-                systemStatsBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-                systemStatsBar.heightAnchor.constraint(equalToConstant: 24)
-            ])
-        }
 
+        // configureRail() adds railView to the hierarchy; run it before the system
+        // stats bar constraints so the bottom bar can be pinned to the rail's right
+        // edge (the rail column always stays in front of / above the bottom bar).
         configureRail()
         configureTerminal()
         configureOverlay()
         configureMemoSidePanel()
         configureMergedPromptSidePanel()
+
+        if statsBarEnabled {
+            // The bottom system stats bar starts at the icon rail's trailing edge, so
+            // it never underlaps the rail. This keeps the left icon rail (including the
+            // bottom-pinned Settings button) fully visible and clickable in front of
+            // the bottom bar, instead of the bottom bar covering the rail's bottom.
+            NSLayoutConstraint.activate([
+                systemStatsBar.leadingAnchor.constraint(equalTo: railView.trailingAnchor),
+                systemStatsBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+                systemStatsBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+                systemStatsBar.heightAnchor.constraint(equalToConstant: 24)
+            ])
+        }
     }
 
     private func applySystemStatsBarTheme() {
@@ -1657,6 +1668,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             self?.handleWorkspaceRailKey(event) ?? false
         }
         railView.addSubview(workspaceStack)
+
+        railBottomStack.translatesAutoresizingMaskIntoConstraints = false
+        railBottomStack.orientation = .vertical
+        railBottomStack.alignment = .centerX
+        railBottomStack.spacing = 6
+        railView.addSubview(railBottomStack)
+
         railWidthConstraint = railView.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.railCollapsedWidth)
         railStackWidthConstraint = railStack.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.railCollapsedWidth)
 
@@ -1667,7 +1685,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         railStack.addArrangedSubview(railButton(symbol: "folder", fallback: "F", action: #selector(showFilesAction), label: "Files", shortcut: "Cmd+1"))
         railStack.addArrangedSubview(railButton(symbol: "questionmark.bubble", fallback: "Q", action: #selector(showQuestionsAction), label: "Questions", shortcut: "Cmd+Shift+?"))
         railStack.addArrangedSubview(railButton(symbol: "square.and.pencil", fallback: "M", action: #selector(showMemoAction), label: "Prompt Memo", shortcut: "Cmd+Shift+N"))
-        railStack.addArrangedSubview(railButton(symbol: "gearshape", fallback: "S", action: #selector(showSettingsAction), label: "Settings", shortcut: "Cmd+,"))
+
+        // Settings lives at the very bottom of the rail, pinned to the rail bottom edge
+        // (below the workspace picker), not in the top action stack.
+        railBottomStack.addArrangedSubview(railButton(symbol: "gearshape", fallback: "S", action: #selector(showSettingsAction), label: "Settings", shortcut: "Cmd+,"))
 
         NSLayoutConstraint.activate([
             railView.topAnchor.constraint(equalTo: rootView.topAnchor),
@@ -1679,10 +1700,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             railStack.leadingAnchor.constraint(equalTo: railView.leadingAnchor),
             railStackWidthConstraint!,
 
+            railBottomStack.leadingAnchor.constraint(equalTo: railView.leadingAnchor),
+            railBottomStack.widthAnchor.constraint(equalTo: railStack.widthAnchor),
+            railBottomStack.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -10),
+
             workspaceStack.topAnchor.constraint(equalTo: railStack.bottomAnchor, constant: 14),
             workspaceStack.leadingAnchor.constraint(equalTo: railView.leadingAnchor, constant: 8),
             workspaceStack.trailingAnchor.constraint(equalTo: railView.trailingAnchor, constant: -8),
-            workspaceStack.bottomAnchor.constraint(lessThanOrEqualTo: railView.bottomAnchor, constant: -10)
+            workspaceStack.bottomAnchor.constraint(lessThanOrEqualTo: railBottomStack.topAnchor, constant: -10)
         ])
         updateRailActionRowsForWorkspaceRailState()
     }
@@ -6471,6 +6496,72 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
         button.performClick(nil)
         return true
+    }
+
+    // Collect the icon-rail action buttons (top action stack + bottom-pinned Settings)
+    // paired with their tooltip label, top-to-bottom, so smoke tests can click each one.
+    private func iconRailActionButtonsForSmokeTest() -> [(label: String, button: NSButton)] {
+        var result: [(String, NSButton)] = []
+        for row in railStack.arrangedSubviews + railBottomStack.arrangedSubviews {
+            guard let button = collectButtons(in: row).first else { continue }
+            let label = (button.toolTip ?? row.toolTip ?? "")
+                .components(separatedBy: "\n").first ?? ""
+            result.append((label, button))
+        }
+        return result
+    }
+
+    // Verifies every left icon-rail button is (a) not covered by another view at its
+    // center (real mouse clicks reach it) and (b) actually performs its action, so the
+    // resulting UI state changes. Returns a diagnostic string per button.
+    func iconRailActionButtonsClickForSmokeTest() -> String {
+        window?.makeKeyAndOrderFront(nil)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        guard let contentView = window?.contentView else {
+            return "no-content-view"
+        }
+        var diagnostics: [String] = []
+        for entry in iconRailActionButtonsForSmokeTest() {
+            let center = NSPoint(x: entry.button.bounds.midX, y: entry.button.bounds.midY)
+            let pointInContent = entry.button.convert(center, to: contentView)
+            let hit = contentView.hitTest(pointInContent)
+            let reachesButton = (hit == entry.button) || (hit?.isDescendant(of: entry.button) ?? false)
+            // The real reported failure: a plain NSButton has acceptsFirstMouse == false,
+            // so the first mouse click beside the focused terminal is swallowed to activate
+            // the window instead of firing the button. This must be true for clicks to work.
+            let acceptsFirstMouse = entry.button.acceptsFirstMouse(for: nil)
+
+            hideOverlay()
+            hideMemoPanel(focusTerminalAfterClose: false)
+            setWorkspaceRailPickerVisible(false, animated: false)
+            let before = iconRailStateSignatureForSmokeTest()
+            entry.button.performClick(nil)
+            window?.contentView?.layoutSubtreeIfNeeded()
+            let after = iconRailStateSignatureForSmokeTest()
+            let actionFired = before != after
+            diagnostics.append("\(entry.label): reaches=\(reachesButton) firstMouse=\(acceptsFirstMouse) fired=\(actionFired) state=\(after)")
+        }
+        return diagnostics.joined(separator: " | ")
+    }
+
+    func iconRailActionButtonsAllClickableForSmokeTest() -> Bool {
+        let diagnostics = iconRailActionButtonsClickForSmokeTest()
+        let lines = diagnostics.components(separatedBy: " | ")
+        guard lines.count >= 8 else {
+            return false
+        }
+        return lines.allSatisfy {
+            $0.contains("reaches=true") && $0.contains("firstMouse=true") && $0.contains("fired=true")
+        }
+    }
+
+    private func iconRailStateSignatureForSmokeTest() -> String {
+        let overlay = overlayView.isHidden ? "-" : "overlay:\(overlayMode)"
+        let memo = memoSidePanel.isHidden ? "-" : "memo"
+        let merged = mergedPromptSidePanelIsVisibleForSmokeTest() ? "merged" : "-"
+        let terminal = terminalView.isHidden ? "-" : "term"
+        let picker = workspaceRailExpanded ? "picker" : "-"
+        return "\(overlay)/\(memo)/\(merged)/\(terminal)/\(picker)"
     }
 
     func forgetCurrentWorkspaceForSmokeTest() {

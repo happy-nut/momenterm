@@ -724,6 +724,15 @@ final class MomentermCompactButton: NSButton {
     override var fittingSize: NSSize {
         intrinsicContentSize
     }
+
+    // The left icon rail sits beside the Ghostty terminal, whose Metal surface holds
+    // key focus. Without this, NSButton's default `acceptsFirstMouse == false` makes the
+    // first click on a rail icon merely activate the window instead of firing the button's
+    // action (real mouse clicks do nothing, even though `performClick` works). Returning
+    // true delivers the very first click as a press so every rail action fires immediately.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 }
 
 final class MomentermBalancedSplitView: NSSplitView {
