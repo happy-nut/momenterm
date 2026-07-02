@@ -15,6 +15,7 @@ mkdir -p "$OUT"
 swiftc \
   -o "$OUT/momenterm-shell-integration-smoke" \
   "$ROOT/Sources/Momenterm/Errors.swift" \
+  "$ROOT/Sources/Momenterm/MomentermKeyDebug.swift" \
   "$ROOT/Sources/Momenterm/NativePtyManager.swift" \
   "$ROOT/Sources/ShellIntegrationSmoke/main.swift"
 

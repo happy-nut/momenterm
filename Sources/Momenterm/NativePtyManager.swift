@@ -1,19 +1,8 @@
 import Foundation
 import Darwin
 
-// TEMP DIAGNOSTIC: remove after backspace/IME bug is root-caused.
-func momentermKeyDebug(_ message: @autoclosure () -> String) {
-    let line = message() + "\n"
-    guard let data = line.data(using: .utf8) else { return }
-    let path = "/tmp/momenterm-keydebug.log"
-    if let handle = FileHandle(forWritingAtPath: path) {
-        handle.seekToEndOfFile()
-        handle.write(data)
-        try? handle.close()
-    } else {
-        FileManager.default.createFile(atPath: path, contents: data)
-    }
-}
+// momentermKeyDebug lives in MomentermKeyDebug.swift so isolation smokes can
+// include the definition without pulling in the whole PTY manager.
 
 protocol NativePtyManagerDelegate: AnyObject {
     func nativePty(_ manager: NativePtyManager, didReceiveData data: Data, id: Int)

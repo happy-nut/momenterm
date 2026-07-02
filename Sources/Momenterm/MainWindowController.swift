@@ -12,6 +12,127 @@ final class MomentermPassthroughView: NSView {
     }
 }
 
+// A flipped container so an NSScrollView's document anchors its content to the TOP even when
+// the content is shorter than the clip view (AppKit's default bottom-left origin otherwise
+// pins short content to the bottom — which made the diff/file sidebar start from the bottom).
+final class MomentermFlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+// A line-number gutter drawn beside a diff code pane. Added as a subview of the text view
+// (the scroll document) so it moves with the text automatically — no separate scroll sync.
+// The old pane's gutter right-aligns against the center divider; the new pane's left-aligns,
+// so both number columns meet in the middle like IntelliJ's side-by-side diff.
+final class DiffLineNumberGutter: NSView {
+    private struct Row { let y: CGFloat; let height: CGFloat; let number: Int }
+    private var rows: [Row] = []
+    var alignRight = false
+    var textColor: NSColor = .secondaryLabelColor
+    weak var codeTextView: NSTextView?
+    private let font = NSFont(name: "Monaco", size: 11) ?? NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+
+    override var isFlipped: Bool { true }
+
+    // Computes each line's y-position ONCE (querying the layout manager here, never in draw()).
+    // Doing layout work inside draw() forced a layout→invalidate→redraw loop = continuous flicker.
+    func reload(numbers: [Int?]) {
+        rows = []
+        defer { needsDisplay = true }
+        guard let textView = codeTextView,
+              let layoutManager = textView.layoutManager,
+              let container = textView.textContainer
+        else { return }
+        layoutManager.ensureLayout(for: container)
+        let originY = textView.textContainerOrigin.y
+        let text = textView.string as NSString
+        var location = 0
+        var lineIndex = 0
+        while location <= text.length && lineIndex < numbers.count {
+            let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+            if let number = numbers[lineIndex] {
+                rows.append(Row(y: fragment.minY + originY, height: fragment.height, number: number))
+            }
+            let next = NSMaxRange(lineRange)
+            if next <= location { break }
+            location = next
+            lineIndex += 1
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
+        let pad: CGFloat = 4
+        for row in rows where row.y + row.height >= dirtyRect.minY && row.y <= dirtyRect.maxY {
+            let string = NSAttributedString(string: String(row.number), attributes: attributes)
+            let size = string.size()
+            let x = alignRight ? bounds.width - size.width - pad : pad
+            string.draw(at: NSPoint(x: x, y: row.y + (row.height - size.height) / 2))
+        }
+    }
+}
+
+// One lane of an IntelliJ-style commit graph: a continuous vertical rail with a node per commit
+// (filled circle for a normal commit, hollow diamond for a merge). Single-lane only — enough to
+// read the history as a graph without full multi-branch DAG layout.
+final class HistoryGraphCell: NSView {
+    var isMerge = false
+    var hasLineAbove = true
+    var hasLineBelow = true
+    var railColor: NSColor = .systemGray
+    var nodeColor: NSColor = .systemTeal
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let centerX = bounds.midX
+        let centerY = bounds.midY
+        let path = NSBezierPath()
+        path.lineWidth = 1.5
+        if hasLineAbove {
+            path.move(to: NSPoint(x: centerX, y: 0))
+            path.line(to: NSPoint(x: centerX, y: centerY))
+        }
+        if hasLineBelow {
+            path.move(to: NSPoint(x: centerX, y: centerY))
+            path.line(to: NSPoint(x: centerX, y: bounds.maxY))
+        }
+        railColor.setStroke()
+        path.stroke()
+
+        let radius: CGFloat = 4
+        if isMerge {
+            let diamond = NSBezierPath()
+            diamond.move(to: NSPoint(x: centerX, y: centerY - radius))
+            diamond.line(to: NSPoint(x: centerX + radius, y: centerY))
+            diamond.line(to: NSPoint(x: centerX, y: centerY + radius))
+            diamond.line(to: NSPoint(x: centerX - radius, y: centerY))
+            diamond.close()
+            nodeColor.setFill()
+            diamond.fill()
+        } else {
+            let circle = NSBezierPath(ovalIn: NSRect(x: centerX - radius, y: centerY - radius, width: radius * 2, height: radius * 2))
+            nodeColor.setFill()
+            circle.fill()
+        }
+    }
+}
+
+// Modal backdrop behind a floating overlay panel (command palette, settings, pickers).
+// It sits above the terminal but below the panel, so clicks that miss the panel land here
+// — blocking them from the terminal underneath — and dismiss the panel, instead of leaking
+// through to whatever is behind the floating window.
+final class MomentermOverlayBackdrop: NSView {
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
 final class MainWindowController: NSWindowController, NSWindowDelegate, NativePtyManagerDelegate {
     private static let maxTerminalPanesPerTab = 8
     private static let terminalGhosttyTranscriptLimit = 120_000
@@ -405,6 +526,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // #8 density: comfortable roomier chrome vs the default compact. Scales the pane header
     // and app-owned status bar heights + their font so power users can go dense or relaxed.
     private var terminalComfortableDensity = UserDefaults.standard.bool(forKey: "momenterm.density.comfortable")
+    // Inactive-pane dim strength (the #5 focus overlay alpha). Live-adjustable in Settings.
+    private var terminalUnfocusedDim = CGFloat((UserDefaults.standard.object(forKey: "momenterm.terminal.unfocusedDim") as? Double) ?? 0.22)
     private var paneHeaderHeight: CGFloat { terminalComfortableDensity ? 30 : 24 }
     private var paneStatusBarHeight: CGFloat { terminalComfortableDensity ? 28 : 22 }
     private var paneStatusFontSize: CGFloat { terminalComfortableDensity ? 12.5 : 11 }
@@ -436,6 +559,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private var selectedDiffIndex = 0
     private var selectedDiffHunkIndex = 0
     private var awaitingNextFileAfterLastHunk = false
+    // When viewing a git-history commit's diff, the Changes view renders these files (the
+    // commit's diff) instead of the working-tree document. nil = normal working-tree Changes.
+    private var historyDiffOverride: [DiffFile]?
+    private var historyDiffSubtitle = ""
+    private var activeChangesDiffFiles: [DiffFile] {
+        if let override = historyDiffOverride {
+            return override
+        }
+        return currentDocument?.diffFiles ?? []
+    }
     private var selectedSourceIndex = 0
     private var selectedHistoryIndex = 0
     private var selectedQuickOpenIndex = 0
@@ -455,6 +588,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private var reviewNotes: [ReviewNote] = []
     private var selectedReviewNoteIndex: Int?
     private var inlineReviewCommentViews: [NSView] = []
+    private weak var reviewLineHighlightView: NSView?
+    // Paragraph-spacing gaps opened under commented lines so a box pushes code down (GitHub
+    // style) instead of covering it. Each entry restores the line's original paragraph style.
+    private var reviewGapRestores: [(storage: NSTextStorage, range: NSRange, original: NSParagraphStyle?)] = []
     private weak var inlineReviewDraftBox: NativeInlineReviewCommentBox?
     private weak var inlineReviewDraftHost: NativeCodeTextView?
     private var inlineReviewDraftKind: String?
@@ -472,6 +609,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         )
     )
     private var historyCommits: [JSONValue] = []
+    // Cache of the selected commit's parsed diff files, so the history view can list changed
+    // files and render the commit diff (red/green) without re-running git show on every key.
+    private var historyCommitFiles: [DiffFile] = []
+    private var historyCommitFilesSha = ""
     private var cursorHistory: [String] = []
     private var keyMonitor: Any?
     private var diffScrollSyncObserver: NSObjectProtocol?
@@ -490,6 +631,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private let rootView = NSView()
+    // Window-wide bottom bar (CPU/Memory/Network), independent of how many panes are split.
+    private let systemStatsBar = SystemStatsBarView()
     private let railView = NSView()
     private let railStack = NSStackView()
     private let workspaceStack = NativeWorkspaceRailListView()
@@ -500,6 +643,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private let terminalStatusLabel = NSTextField(labelWithString: "")
     private let terminalPaneSplitView = MomentermBalancedSplitView()
     private let overlayView = NSView()
+    private let overlayBackdrop = MomentermOverlayBackdrop()
     private let memoSidePanel = NSView()
     private let mergedPromptSidePanel = NSView()
     private let mergedPromptTitleLabel = NSTextField(labelWithString: "")
@@ -524,6 +668,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private let quickOpenRecentResultsStack = NSStackView()
     private let quickOpenRecentFooterLabel = NSTextField(labelWithString: "")
     private let codePane = CodePaneController()
+    // Center line-number gutters for the side-by-side diff (old right-aligned, new left-aligned).
+    private let oldLineGutter = DiffLineNumberGutter()
+    private let newLineGutter = DiffLineNumberGutter()
+    private let diffGutterWidth: CGFloat = 44
+    // Per-render line numbers, one entry per rendered visual line in each pane (nil = blank/meta),
+    // kept in lockstep with oldOutput/newOutput so the gutters align exactly with the code.
+    private var diffOldGutterNumbers: [Int?] = []
+    private var diffNewGutterNumbers: [Int?] = []
+    private enum DiffGutterPane { case old, new }
     private let sourcePreviewScrollView = NSScrollView()
     private let sourcePreviewDocumentView = NSView()
     private let sourcePreviewImageView = NSImageView()
@@ -637,6 +790,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         balanceTerminalPaneSplit()
         if compactOverlayModeActive {
             applyOverlayMaximizedState()
+        }
+        // The docked diff split keeps its old subview widths on resize, leaving one pane's
+        // background half-filled after maximizing. Re-balance it and re-place the center gutters
+        // for the new width.
+        if overlayMode == .changes, !overlayView.isHidden {
+            balanceOverlayDiffSplit()
+            layoutDiffLineGutters(oldNumbers: diffOldGutterNumbers, newNumbers: diffNewGutterNumbers)
         }
         syncTerminalSizes()
         scheduleTerminalResize()
@@ -860,12 +1020,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         if overlayMode == .history {
             closeOverlayAction()
         } else {
+            // Open on the most recent commit (git log is newest-first), like IntelliJ.
+            selectedHistoryIndex = 0
+            historyCommitFilesSha = ""
+            historyDiffOverride = nil
             showOverlay(.history)
         }
     }
 
     func selectReviewTarget(delta: Int) {
-        guard let document = currentDocument, !document.diffFiles.isEmpty else {
+        let files = activeChangesDiffFiles
+        guard !files.isEmpty else {
             openChangesView()
             return
         }
@@ -874,8 +1039,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             showOverlay(.changes)
         }
 
-        selectedDiffIndex = min(max(selectedDiffIndex, 0), document.diffFiles.count - 1)
-        let currentFile = document.diffFiles[selectedDiffIndex]
+        selectedDiffIndex = min(max(selectedDiffIndex, 0), files.count - 1)
+        let currentFile = files[selectedDiffIndex]
         let currentHunkCount = max(currentFile.hunks.count, 1)
         selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), currentHunkCount - 1)
 
@@ -900,14 +1065,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
 
-        let count = document.diffFiles.count
+        let count = files.count
         var candidate = selectedDiffIndex
         for _ in 0..<count {
             candidate = (candidate + delta + count) % count
-            let path = document.diffFiles[candidate].displayPath
+            let path = files[candidate].displayPath
             if !viewedFilePaths.contains(path) || viewedFilePaths.count >= count {
                 selectedDiffIndex = candidate
-                let nextHunkCount = max(document.diffFiles[candidate].hunks.count, 1)
+                let nextHunkCount = max(files[candidate].hunks.count, 1)
                 selectedDiffHunkIndex = delta < 0 ? nextHunkCount - 1 : 0
                 awaitingNextFileAfterLastHunk = false
                 pushCursorHistory(path)
@@ -1004,9 +1169,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         writeToActiveTerminal(text)
     }
 
-    func openQuickOpen(mode: QuickOpenMode) {
+    func openQuickOpen(mode: QuickOpenMode, initialQuery: String = "") {
         quickOpenMode = mode
-        quickOpenFilter = ""
+        quickOpenFilter = initialQuery
         selectedQuickOpenIndex = 0
         if mode == .content || mode == .recent {
             overlayMaximized = false
@@ -1018,6 +1183,47 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             quickOpenContentSearchLoading = false
         }
         showOverlay(.quickOpen)
+    }
+
+    // Cmd+B: lightweight "find usages" — grab the identifier under the review cursor in the
+    // Files/Changes code view and run a workspace-wide content search for it (reusing the
+    // find-in-files results/preview/navigation). Not a real semantic index, but enough to jump
+    // to every textual usage.
+    func findUsagesUnderCursor() {
+        guard overlayMode == .files || overlayMode == .changes else {
+            showShortcutStatus("Open a file or the Changes view first, then Cmd+B on a symbol.", title: "Find usages")
+            return
+        }
+        let host = activeInlineReviewCodeView()
+        let location = host.reviewCursorLocation ?? host.selectedRange().location
+        guard let word = identifierWord(in: host.string, at: location), word.count >= 2 else {
+            showShortcutStatus("Put the cursor on an identifier, then Cmd+B.", title: "Find usages")
+            return
+        }
+        openQuickOpen(mode: .content, initialQuery: word)
+    }
+
+    // The identifier (letters/digits/underscore run) straddling `location` in `string`, or nil.
+    private func identifierWord(in string: String, at location: Int) -> String? {
+        let ns = string as NSString
+        guard ns.length > 0 else { return nil }
+        let loc = min(max(location, 0), ns.length - 1)
+        func isIdentifier(_ unit: unichar) -> Bool {
+            guard let scalar = UnicodeScalar(unit) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
+        guard isIdentifier(ns.character(at: loc)) else {
+            return nil
+        }
+        var start = loc
+        while start > 0, isIdentifier(ns.character(at: start - 1)) {
+            start -= 1
+        }
+        var end = loc + 1
+        while end < ns.length, isIdentifier(ns.character(at: end)) {
+            end += 1
+        }
+        return ns.substring(with: NSRange(location: start, length: end - start))
     }
 
     func goToDefinition() {
@@ -1258,6 +1464,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         setActiveTerminal(id: tab.panes[next].id, focus: true)
     }
 
+    // Cycle terminal tabs within the active workspace. When the Opt+Enter send-target picker is
+    // open, keep it up and refresh its candidate rows so you can switch tabs and still arrow-pick.
+    func focusTerminalTab(delta: Int) {
+        let scopeTabs = terminalTabs(in: activeWorkspacePath)
+        guard scopeTabs.count > 1 else {
+            return
+        }
+        let currentIndex = scopeTabs.firstIndex(where: { $0.id == activeTerminalTabId }) ?? 0
+        let next = (currentIndex + delta + scopeTabs.count) % scopeTabs.count
+        let tab = scopeTabs[next]
+        let mergedActive = isMergedPromptPanelActive()
+        activeTerminalTabId = tab.id
+        setActiveTerminal(id: tab.activePaneId ?? tab.panes.first?.id, focus: !mergedActive)
+        if mergedActive {
+            selectedMergedPromptTerminalId = nil
+            resetMergedPromptTargetRows()
+            addMergedPromptTerminalTargetRows(to: mergedPromptTargetStack)
+            _ = ensureMergedPromptTerminalTarget()
+        }
+    }
+
     func renameTerminalPane() {
         guard let session = activeSession() else {
             return
@@ -1301,18 +1528,45 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         rootView.wantsLayer = true
         rootView.layer?.backgroundColor = theme.windowBackground.cgColor
         contentView.addSubview(rootView)
+
+        let statsBarEnabled = true
+        if statsBarEnabled {
+            systemStatsBar.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(systemStatsBar)
+            applySystemStatsBarTheme()
+        }
+
         NSLayoutConstraint.activate([
             rootView.topAnchor.constraint(equalTo: contentView.topAnchor),
             rootView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             rootView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             rootView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         ])
+        if statsBarEnabled {
+            NSLayoutConstraint.activate([
+                systemStatsBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+                systemStatsBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+                systemStatsBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+                systemStatsBar.heightAnchor.constraint(equalToConstant: 24)
+            ])
+        }
 
         configureRail()
         configureTerminal()
         configureOverlay()
         configureMemoSidePanel()
         configureMergedPromptSidePanel()
+    }
+
+    private func applySystemStatsBarTheme() {
+        systemStatsBar.applyColors(
+            background: theme.toolbarBackground,
+            label: theme.secondaryText,
+            positive: theme.statePositive,
+            attention: theme.stateAttention,
+            danger: theme.stateDanger,
+            separator: theme.separator
+        )
     }
 
     /// Re-apply a new active `NativeTheme` to the already-open window without a
@@ -1329,6 +1583,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
         // (a) Persistent stored views — set colors directly.
         rootView.layer?.backgroundColor = theme.windowBackground.cgColor
+        applySystemStatsBarTheme()
         railView.layer?.backgroundColor = theme.railBackground.cgColor
         // Rail action buttons: each row in railStack holds a MomentermCompactButton
         // at subviews[0]; title/shortcut labels are tracked in the stored arrays.
@@ -1477,6 +1732,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlayView.layer?.borderWidth = 1
         overlayView.layer?.cornerRadius = 8
         overlayView.isHidden = true
+        // Click-blocking modal backdrop, added BEFORE the panel so the panel sits above it.
+        // Covers the whole content so clicks outside a floating panel don't reach the
+        // terminal; clicking the backdrop dismisses the overlay.
+        overlayBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        overlayBackdrop.isHidden = true
+        overlayBackdrop.onClick = { [weak self] in
+            self?.closeOverlayAction()
+        }
+        rootView.addSubview(overlayBackdrop)
+        NSLayoutConstraint.activate([
+            overlayBackdrop.topAnchor.constraint(equalTo: rootView.topAnchor),
+            overlayBackdrop.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            overlayBackdrop.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            overlayBackdrop.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
+        ])
         rootView.addSubview(overlayView)
 
         let header = NSView()
@@ -1520,7 +1790,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         MomentermDesign.styleMinimalScrollbars(sidebarScroll)
         sidebarScroll.drawsBackground = false
         overlaySidebarScrollView = sidebarScroll
-        let sidebarDocument = NSView()
+        let sidebarDocument = MomentermFlippedView()
         sidebarDocument.translatesAutoresizingMaskIntoConstraints = false
         overlaySidebarStack.translatesAutoresizingMaskIntoConstraints = false
         overlaySidebarStack.orientation = .vertical
@@ -1546,6 +1816,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlayDiffSplitView.addArrangedSubview(codeScrollView(codePane.oldPaneCodeView))
         overlayDiffSplitView.addArrangedSubview(codeScrollView(codePane.newPaneCodeView))
         configureDiffScrollSync()
+        configureDiffLineGutters()
 
         overlayContentView.translatesAutoresizingMaskIntoConstraints = false
         overlayContentView.wantsLayer = true
@@ -1562,15 +1833,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         diffEditorToolbarStack.orientation = .horizontal
         diffEditorToolbarStack.alignment = .centerY
         diffEditorToolbarStack.spacing = 4
-        ["arrow.up", "arrow.down", "pencil", "chevron.left", "chevron.right"].forEach { symbol in
-            diffEditorToolbarStack.addArrangedSubview(diffToolbarIcon(symbol: symbol))
-        }
-        diffEditorToolbarStack.addArrangedSubview(diffToolbarControl("Side-by-side viewer", tooltip: "Diff viewer mode"))
-        diffEditorToolbarStack.addArrangedSubview(diffToolbarControl("Do not ignore", tooltip: "Whitespace handling"))
-        diffEditorToolbarStack.addArrangedSubview(diffToolbarControl("Highlight words", tooltip: "Word-level highlighting"))
-        ["xmark", "gearshape", "questionmark"].forEach { symbol in
-            diffEditorToolbarStack.addArrangedSubview(diffToolbarIcon(symbol: symbol))
-        }
+        // Only wired, functional controls: navigate changes (F7) and files. The old decorative
+        // dropdowns/icons ("Side-by-side viewer", "Do not ignore", ...) did nothing and were removed.
+        diffEditorToolbarStack.addArrangedSubview(diffToolbarActionIcon(symbol: "chevron.up", action: #selector(diffToolbarPrevHunkAction), tooltip: "Previous change (Shift+F7)"))
+        diffEditorToolbarStack.addArrangedSubview(diffToolbarActionIcon(symbol: "chevron.down", action: #selector(diffToolbarNextHunkAction), tooltip: "Next change (F7)"))
+        diffEditorToolbarStack.addArrangedSubview(diffToolbarActionIcon(symbol: "arrow.up.to.line", action: #selector(diffToolbarPrevFileAction), tooltip: "Previous file"))
+        diffEditorToolbarStack.addArrangedSubview(diffToolbarActionIcon(symbol: "arrow.down.to.line", action: #selector(diffToolbarNextFileAction), tooltip: "Next file"))
         diffEditorChromeView.addSubview(diffEditorToolbarStack)
 
         diffEditorPathLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -2121,8 +2389,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         root = standardized
         if let tab = terminalTabs(in: workspacePath).first,
            let paneId = tab.activePaneId ?? tab.panes.first?.id {
+            let reusedPaneWasElsewhere = tab.panes.first(where: { $0.id == paneId })?
+                .cwd.standardizedFileURL.path != workspacePath
             alignTab(tab, to: standardized)
             setActiveTerminal(id: paneId, focus: focus)
+            if reusedPaneWasElsewhere {
+                changeShellDirectory(paneId: paneId, to: workspacePath)
+            }
             return activeTab()?.workspacePath == workspacePath
         }
         spawnTerminal(
@@ -2580,6 +2853,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         ptyManager.write(id: id, data: data)
     }
 
+    // Reused/attached workspace terminals keep their live shell's real cwd, so when a workspace
+    // is (re)entered we cd the shell into the workspace directory — otherwise the prompt stays
+    // wherever it was (e.g. ~) even though the pane is now bound to the workspace.
+    private func changeShellDirectory(paneId: Int, to path: String) {
+        let quoted = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        writeToTerminal(id: paneId, data: "cd \(quoted)\r")
+    }
+
     private func focusTerminal() {
         guard let window = window else {
             return
@@ -2728,6 +3009,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
         if overlayMode != .hidden {
             if lowerKey == "\u{1b}" || event.keyCode == 53 {
+                // From a git-history commit diff, Esc returns to the commit log (like IntelliJ)
+                // rather than closing the panel outright.
+                if overlayMode == .changes, historyDiffOverride != nil {
+                    historyDiffOverride = nil
+                    showOverlay(.history)
+                    return true
+                }
                 closeOverlayAction()
                 return true
             }
@@ -2742,6 +3030,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
 
         if command, shift, !control, !option {
+            // Cmd+Shift+[ / ] cycles terminal tabs (works while the send-target picker is open).
+            if event.keyCode == 33 {
+                focusTerminalTab(delta: -1)
+                return true
+            }
+            if event.keyCode == 30 {
+                focusTerminalTab(delta: 1)
+                return true
+            }
             if typedKey == "?" || lowerKey == "/" || event.keyCode == 44 {
                 openMergedView(kind: "q")
                 return true
@@ -2840,7 +3137,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                     return true
                 }
             case "b":
-                goToDefinition()
+                findUsagesUnderCursor()
                 return true
             case "e":
                 openQuickOpen(mode: .recent)
@@ -3080,6 +3377,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 return true
             }
             return false
+        case 14:
+            // 'e' edits the currently selected review comment (only when one is selected, so a
+            // plain 'e' otherwise falls through).
+            if let index = selectedReviewNoteIndex {
+                editReviewNote(at: index)
+                return true
+            }
+            return false
         case 48:
             if event.modifierFlags.contains(.shift) {
                 codePane.focusOldPane(in: window)
@@ -3147,11 +3452,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func moveOverlaySelection(delta: Int) {
         switch overlayMode {
         case .changes:
-            guard let document = currentDocument, !document.diffFiles.isEmpty else { return }
-            selectedDiffIndex = (selectedDiffIndex + delta + document.diffFiles.count) % document.diffFiles.count
-            selectedDiffHunkIndex = delta < 0 ? max(document.diffFiles[selectedDiffIndex].hunks.count - 1, 0) : 0
+            let files = activeChangesDiffFiles
+            guard !files.isEmpty else { return }
+            selectedDiffIndex = (selectedDiffIndex + delta + files.count) % files.count
+            selectedDiffHunkIndex = delta < 0 ? max(files[selectedDiffIndex].hunks.count - 1, 0) : 0
             awaitingNextFileAfterLastHunk = false
-            pushCursorHistory(document.diffFiles[selectedDiffIndex].displayPath)
+            pushCursorHistory(files[selectedDiffIndex].displayPath)
             populateChangesOverlay()
         case .files:
             guard let document = activeFilesDocument(), !document.sourceFiles.isEmpty else { return }
@@ -3177,13 +3483,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func activateOverlaySelection() {
         switch overlayMode {
         case .changes:
-            guard let document = currentDocument,
-                  document.diffFiles.indices.contains(selectedDiffIndex)
-            else {
+            let files = activeChangesDiffFiles
+            guard files.indices.contains(selectedDiffIndex) else {
                 return
             }
             awaitingNextFileAfterLastHunk = false
-            renderDiffFile(document.diffFiles[selectedDiffIndex])
+            renderDiffFile(files[selectedDiffIndex])
             codePane.focusNewPane(in: window)
         case .files:
             guard let document = activeFilesDocument(),
@@ -4691,7 +4996,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return false
         }
         return font.fontName.lowercased().contains("monaco")
-            && font.pointSize >= 12.5
+            && font.pointSize >= 11
             && font.pointSize < 14
             && paragraph.minimumLineHeight >= 20
             && paragraph.lineSpacing >= 3
@@ -4751,9 +5056,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     func reviewHunkBoundaryHintIsVisibleForSmokeTest() -> Bool {
-        codePane.oldPaneString.contains("F7을 한 번 더 누르면 다음 파일로 이동합니다.")
-            && codePane.newPaneString.contains("F7을 한 번 더 누르면 다음 파일로 이동합니다.")
-            && awaitingNextFileAfterLastHunk
+        // The visible yellow banner was removed (un-IntelliJ); the "pause at the last hunk before
+        // advancing to the next file" behavior it signaled is what this now verifies.
+        awaitingNextFileAfterLastHunk
     }
 
     private func codeTextViewHasVisibleCursor(_ textView: NSTextView) -> Bool {
@@ -4764,9 +5069,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         textView.displayIfNeeded()
         let selection = textView.selectedRange()
         let nativeCaretVisible = (textView as? NativeCodeTextView)?.reviewCursorIsVisibleForSmokeTest() ?? false
+        // The cursor is the thin caret alone now — the accent line-background marker was
+        // removed (it read as an unexplained band), so visibility is asserted via the caret.
         return selection.location < storage.length
             && selection.length == 0
-            && storageContainsAnyBackground(storage, colors: [theme.accent])
             && nativeCaretVisible
     }
 
@@ -4850,12 +5156,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         else {
             return false
         }
-        return storageContainsAnyBackground(oldStorage, colors: [theme.deletionBackground])
-            && storageContainsAnyBackground(newStorage, colors: [theme.additionBackground])
+        // A changed line may be classified as pure delete/add (red/green) or as a modified pair
+        // (blue on both sides), so accept the union of diff backgrounds / inline-highlight colors.
+        return storageContainsAnyBackground(oldStorage, colors: [theme.deletionBackground, theme.modifiedBackground])
+            && storageContainsAnyBackground(newStorage, colors: [theme.additionBackground, theme.modifiedBackground])
             && storageContainsAnyBackground(oldStorage, colors: [theme.diffFocusedHunkBackground])
             && storageContainsAnyBackground(newStorage, colors: [theme.diffFocusedHunkBackground])
-            && storageContainsAnyBackground(oldStorage, colors: [theme.deletionText])
-            && storageContainsAnyBackground(newStorage, colors: [theme.additionText])
+            && storageContainsAnyBackground(oldStorage, colors: [theme.deletionText, theme.modifiedText])
+            && storageContainsAnyBackground(newStorage, colors: [theme.additionText, theme.modifiedText])
     }
 
     func fileOverlayUsesSingleCodePaneForSmokeTest() -> Bool {
@@ -5494,7 +5802,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             guard let font = value as? NSFont else {
                 return
             }
-            if font.pointSize >= 18 {
+            // Headings unified closer to the code font (H1 17 / H2 15 / H3 14 vs body 14);
+            // still verify a distinct larger heading font renders.
+            if font.pointSize >= 16 {
                 hasHeadingFont = true
                 stop.pointee = true
             }
@@ -6450,8 +6760,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 container.layer?.borderWidth = MomentermDesign.Border.emphasis
                 container.layer?.borderColor = theme.stateAttention.cgColor
             } else {
+                // The active pane is indicated by its header + the un-dimmed content; the border
+                // stays a quiet neutral separator (no gold/amber accent ring, which read as tacky).
                 container.layer?.borderWidth = hasSplitPanes ? (active ? MomentermDesign.Border.regular : MomentermDesign.Border.hairline) : 0
-                container.layer?.borderColor = (active ? theme.selectionBorder : theme.panelBorder.withAlphaComponent(0.42)).cgColor
+                container.layer?.borderColor = theme.panelBorder.withAlphaComponent(active ? 0.6 : 0.42).cgColor
             }
             pane.paneHeaderView?.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.inactiveHeaderBackground).withAlphaComponent(active ? 1.0 : 0.88).cgColor
             pane.paneStatusBarView?.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.inactiveHeaderBackground).withAlphaComponent(active ? 1.0 : 0.88).cgColor
@@ -6636,6 +6948,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             statusBar.layer = CALayer()
         }
         statusBar.layer?.backgroundColor = theme.inactiveHeaderBackground.cgColor
+        // Per-pane status bars were replaced by the single window-wide system stats bar; keep
+        // the view (constraints reference it) but collapse it to zero height and hide it.
+        statusBar.isHidden = true
         let statusFont = NativeTerminalFont.font(size: paneStatusFontSize, weight: .regular)
         let statusPath = NSTextField(labelWithString: "")
         statusPath.translatesAutoresizingMaskIntoConstraints = false
@@ -6703,7 +7018,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             statusBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            statusBar.heightAnchor.constraint(equalToConstant: paneStatusBarHeight),
+            statusBar.heightAnchor.constraint(equalToConstant: 0),
             statusPath.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 10),
             statusPath.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
             statusGit.leadingAnchor.constraint(equalTo: statusPath.trailingAnchor, constant: 10),
@@ -6721,7 +7036,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         if dimOverlay.layer == nil {
             dimOverlay.layer = CALayer()
         }
-        dimOverlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
+        dimOverlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(terminalUnfocusedDim).cgColor
         dimOverlay.isHidden = true
         container.addSubview(dimOverlay)
         NSLayoutConstraint.activate([
@@ -6901,8 +7216,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             button.lineBreakMode = .byTruncatingMiddle
             button.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: workspaceRailExpanded ? MomentermDesign.Metrics.railExpandedWidth - 16 : 28),
-                button.heightAnchor.constraint(equalToConstant: workspaceRailExpanded ? 40 : 28)
+                button.widthAnchor.constraint(equalToConstant: workspaceRailExpanded ? MomentermDesign.Metrics.railExpandedWidth - 16 : MomentermDesign.Metrics.railButtonSize),
+                button.heightAnchor.constraint(equalToConstant: workspaceRailExpanded ? 40 : MomentermDesign.Metrics.railButtonSize)
             ])
             if workspaceRailExpanded {
                 configureExpandedWorkspaceButton(button, workspace: workspace, branch: branch)
@@ -7188,14 +7503,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         // interference. Skipped when already visible (mode switches) to avoid re-flashing.
         if wasHidden {
             overlayView.alphaValue = 0
+            overlayView.wantsLayer = true
+            // Rise + fade so the panel visibly "opens" instead of popping. Layer transform is
+            // visual only (no layout/ghostty interference); reset to identity as it settles.
+            overlayView.layer?.transform = CATransform3DMakeTranslation(0, -12, 0)
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.13
+                context.duration = 0.19
                 context.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 context.allowsImplicitAnimation = true
                 overlayView.animator().alphaValue = 1
+                overlayView.layer?.transform = CATransform3DIdentity
             }
         } else {
             overlayView.alphaValue = 1
+            overlayView.layer?.transform = CATransform3DIdentity
         }
     }
 
@@ -7203,6 +7524,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         clearInlineReviewCommentViews()
         overlayMode = .hidden
         overlayView.isHidden = true
+        overlayBackdrop.isHidden = true
     }
 
     private func populateOverlay() {
@@ -7278,6 +7600,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private func setSingleCodePaneVisible(_ singlePane: Bool) {
+        // Diff gutters + their exclusion paths only apply to the side-by-side diff. Clear them so
+        // non-diff content (history summary, file source, http) isn't pushed around or overdrawn.
+        // renderDiffFile re-applies them via layoutDiffLineGutters.
+        resetDiffLineGutters()
         sourcePreviewScrollView.isHidden = true
         codePane.setOldPaneHidden(false)
         codePane.setNewPaneHidden(singlePane)
@@ -7387,6 +7713,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     private func populateChangesOverlay() {
         resetOverlaySidebar()
+        // Git-history commit diff: render the commit's files side-by-side, reusing the same
+        // sidebar rows + renderDiffFile machinery as the working-tree Changes view.
+        if let override = historyDiffOverride {
+            configureDiffEditorChromeVisibility(true)
+            overlaySubtitleLabel.stringValue = historyDiffSubtitle
+            guard !override.isEmpty else {
+                addSidebarMessage("No changes in this commit")
+                codePane.setOldContent(styledText("No changes in this commit.", color: theme.primaryText))
+                codePane.setNewString("")
+                return
+            }
+            selectedDiffIndex = min(max(selectedDiffIndex, 0), override.count - 1)
+            selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(override[selectedDiffIndex].hunks.count - 1, 0))
+            for row in diffSidebarRows(for: override, selectedIndex: selectedDiffIndex) {
+                overlaySidebarStack.addArrangedSubview(diffSidebarRowButton(row))
+            }
+            renderDiffFile(override[selectedDiffIndex])
+            ensureSelectedSidebarRowVisible(identifier: "diff:\(selectedDiffIndex)")
+            return
+        }
         guard let document = currentDocument else {
             configureDiffEditorChromeVisibility(false)
             if let root = root {
@@ -8125,7 +8471,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                         settingsInfoRow(title: "쉘", value: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", detail: "새 터미널 패널은 native PTY 로그인 쉘로 시작합니다."),
                         settingsInfoRow(title: "시작 디렉토리", value: activeTerminalCwdForSmokeTest() ?? FileManager.default.homeDirectoryForCurrentUser.path, detail: "워크스페이스가 있으면 해당 경로에서, 없으면 홈에서 시작합니다."),
                         settingsInfoRow(title: "터미널 패널", value: "\(activeTab()?.panes.count ?? 0) panes", detail: "Cmd+D와 Cmd+Shift+D는 포커스된 터미널 그룹을 분할합니다."),
-                        settingsToggleRow(title: "여유로운 간격", detail: "터미널 패널 헤더와 하단 상태 바를 더 크게 (comfortable 밀도).", isOn: terminalComfortableDensity, action: #selector(toggleTerminalDensitySetting(_:)))
+                        settingsToggleRow(title: "여유로운 간격", detail: "터미널 패널 헤더와 하단 상태 바를 더 크게 (comfortable 밀도).", isOn: terminalComfortableDensity, action: #selector(toggleTerminalDensitySetting(_:))),
+                        settingsSegmentedRow(
+                            title: "커서 모양",
+                            detail: "블록 / 바 / 밑줄. 재실행 후 적용됩니다.",
+                            labels: ["블록", "바", "밑줄"],
+                            selectedIndex: Self.terminalCaretStyles.firstIndex(of: UserDefaults.standard.string(forKey: "momenterm.terminal.cursorStyle") ?? "block") ?? 0,
+                            identifier: "settings-terminal-caret",
+                            action: #selector(selectTerminalCaretStyleSetting(_:))
+                        ),
+                        settingsToggleRow(title: "커서 깜빡임", detail: "재실행 후 적용됩니다.", isOn: (UserDefaults.standard.object(forKey: "momenterm.terminal.cursorBlink") as? Bool) ?? true, action: #selector(toggleTerminalCaretBlinkSetting(_:))),
+                        settingsSegmentedRow(
+                            title: "비포커스 창 흐림",
+                            detail: "포커스 없는 분할 팬을 얼마나 어둡게 할지. 즉시 적용됩니다.",
+                            labels: ["끄기", "약하게", "보통", "강하게"],
+                            selectedIndex: Self.terminalDimLevels.firstIndex(where: { abs($0 - terminalUnfocusedDim) < 0.001 }) ?? 2,
+                            identifier: "settings-terminal-dim",
+                            action: #selector(selectTerminalDimSetting(_:))
+                        ),
+                        settingsInfoRow(title: "배경색", value: "테마를 따름", detail: "터미널 배경/전경은 '테마' 탭의 UI 팔레트를 따릅니다. 재실행 후 적용됩니다.")
                     ]
                 )
             ]
@@ -8368,15 +8732,126 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
         selectedHistoryIndex = min(max(selectedHistoryIndex, 0), historyCommits.count - 1)
+        let shown = min(historyCommits.count, 80)
         for (index, commit) in historyCommits.enumerated().prefix(80) {
-            let object = commit.objectValue ?? [:]
-            let hash = String((object["hash"]?.stringValue ?? "").prefix(8))
-            let subject = object["subject"]?.stringValue ?? "(no subject)"
-            overlaySidebarStack.addArrangedSubview(sidebarButton(title: "\(index == selectedHistoryIndex ? ">" : " ") \(hash) \(subject)", identifier: "history:\(index)", selected: index == selectedHistoryIndex))
+            overlaySidebarStack.addArrangedSubview(historyRowButton(
+                index: index,
+                object: commit.objectValue ?? [:],
+                hasLineAbove: index > 0,
+                hasLineBelow: index < shown - 1,
+                selected: index == selectedHistoryIndex
+            ))
         }
         renderSelectedHistoryCommitSummary()
+        scrollHistoryRowToVisible()
     }
 
+    // IntelliJ-style commit row: a continuous graph rail on the left, then two text columns —
+    // the subject on top, and hash · author · date underneath. Branch/tag refs are appended.
+    private func historyRowButton(index: Int, object: [String: JSONValue], hasLineAbove: Bool, hasLineBelow: Bool, selected: Bool) -> NSButton {
+        let hash = String((object["hash"]?.stringValue ?? "").prefix(7))
+        let subject = object["subject"]?.stringValue ?? "(no subject)"
+        let author = object["author"]?.stringValue ?? ""
+        let rawDate = object["date"]?.stringValue ?? ""
+        let date = String(rawDate.replacingOccurrences(of: "T", with: " ").prefix(16))
+        let parents = object["parents"]?.arrayValue ?? []
+        let isMerge = parents.count > 1
+        let refs = (object["refs"]?.stringValue ?? "").trimmingCharacters(in: .whitespaces)
+
+        let button = NSButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier("history:\(index)")
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.wantsLayer = true
+        button.layer?.cornerRadius = MomentermDesign.Metrics.controlRadius
+        button.layer?.backgroundColor = selected ? theme.selectionBackground.cgColor : NSColor.clear.cgColor
+        button.layer?.borderColor = selected ? theme.selectionBorder.cgColor : NSColor.clear.cgColor
+        button.layer?.borderWidth = selected ? 1 : 0
+        button.toolTip = subject
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        let graph = HistoryGraphCell()
+        graph.translatesAutoresizingMaskIntoConstraints = false
+        graph.isMerge = isMerge
+        graph.hasLineAbove = hasLineAbove
+        graph.hasLineBelow = hasLineBelow
+        graph.railColor = theme.separator
+        graph.nodeColor = isMerge ? theme.stateAttention : theme.accent
+        button.addSubview(graph)
+
+        var subjectText = subject
+        if !refs.isEmpty {
+            subjectText = "⟨\(refs)⟩ " + subject
+        }
+        let subjectLabel = NSTextField(labelWithString: subjectText)
+        subjectLabel.translatesAutoresizingMaskIntoConstraints = false
+        subjectLabel.font = MomentermDesign.Fonts.codeSmall
+        subjectLabel.textColor = selected ? theme.primaryText : theme.primaryText
+        subjectLabel.lineBreakMode = .byTruncatingTail
+        subjectLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let metaLabel = NSTextField(labelWithString: "\(hash) · \(author) · \(date)")
+        metaLabel.translatesAutoresizingMaskIntoConstraints = false
+        metaLabel.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        metaLabel.textColor = theme.tertiaryText
+        metaLabel.lineBreakMode = .byTruncatingTail
+        metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let textStack = NSStackView(views: [subjectLabel, metaLabel])
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 1
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(textStack)
+
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.sidebarWidth),
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 38),
+            graph.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 2),
+            graph.topAnchor.constraint(equalTo: button.topAnchor),
+            graph.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+            graph.widthAnchor.constraint(equalToConstant: 18),
+            textStack.leadingAnchor.constraint(equalTo: graph.trailingAnchor, constant: 6),
+            textStack.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -8),
+            textStack.centerYAnchor.constraint(equalTo: button.centerYAnchor)
+        ])
+        return button
+    }
+
+    // Keeps the selected commit row in view (top when freshly opened on the newest commit).
+    private func scrollHistoryRowToVisible() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.overlaySidebarStack.layoutSubtreeIfNeeded()
+            guard let row = self.collectButtons(in: self.overlaySidebarStack)
+                .first(where: { $0.identifier?.rawValue == "history:\(self.selectedHistoryIndex)" })
+            else { return }
+            row.scrollToVisible(row.bounds)
+        }
+    }
+
+    // Loads (and caches by sha) the parsed diff files for the selected commit.
+    private func loadHistoryCommitFilesIfNeeded() {
+        guard let root = root, historyCommits.indices.contains(selectedHistoryIndex) else {
+            historyCommitFiles = []
+            historyCommitFilesSha = ""
+            return
+        }
+        let sha = historyCommits[selectedHistoryIndex].objectValue?["hash"]?.stringValue ?? ""
+        guard !sha.isEmpty else {
+            historyCommitFiles = []
+            historyCommitFilesSha = ""
+            return
+        }
+        guard sha != historyCommitFilesSha else {
+            return
+        }
+        historyCommitFiles = (try? service.commitDiffFiles(root: root, sha: sha)) ?? []
+        historyCommitFilesSha = sha
+    }
+
+    // Right panel for the selected commit: metadata + the list of changed files with
+    // +added/-removed stats (like IntelliJ's commit details). Enter renders the diff.
     private func renderSelectedHistoryCommitSummary() {
         guard historyCommits.indices.contains(selectedHistoryIndex) else {
             return
@@ -8386,29 +8861,47 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let subject = object["subject"]?.stringValue ?? "(no subject)"
         let author = object["author"]?.stringValue ?? ""
         let date = object["date"]?.stringValue ?? ""
-        codePane.setOldContent(styledText([
-            "Commit \(hash)",
-            subject,
-            "",
-            "Author: \(author)",
-            "Date: \(date)",
-            "",
-            "Press Enter to load the native commit diff."
-        ].joined(separator: "\n"), color: theme.primaryText))
+        loadHistoryCommitFilesIfNeeded()
+        let output = NSMutableAttributedString()
+        output.append(styledText("Commit \(hash)\n", color: theme.primaryText))
+        output.append(styledText("\(subject)\n\n", color: theme.primaryText))
+        output.append(styledText("Author: \(author)\nDate: \(date)\n\n", color: theme.secondaryText))
+        output.append(styledText("Changed files (\(historyCommitFiles.count))\n", color: theme.tertiaryText))
+        let mono = MomentermDesign.Fonts.codeSmall
+        for file in historyCommitFiles {
+            let row = NSMutableAttributedString()
+            row.append(NSAttributedString(string: file.displayPath, attributes: [.font: mono, .foregroundColor: theme.primaryText]))
+            row.append(NSAttributedString(string: "  +\(file.added)", attributes: [.font: mono, .foregroundColor: theme.additionText]))
+            row.append(NSAttributedString(string: " -\(file.removed)\n", attributes: [.font: mono, .foregroundColor: theme.deletionText]))
+            output.append(row)
+        }
+        output.append(styledText("\nPress Enter to view the diff.", color: theme.tertiaryText))
+        codePane.setOldContent(output)
         codePane.setNewString("")
     }
 
+    // Enter on a commit opens its diff in the side-by-side Changes view (same renderer,
+    // sidebar file list, and F7 hunk navigation as the working-tree diff), like IntelliJ.
     private func openSelectedHistoryCommit() {
-        guard let root = root, historyCommits.indices.contains(selectedHistoryIndex) else {
+        loadHistoryCommitFilesIfNeeded()
+        guard historyCommits.indices.contains(selectedHistoryIndex) else {
             return
         }
-        let sha = historyCommits[selectedHistoryIndex].objectValue?["hash"]?.stringValue ?? ""
-        guard !sha.isEmpty else {
+        guard !historyCommitFiles.isEmpty else {
+            // Merge commits (and empty commits) produce no plain diff; stay in the log.
+            codePane.setOldContent(styledText("No file changes to show for this commit.", color: theme.secondaryText))
+            codePane.setNewString("")
             return
         }
-        let detail = (try? service.commitDiff(root: root, payload: .object(["sha": .string(sha)]))) ?? .null
-        codePane.setOldContent(styledText("Commit diff loaded for \(String(sha.prefix(8)))\n\n\(detail.stableJsonString())", color: theme.primaryText))
-        codePane.setNewString("")
+        let object = historyCommits[selectedHistoryIndex].objectValue ?? [:]
+        let hash = String((object["hash"]?.stringValue ?? "").prefix(8))
+        let subject = object["subject"]?.stringValue ?? ""
+        historyDiffOverride = historyCommitFiles
+        historyDiffSubtitle = "\(hash)  \(subject)  |  \(historyCommitFiles.count) files"
+        selectedDiffIndex = 0
+        selectedDiffHunkIndex = 0
+        awaitingNextFileAfterLastHunk = false
+        showOverlay(.changes)
     }
 
     private func moveHistorySelection(delta: Int) {
@@ -9338,14 +9831,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
         let host = activeInlineReviewCodeView()
+        let cursorLocation = host.reviewCursorLocation ?? host.selectedRange().location
         let line: Int
         if overlayMode == .files {
-            line = lineNumber(in: host.string, location: host.selectedRange().location)
+            line = lineNumber(in: host.string, location: cursorLocation)
         } else {
-            line = renderedSourceLineNumber(atSelectionIn: host) ?? selectedLineNumber() ?? 1
+            line = diffGutterLineNumber(in: host, atLocation: cursorLocation) ?? selectedLineNumber() ?? 1
         }
         removeInlineReviewDraftBox(restoreCursor: true)
         selectedReviewNoteIndex = nil
+        // Open the push-down gap BEFORE positioning existing saved boxes so they land on the
+        // shifted line rects (not their pre-gap positions).
+        applyReviewGap(atVisualLine: visualLineIndex(in: host.string, atLocation: cursorLocation), gap: 118 + 12)
         refreshInlineReviewCommentBoxes()
 
         let box = NativeInlineReviewCommentBox(kind: kind, text: "", theme: theme, editable: true, selected: false)
@@ -9355,6 +9852,63 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         box.onCancel = { [weak self] in
             self?.removeInlineReviewDraftBox(restoreCursor: true)
         }
+        box.onClose = { [weak self] in
+            self?.removeInlineReviewDraftBox(restoreCursor: true)
+        }
+        host.addSubview(box)
+        inlineReviewDraftBox = box
+        inlineReviewDraftHost = host
+        inlineReviewDraftKind = kind
+        inlineReviewDraftPath = path
+        inlineReviewDraftLine = line
+        codePane.setReviewCursorHidden(true)
+        box.frame = inlineReviewBoxFrame(in: host, line: line, stackedOffset: 0, preferredHeight: 118, atLocation: cursorLocation)
+        showReviewLineHighlight(in: host, atLocation: cursorLocation)
+        box.focusEditor(in: window)
+    }
+
+    // The diff line number at a caret location, read from the gutter arrays (numbers were moved
+    // out of the text into the center gutters). Visual line index = number of newlines before
+    // the caret, which indexes the per-line gutter arrays 1:1.
+    private func diffGutterLineNumber(in host: NativeCodeTextView, atLocation location: Int) -> Int? {
+        let text = host.string as NSString
+        let loc = min(max(location, 0), text.length)
+        let visualLine = (text.substring(to: loc) as String).reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
+        let numbers = host === codePane.newPaneCodeView ? diffNewGutterNumbers : diffOldGutterNumbers
+        guard numbers.indices.contains(visualLine) else {
+            return nil
+        }
+        return numbers[visualLine]
+    }
+
+    // Re-open a saved comment as an editable box, pre-filled. Saving replaces it (remove + save).
+    private func editReviewNote(at index: Int) {
+        guard reviewNotes.indices.contains(index) else { return }
+        let note = reviewNotes[index]
+        let kind = note.kind
+        let path = note.path
+        let line = note.line ?? 1
+        let originalNote = note
+        reviewNotes.remove(at: index)
+        selectedReviewNoteIndex = nil
+        removeInlineReviewDraftBox(restoreCursor: false)
+        refreshInlineReviewCommentBoxes()
+
+        // Cancelling/closing an edit must NOT lose the comment: re-append the original text
+        // (the note was removed up-front so a Save re-adds the edited version cleanly).
+        let restoreOriginal: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            self.reviewNotes.append(originalNote)
+            self.removeInlineReviewDraftBox(restoreCursor: true)
+            self.refreshInlineReviewCommentBoxes()
+        }
+        let host = overlayMode == .files ? codePane.oldPaneCodeView : codePane.newPaneCodeView
+        let box = NativeInlineReviewCommentBox(kind: kind, text: note.text, theme: theme, editable: true, selected: false)
+        box.onSave = { [weak self, weak box] text in
+            self?.saveInlineReviewComment(kind: kind, path: path, line: line, text: text, draftBox: box)
+        }
+        box.onCancel = restoreOriginal
+        box.onClose = restoreOriginal
         host.addSubview(box)
         inlineReviewDraftBox = box
         inlineReviewDraftHost = host
@@ -9406,7 +9960,84 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return true
     }
 
+    // Subtle full-width highlight on the code line a comment targets. It's a low-alpha,
+    // click-through overlay (MomentermPassthroughView) sitting above the text but below the
+    // comment box, so text stays readable and drag-select still works.
+    private func showReviewLineHighlight(in host: NativeCodeTextView, atLocation location: Int) {
+        clearReviewLineHighlight()
+        guard let rect = host.reviewCursorRectForOverlay(at: location) ?? host.reviewCursorRectForOverlay() else {
+            return
+        }
+        let highlight = MomentermPassthroughView()
+        highlight.wantsLayer = true
+        highlight.layer?.backgroundColor = theme.accent.withAlphaComponent(0.14).cgColor
+        highlight.frame = NSRect(x: 0, y: rect.minY, width: max(host.bounds.width, rect.maxX), height: rect.height)
+        host.addSubview(highlight, positioned: .below, relativeTo: nil)
+        reviewLineHighlightView = highlight
+    }
+
+    private func clearReviewLineHighlight() {
+        reviewLineHighlightView?.removeFromSuperview()
+        reviewLineHighlightView = nil
+    }
+
+    private func visualLineIndex(in string: String, atLocation location: Int) -> Int {
+        let ns = string as NSString
+        let loc = min(max(location, 0), ns.length)
+        return (ns.substring(to: loc) as String).reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
+    }
+
+    // Opens a bottom gap under the given visual line in BOTH diff panes (kept aligned) so a
+    // comment box can sit below the code without covering it. Reloads the gutters for the shift.
+    private func applyReviewGap(atVisualLine visualLine: Int, gap: CGFloat) {
+        clearReviewGaps()
+        guard overlayMode == .changes else { return }
+        for pane in [codePane.oldPaneCodeView, codePane.newPaneCodeView] {
+            guard let storage = pane.textStorage else { continue }
+            let text = pane.string as NSString
+            var location = 0
+            var index = 0
+            while index < visualLine, location < text.length {
+                location = NSMaxRange(text.lineRange(for: NSRange(location: location, length: 0)))
+                index += 1
+            }
+            guard location < text.length else { continue }
+            let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
+            let original = storage.attribute(.paragraphStyle, at: lineRange.location, effectiveRange: nil) as? NSParagraphStyle
+            let style = (original?.mutableCopy() as? NSMutableParagraphStyle)
+                ?? (MomentermDesign.codeParagraphStyle().mutableCopy() as? NSMutableParagraphStyle)
+                ?? NSMutableParagraphStyle()
+            style.paragraphSpacing = gap
+            storage.addAttribute(.paragraphStyle, value: style, range: lineRange)
+            reviewGapRestores.append((storage, lineRange, original))
+        }
+        reloadDiffGutterCaches()
+    }
+
+    private func clearReviewGaps() {
+        guard !reviewGapRestores.isEmpty else { return }
+        // Reset paragraph style across each affected storage rather than per stored range: a diff
+        // re-render replaces the content and invalidates ranges, which used to leak the gap
+        // spacing. Every diff line shares codeParagraphStyle, so a blanket reset is equivalent.
+        var storages: [NSTextStorage] = []
+        for entry in reviewGapRestores where !storages.contains(where: { $0 === entry.storage }) {
+            storages.append(entry.storage)
+        }
+        for storage in storages where storage.length > 0 {
+            storage.addAttribute(.paragraphStyle, value: MomentermDesign.codeParagraphStyle(), range: NSRange(location: 0, length: storage.length))
+        }
+        reviewGapRestores.removeAll()
+        reloadDiffGutterCaches()
+    }
+
+    private func reloadDiffGutterCaches() {
+        oldLineGutter.reload(numbers: diffOldGutterNumbers)
+        newLineGutter.reload(numbers: diffNewGutterNumbers)
+    }
+
     private func removeInlineReviewDraftBox(restoreCursor: Bool) {
+        clearReviewLineHighlight()
+        clearReviewGaps()
         inlineReviewDraftBox?.removeFromSuperview()
         inlineReviewDraftBox = nil
         inlineReviewDraftHost = nil
@@ -9500,20 +10131,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 selected: selectedReviewNoteIndex == index
             )
             box.identifier = NSUserInterfaceItemIdentifier("review-note:\(index)")
+            let noteIndex = index
+            box.onClose = { [weak self] in
+                guard let self = self, self.reviewNotes.indices.contains(noteIndex) else { return }
+                self.reviewNotes.remove(at: noteIndex)
+                self.selectedReviewNoteIndex = nil
+                self.refreshInlineReviewCommentBoxes()
+            }
+            box.onEdit = { [weak self] in
+                self?.editReviewNote(at: noteIndex)
+            }
             host.addSubview(box)
             box.frame = inlineReviewBoxFrame(in: host, line: line, stackedOffset: offset, preferredHeight: 74)
             inlineReviewCommentViews.append(box)
         }
     }
 
-    private func inlineReviewBoxFrame(in host: NativeCodeTextView, line: Int, stackedOffset: Int, preferredHeight: CGFloat) -> NSRect {
-        let location = renderedCodeLineLocation(in: host.string, preferredLine: line)
+    private func inlineReviewBoxFrame(in host: NativeCodeTextView, line: Int, stackedOffset: Int, preferredHeight: CGFloat, atLocation: Int? = nil) -> NSRect {
+        // atLocation (the live caret) takes precedence so a new draft opens right under the
+        // cursor. Saved comments pass nil and are placed by their stored line number. Diff line
+        // numbers now live in the gutter, so the old parse-from-text path can't be used here.
+        let location = atLocation ?? renderedCodeLineLocation(in: host.string, preferredLine: line)
         let cursorRect = host.reviewCursorRectForOverlay(at: location)
             ?? host.reviewCursorRectForOverlay()
             ?? NSRect(x: MomentermDesign.Metrics.codeTextInset.width, y: MomentermDesign.Metrics.codeTextInset.height, width: 2, height: 18)
         let horizontalPadding: CGFloat = 14
-        let width = min(max(host.bounds.width - horizontalPadding * 2, 280), 520)
-        let x = min(max(cursorRect.minX, horizontalPadding), max(horizontalPadding, host.bounds.width - width - horizontalPadding))
+        // Keep the box clear of the center line-number gutter so it never covers the numbers;
+        // align its left edge with where the code text starts.
+        let leftInset: CGFloat = overlayMode == .changes ? diffGutterWidth + 6 : horizontalPadding
+        let width = min(max(host.bounds.width - leftInset - horizontalPadding, 280), 520)
+        let x = min(max(cursorRect.minX, leftInset), max(leftInset, host.bounds.width - width - horizontalPadding))
         let y = cursorRect.maxY + 6 + CGFloat(stackedOffset) * (preferredHeight + 6)
         return NSRect(x: x, y: y, width: width, height: preferredHeight)
     }
@@ -9521,6 +10168,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func updateInlineReviewSelectionForCursor(in textView: NativeCodeTextView) {
         selectedReviewNoteIndex = reviewNoteIndexAtCursor(in: textView)
         refreshInlineReviewCommentBoxes()
+        // The review cursor sits on the selected note's line, so highlight there (else clear).
+        if selectedReviewNoteIndex != nil {
+            let location = textView.reviewCursorLocation ?? textView.selectedRange().location
+            showReviewLineHighlight(in: textView, atLocation: location)
+        } else {
+            clearReviewLineHighlight()
+        }
     }
 
     private func reviewNoteIndexAtCursor(in textView: NativeCodeTextView) -> Int? {
@@ -9604,8 +10258,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func selectedFilePath() -> String? {
         switch overlayMode {
         case .changes:
-            guard let document = currentDocument else { return nil }
-            return document.diffFiles.indices.contains(selectedDiffIndex) ? document.diffFiles[selectedDiffIndex].displayPath : document.diffFiles.first?.displayPath
+            let files = activeChangesDiffFiles
+            guard !files.isEmpty else { return nil }
+            return files.indices.contains(selectedDiffIndex) ? files[selectedDiffIndex].displayPath : files.first?.displayPath
         case .files:
             guard let document = activeFilesDocument() else { return nil }
             return document.sourceFiles.indices.contains(selectedSourceIndex) ? document.sourceFiles[selectedSourceIndex].path : document.sourceFiles.first?.path
@@ -9738,6 +10393,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         )
     }
 
+    // Files and Changes are docked IDE-style (VS Code): the panel fills the content area edge to
+    // edge (right of the rail, over the terminal) instead of floating with an inset + card chrome.
+    private var dockedOverlayModeActive: Bool {
+        overlayMode == .files || overlayMode == .changes
+    }
+
     private func applyOverlayMaximizedState() {
         let edgeConstraints = [
             overlayTopConstraint,
@@ -9758,7 +10419,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             NSLayoutConstraint.activate(compactConstraints)
         } else {
             NSLayoutConstraint.deactivate(compactConstraints)
-            let padding = overlayMaximized ? 0 : MomentermDesign.Metrics.panelOuterPadding
+            // Docked (Files/Changes) and maximized both fill edge-to-edge (padding 0); other
+            // full-panel overlays keep the floating inset.
+            let docked = overlayMaximized || dockedOverlayModeActive
+            let padding = docked ? 0 : MomentermDesign.Metrics.panelOuterPadding
             overlayTopConstraint?.constant = padding
             overlayLeadingConstraint?.constant = padding
             overlayTrailingConstraint?.constant = -padding
@@ -9766,6 +10430,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             NSLayoutConstraint.activate(edgeConstraints)
         }
 
+        // Docked panels drop the rounded card corners, but KEEP the hairline border so they
+        // read as a framed region consistent with the terminal panes' white-line border. Only a
+        // fully-maximized (rail hidden) panel goes fully borderless.
+        let seamless = dockedOverlayModeActive || overlayMaximized
+        overlayView.layer?.cornerRadius = seamless ? 0 : MomentermDesign.Radius.medium
+        overlayView.layer?.borderWidth = overlayMaximized ? 0 : 1
+        overlayView.layer?.borderColor = theme.panelBorder.cgColor
+
+        // Only floating (compact) panels need the click-blocking backdrop; full/maximized
+        // overlays already cover the content and must leave the rail interactive.
+        overlayBackdrop.isHidden = !compactOverlayModeActive
         railView.isHidden = overlayMaximized
         window?.contentView?.layoutSubtreeIfNeeded()
     }
@@ -9871,41 +10546,74 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private func settingsSection(title: String, rows: [NSView]) -> NSView {
+        let width = MomentermDesign.Metrics.settingsContentWidth
         let stack = NSStackView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 0
+        stack.spacing = 8
         stack.identifier = NSUserInterfaceItemIdentifier("settings-section-\(title)")
 
-        // Settings group header as a small ALL-CAPS eyebrow — the refined-industrial
-        // section marker. Quiet secondary tone keeps it structural, not shouty.
-        let header = NSTextField(labelWithString: "")
-        MomentermDesign.styleEyebrowLabel(header, text: title, color: theme.secondaryText)
-        header.translatesAutoresizingMaskIntoConstraints = false
-        header.heightAnchor.constraint(equalToConstant: 44).isActive = true
-        header.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
-        stack.addArrangedSubview(header)
+        // Show the section eyebrow only when it adds information — i.e. when it differs from the
+        // big intro title (which is the category name). This drops the redundant "터미널 / 터미널"
+        // stack the user flagged, while keeping meaningful sub-labels like "프롬프트 합본".
+        if title != selectedSettingsCategory.title {
+            let header = NSTextField(labelWithString: "")
+            MomentermDesign.styleEyebrowLabel(header, text: title, color: theme.secondaryText)
+            header.translatesAutoresizingMaskIntoConstraints = false
+            header.heightAnchor.constraint(equalToConstant: 26).isActive = true
+            header.widthAnchor.constraint(equalToConstant: width).isActive = true
+            stack.addArrangedSubview(header)
+        }
+
+        // Grouped rows sit in a single rounded, elevated card (macOS System Settings feel)
+        // instead of floating flush on the panel — clearer grouping, softer overall look.
+        let card = NSView()
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.wantsLayer = true
+        card.layer?.backgroundColor = theme.surfaceElevated.cgColor
+        card.layer?.cornerRadius = 12
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = theme.separator.cgColor
+        card.layer?.masksToBounds = true
+
+        let rowStack = NSStackView()
+        rowStack.translatesAutoresizingMaskIntoConstraints = false
+        rowStack.orientation = .vertical
+        rowStack.alignment = .leading
+        rowStack.spacing = 0
         for (index, row) in rows.enumerated() {
-            stack.addArrangedSubview(row)
+            rowStack.addArrangedSubview(row)
             if index < rows.count - 1 {
-                stack.addArrangedSubview(settingsDivider())
+                rowStack.addArrangedSubview(settingsDivider())
             }
         }
+        card.addSubview(rowStack)
+        NSLayoutConstraint.activate([
+            card.widthAnchor.constraint(equalToConstant: width),
+            rowStack.topAnchor.constraint(equalTo: card.topAnchor, constant: 6),
+            rowStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -6),
+            rowStack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            rowStack.trailingAnchor.constraint(equalTo: card.trailingAnchor)
+        ])
+        stack.addArrangedSubview(card)
+
         let spacer = NSView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        spacer.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
+        spacer.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        spacer.widthAnchor.constraint(equalToConstant: width).isActive = true
         stack.addArrangedSubview(spacer)
-        stack.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
+        stack.widthAnchor.constraint(equalToConstant: width).isActive = true
         return stack
     }
 
     private func settingsInfoRow(title: String, value: String, detail: String) -> NSView {
         let row = settingsRowBase(title: title, detail: detail)
+        // Technical values (shell path, cwd) read cleaner in a muted monospace, like macOS
+        // System Settings' secondary value column — not a loud bold white.
         let valueLabel = NSTextField(labelWithString: value)
-        valueLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        valueLabel.textColor = theme.primaryText
+        valueLabel.font = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        valueLabel.textColor = theme.secondaryText
         valueLabel.alignment = .right
         valueLabel.lineBreakMode = .byTruncatingMiddle
         valueLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -10086,9 +10794,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         button.translatesAutoresizingMaskIntoConstraints = false
         button.wantsLayer = true
         button.layer?.cornerRadius = 9
-        button.layer?.backgroundColor = selected ? theme.accent.withAlphaComponent(0.14).cgColor : NSColor.clear.cgColor
-        button.layer?.borderColor = selected ? theme.accent.cgColor : NSColor.clear.cgColor
-        button.layer?.borderWidth = selected ? 1 : 0
+        // Selected item: a soft accent fill only — no loud gold outline (macOS / Linear style).
+        button.layer?.backgroundColor = selected ? theme.accent.withAlphaComponent(0.16).cgColor : NSColor.clear.cgColor
+        button.layer?.borderWidth = 0
 
         let imageView = NSImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -10144,23 +10852,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let newOutput = NSMutableAttributedString()
         let language = languageForPath(file.newPath.isEmpty ? file.oldPath : file.newPath)
         configureDiffEditorChrome(for: file)
+        // Room for the center gutters is carved from the INNER edge via exclusion paths
+        // (set in layoutDiffLineGutters), so the outer horizontal inset stays ~0 — otherwise a
+        // symmetric textContainerInset also wastes the same width on the outer edge (the black
+        // margins the user saw). Vertical inset only.
+        codePane.setOldInset(NSSize(width: 0, height: MomentermDesign.Metrics.codeTextInset.height))
+        codePane.setNewInset(NSSize(width: 0, height: MomentermDesign.Metrics.codeTextInset.height))
+        diffOldGutterNumbers.removeAll(keepingCapacity: true)
+        diffNewGutterNumbers.removeAll(keepingCapacity: true)
 
         selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(file.hunks.count - 1, 0))
         for (hunkIndex, hunk) in file.hunks.enumerated() {
             let isFocusedHunk = hunkIndex == selectedDiffHunkIndex
             let focusedBackground = isFocusedHunk ? theme.diffFocusedHunkBackground : nil
             let emptyBackground = isFocusedHunk ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
-            if awaitingNextFileAfterLastHunk, hunkIndex == selectedDiffHunkIndex {
-                appendHunkNavigationHint(to: oldOutput)
-                appendHunkNavigationHint(to: newOutput)
-            }
+            // The F7-at-last-hunk "pause before next file" behavior stays (awaitingNextFileAfterLastHunk),
+            // but the yellow banner it used to draw was un-IntelliJ clutter and is now omitted.
             var index = 0
             while index < hunk.lines.count {
                 let line = hunk.lines[index]
                 switch line.kind {
                 case .context:
-                    appendCodeLine(number: line.oldNumber, text: line.text, to: oldOutput, color: theme.codeText, background: focusedBackground, language: language)
-                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.codeText, background: focusedBackground, language: language)
+                    appendCodeLine(number: line.oldNumber, text: line.text, to: oldOutput, color: theme.codeText, background: focusedBackground, pane: .old, language: language)
+                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.codeText, background: focusedBackground, pane: .new, language: language)
                     index += 1
                 case .deletion:
                     let start = index
@@ -10176,8 +10890,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                     }
                     if additions.isEmpty {
                         for deletion in deletions {
-                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: theme.deletionBackground, language: language)
-                            appendCodeLine(number: nil, text: "", to: newOutput, color: theme.codeText, background: emptyBackground)
+                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: theme.deletionBackground, pane: .old, language: language)
+                            appendCodeLine(number: nil, text: "", to: newOutput, color: theme.codeText, background: emptyBackground, pane: .new)
                         }
                     } else {
                         let count = max(deletions.count, additions.count)
@@ -10185,32 +10899,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                             let deletion = deletions.indices.contains(offset) ? deletions[offset] : nil
                             let addition = additions.indices.contains(offset) ? additions[offset] : nil
                             if let deletion = deletion {
+                                // Paired deletion+addition = a *modified* line: IntelliJ tints both
+                                // sides blue, with the changed word in a stronger blue.
                                 appendCodeLine(
                                     number: deletion.oldNumber,
                                     text: deletion.text,
                                     to: oldOutput,
-                                    color: theme.deletionText,
-                                    background: theme.deletionBackground,
+                                    color: theme.modifiedText,
+                                    background: theme.modifiedBackground,
+                                    pane: .old,
                                     language: language,
                                     inlineHighlight: addition.flatMap { changedTextRange(in: deletion.text, comparedTo: $0.text) },
-                                    inlineHighlightColor: theme.deletionText.withAlphaComponent(0.36)
+                                    inlineHighlightColor: theme.modifiedText.withAlphaComponent(0.45)
                                 )
                             } else {
-                                appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground)
+                                appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground, pane: .old)
                             }
                             if let addition = addition {
                                 appendCodeLine(
                                     number: addition.newNumber,
                                     text: addition.text,
                                     to: newOutput,
-                                    color: theme.additionText,
-                                    background: theme.additionBackground,
+                                    color: theme.modifiedText,
+                                    background: theme.modifiedBackground,
+                                    pane: .new,
                                     language: language,
                                     inlineHighlight: deletion.flatMap { changedTextRange(in: addition.text, comparedTo: $0.text) },
-                                    inlineHighlightColor: theme.additionText.withAlphaComponent(0.32)
+                                    inlineHighlightColor: theme.modifiedText.withAlphaComponent(0.45)
                                 )
                             } else {
-                                appendCodeLine(number: nil, text: "", to: newOutput, color: theme.codeText, background: emptyBackground)
+                                appendCodeLine(number: nil, text: "", to: newOutput, color: theme.codeText, background: emptyBackground, pane: .new)
                             }
                         }
                     }
@@ -10218,12 +10936,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                         index += 1
                     }
                 case .addition:
-                    appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground)
-                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.additionText, background: theme.additionBackground, language: language)
+                    appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground, pane: .old)
+                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.additionText, background: theme.additionBackground, pane: .new, language: language)
                     index += 1
                 case .meta:
                     appendLine(line.text, to: oldOutput, color: theme.hunkText, background: focusedBackground)
                     appendLine(line.text, to: newOutput, color: theme.hunkText, background: focusedBackground)
+                    diffOldGutterNumbers.append(nil)
+                    diffNewGutterNumbers.append(nil)
                     index += 1
                 }
             }
@@ -10232,6 +10952,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         if file.binary && file.hunks.isEmpty {
             appendLine("Binary file changed", to: oldOutput, color: theme.secondaryText, background: theme.emptyDiffBackground)
             appendLine("Binary file changed", to: newOutput, color: theme.secondaryText, background: theme.emptyDiffBackground)
+            diffOldGutterNumbers.append(nil)
+            diffNewGutterNumbers.append(nil)
         }
 
         codePane.setOldContent(oldOutput)
@@ -10240,6 +10962,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         codePane.scrollNewToTop()
         placeDiffHunkCursor(for: file)
         balanceOverlayDiffSplit()
+        layoutDiffLineGutters(oldNumbers: diffOldGutterNumbers, newNumbers: diffNewGutterNumbers)
         refreshInlineReviewCommentBoxes()
     }
 
@@ -10267,15 +10990,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let branch = currentDocument?.branch ?? ""
         let revision = branch.isEmpty ? "worktree" : branch
         return "\(revision)  \(path)"
-    }
-
-    private func appendHunkNavigationHint(to output: NSMutableAttributedString) {
-        appendLine(
-            "       마지막 변경입니다. F7을 한 번 더 누르면 다음 파일로 이동합니다.",
-            to: output,
-            color: theme.secondaryText,
-            background: theme.hunkBackground.withAlphaComponent(0.72)
-        )
     }
 
     private func placeDiffHunkCursor(for file: DiffFile) {
@@ -10494,11 +11208,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
         let boundedLocation = min(max(location, 0), storage.length)
-        let lineRange = (textView.string as NSString).lineRange(for: NSRange(location: boundedLocation, length: 0))
-        if lineRange.location < storage.length, lineRange.length > 0 {
-            let cursorMarkerLength = min(7, lineRange.length, storage.length - lineRange.location)
-            storage.addAttribute(.backgroundColor, value: theme.accent.withAlphaComponent(0.18), range: NSRange(location: lineRange.location, length: cursorMarkerLength))
-        }
+        // The cursor is shown by the thin caret (drawReviewCursor) alone — no line-start
+        // background marker, which read as an unexplained colored band at the top of files.
         textView.setSelectedRange(NSRange(location: boundedLocation, length: 0))
         (textView as? NativeCodeTextView)?.reviewCursorLocation = boundedLocation
         textView.scrollRangeToVisible(NSRange(location: boundedLocation, length: 0))
@@ -10719,27 +11430,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         nameLabel.lineBreakMode = .byTruncatingMiddle
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        // Single line: name + review badges inline (they used to wrap onto a second row and
+        // overlap the file name). The name truncates to make room; badges hug their content.
         let topLine = NSStackView()
         topLine.orientation = .horizontal
         topLine.alignment = .centerY
-        topLine.spacing = 4
+        topLine.spacing = 5
         topLine.translatesAutoresizingMaskIntoConstraints = false
         topLine.addArrangedSubview(nameLabel)
-
-        let reviewBadgeLine = NSStackView()
-        reviewBadgeLine.orientation = .horizontal
-        reviewBadgeLine.alignment = .centerY
-        reviewBadgeLine.spacing = 4
-        reviewBadgeLine.translatesAutoresizingMaskIntoConstraints = false
         if row.viewed {
-            reviewBadgeLine.addArrangedSubview(diffReviewBadgeLabel("VIEWED", color: theme.additionText))
+            topLine.addArrangedSubview(diffReviewBadgeLabel("VIEWED", color: theme.additionText))
         }
         if row.questionCount > 0 {
-            reviewBadgeLine.addArrangedSubview(diffReviewBadgeLabel("Q\(row.questionCount)", color: theme.accent))
+            topLine.addArrangedSubview(diffReviewBadgeLabel("Q\(row.questionCount)", color: theme.accent))
         }
         if row.changeRequestCount > 0 {
-            reviewBadgeLine.addArrangedSubview(diffReviewBadgeLabel("CR\(row.changeRequestCount)", color: theme.deletionText))
+            topLine.addArrangedSubview(diffReviewBadgeLabel("CR\(row.changeRequestCount)", color: theme.deletionText))
         }
+        topLine.setHuggingPriority(.defaultLow, for: .horizontal)
 
         let textStack = NSStackView()
         textStack.orientation = .vertical
@@ -10747,9 +11455,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         textStack.spacing = 0
         textStack.translatesAutoresizingMaskIntoConstraints = false
         textStack.addArrangedSubview(topLine)
-        if !reviewBadgeLine.arrangedSubviews.isEmpty {
-            textStack.addArrangedSubview(reviewBadgeLine)
-        }
 
         let additionsLabel = diffSidebarStatsLabel(
             identifier: "diff-stat-additions",
@@ -11065,6 +11770,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private func openChangesView(from directory: URL) {
+        historyDiffOverride = nil
         let standardized = directory.standardizedFileURL
         if activeWorkspacePath == nil, let repoRoot = service.gitRoot(from: standardized) {
             openWorkspace(repoRoot, revealReview: true, attachActiveTab: true, announce: true)
@@ -11243,7 +11949,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         tab.workspacePath = standardized.path
         tab.cwd = standardized
         for pane in tab.panes where activeDirectoryPath == nil || pane.cwd.standardizedFileURL.path == activeDirectoryPath {
+            let wasElsewhere = pane.cwd.standardizedFileURL.path != standardized.path
             pane.cwd = standardized
+            if wasElsewhere {
+                changeShellDirectory(paneId: pane.id, to: standardized.path)
+            }
         }
         activeWorkspacePath = standardized.path
     }
@@ -11398,11 +12108,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private func apply(document: ReviewDocument) {
+        // The 1.5s live-reload timer calls this every tick while the review overlay is open. Skip
+        // re-populating when the review data is byte-for-byte unchanged, otherwise the diff is
+        // re-rendered every 1.5s — a visible flicker. Only genuine changes trigger a repopulate.
+        let unchanged = currentDocument?.signature == document.signature
         currentDocument = document
         if let root = root {
             window?.title = "Momenterm - \(root.lastPathComponent)"
         }
-        if overlayMode != .hidden {
+        if overlayMode != .hidden && !unchanged {
             populateOverlay()
         }
     }
@@ -11419,21 +12133,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // that resolves cwd/branch/dirty off the main thread. The app owning these means they
     // survive resize/split and never depend on the user's shell prompt configuration.
     private func startStatusBarTimers() {
+        // Per-pane status bars were removed in favor of the single window-wide system stats bar
+        // (which drives its own timer). The old per-pane cadence spawned lsof + git per visible
+        // pane every 2.5s; leaving it off removes that subprocess overhead entirely.
         statusClockTimer?.invalidate()
-        statusClockTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.updateAllStatusClocks()
-        }
-        statusClockTimer?.tolerance = 0.2
-        // The cwd/git resolver spawns lsof + git per visible pane. Skip it under smoke/test
-        // mode so those subprocesses don't add timing jitter to the deterministic smokes.
-        guard !Self.statePersistenceDisabled else {
-            return
-        }
+        statusClockTimer = nil
         paneStatusTimer?.invalidate()
-        paneStatusTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
-            self?.refreshVisiblePaneStatuses()
-        }
-        paneStatusTimer?.tolerance = 0.5
+        paneStatusTimer = nil
     }
 
     private static let statusClockFormatter: DateFormatter = {
@@ -12157,7 +12863,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func showMergedPromptSidePanel(kind: String) {
         let normalizedKind = kind == "c" ? "c" : "q"
         let wasHidden = mergedPromptSidePanel.isHidden
-        hideOverlay()
+        // Keep any open Changes/Files view — the merged prompt is a right-edge side panel that
+        // sits alongside it (like the memo panel), not a replacement for it.
         saveCurrentPromptMemoText()
         memoSidePanel.isHidden = true
         mergedPromptSidePanelKind = normalizedKind
@@ -12434,6 +13141,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return compactButtonContainer(button, size: 18)
     }
 
+    // A wired variant of diffToolbarIcon: a real clickable button for the diff header.
+    private func diffToolbarActionIcon(symbol: String, action: Selector, tooltip: String) -> NSView {
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        let button = MomentermCompactButton(title: image == nil ? symbol : "", target: self, action: action)
+        button.compactSize = NSSize(width: 18, height: 18)
+        button.bezelStyle = .regularSquare
+        button.controlSize = .small
+        button.isBordered = false
+        button.image = image
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = theme.secondaryText
+        button.toolTip = tooltip
+        return compactButtonContainer(button, size: 18)
+    }
+
+    @objc private func diffToolbarNextHunkAction() { selectReviewTarget(delta: 1) }
+    @objc private func diffToolbarPrevHunkAction() { selectReviewTarget(delta: -1) }
+    @objc private func diffToolbarNextFileAction() { moveOverlaySelection(delta: 1) }
+    @objc private func diffToolbarPrevFileAction() { moveOverlaySelection(delta: -1) }
+
     private func diffToolbarControl(_ title: String, tooltip: String) -> NSView {
         let button = MomentermCompactButton(title: title, target: nil, action: nil)
         let width: CGFloat = title == "Side-by-side viewer" ? 116 : 92
@@ -12454,8 +13182,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     private func configureCodeTextView(_ textView: NSTextView) {
         MomentermDesign.styleCodeTextView(textView, background: theme.codeBackground, foreground: theme.codeText)
+        // A visible drag-selection highlight: without an explicit selection background the diff
+        // panes' drag-select produced no visible feedback, so selecting text "did nothing".
+        textView.selectedTextAttributes = [
+            .backgroundColor: theme.selectionBackground.withAlphaComponent(0.9)
+        ]
         if let codeTextView = textView as? NativeCodeTextView {
-            codeTextView.reviewCursorColor = theme.accent
+            codeTextView.reviewCursorColor = theme.primaryText
             codeTextView.onKeyDown = { [weak self] event in
                 self?.handleShortcut(event) ?? false
             }
@@ -12492,6 +13225,58 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
     }
 
+    private func configureDiffLineGutters() {
+        oldLineGutter.alignRight = true
+        oldLineGutter.codeTextView = codePane.oldPaneCodeView
+        oldLineGutter.textColor = theme.tertiaryText
+        oldLineGutter.autoresizingMask = [.minXMargin, .height]
+        codePane.oldPaneCodeView.addSubview(oldLineGutter)
+
+        newLineGutter.alignRight = false
+        newLineGutter.codeTextView = codePane.newPaneCodeView
+        newLineGutter.textColor = theme.tertiaryText
+        newLineGutter.autoresizingMask = [.maxXMargin, .height]
+        codePane.newPaneCodeView.addSubview(newLineGutter)
+    }
+
+    // After a diff renders, position the gutters against the center divider and size them to
+    // the (now laid-out) text views so the line numbers cover the full scroll height.
+    // Clears diff gutter state so the shared code panes render normally for non-diff content.
+    private func resetDiffLineGutters() {
+        oldLineGutter.isHidden = true
+        newLineGutter.isHidden = true
+        codePane.oldPaneCodeView.textContainer?.exclusionPaths = []
+        codePane.newPaneCodeView.textContainer?.exclusionPaths = []
+    }
+
+    private func layoutDiffLineGutters(oldNumbers: [Int?], newNumbers: [Int?]) {
+        oldLineGutter.isHidden = false
+        newLineGutter.isHidden = false
+        // Frames depend on the panes' laid-out size, which settles after balanceOverlayDiffSplit;
+        // position on the next tick so bounds are final, then let autoresizing track resizes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let oldView = self.codePane.oldPaneCodeView
+            let newView = self.codePane.newPaneCodeView
+            let width = self.diffGutterWidth
+            let tall: CGFloat = 1_000_000
+            // Carve the gutter strip out of the text only on the INNER edge, so code never
+            // underlaps the numbers but the outer edge keeps just a small padding.
+            oldView.textContainer?.lineFragmentPadding = 6
+            newView.textContainer?.lineFragmentPadding = 6
+            oldView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: max(oldView.bounds.width - width, 0), y: 0, width: width, height: tall))]
+            newView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: tall))]
+            // Old pane: gutter hugs the right edge (toward the center divider).
+            self.oldLineGutter.frame = NSRect(x: max(oldView.bounds.width - width, 0), y: 0, width: width, height: max(oldView.bounds.height, 0))
+            // New pane: gutter hugs the left edge (toward the center divider).
+            self.newLineGutter.frame = NSRect(x: 0, y: 0, width: width, height: max(newView.bounds.height, 0))
+            // Compute line positions once (after the exclusion paths reflow the text), then draw
+            // from the cache — never query layout inside draw().
+            self.oldLineGutter.reload(numbers: oldNumbers)
+            self.newLineGutter.reload(numbers: newNumbers)
+        }
+    }
+
     private func styledText(_ value: String, color: NSColor) -> NSAttributedString {
         NSAttributedString(string: value, attributes: [
             .font: MomentermDesign.Fonts.code,
@@ -12510,12 +13295,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         to output: NSMutableAttributedString,
         color: NSColor,
         background: NSColor?,
+        pane: DiffGutterPane,
         language: String? = nil,
         inlineHighlight: NSRange? = nil,
         inlineHighlightColor: NSColor? = nil
     ) {
-        let lineNumber = number.map { String(format: "%5d", $0) } ?? "     "
-        appendDiffAttributed("\(lineNumber)  ", to: output, color: theme.secondaryText, background: background)
+        // Line numbers live in the center gutters now (drawn by DiffLineNumberGutter), not
+        // embedded in the text. Record this line's number so the gutter stays in lockstep.
+        switch pane {
+        case .old: diffOldGutterNumbers.append(number)
+        case .new: diffNewGutterNumbers.append(number)
+        }
         let rendered: NSMutableAttributedString
         if let language = language, !text.isEmpty {
             rendered = NSMutableAttributedString(attributedString: NativeSyntaxHighlighter.highlight(text, language: language, theme: theme))
@@ -12719,6 +13509,50 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         terminalComfortableDensity = sender.state == .on
         UserDefaults.standard.set(terminalComfortableDensity, forKey: "momenterm.density.comfortable")
         rebuildTerminalPanes()
+        populateSettingsOverlay()
+    }
+
+    // MARK: - Terminal customization settings
+
+    private static let terminalCaretStyles = ["block", "bar", "underline"]
+    private static let terminalDimLevels: [CGFloat] = [0, 0.12, 0.22, 0.35]
+
+    private func settingsSegmentedRow(title: String, detail: String, labels: [String], selectedIndex: Int, identifier: String, action: Selector) -> NSView {
+        let row = settingsRowBase(title: title, detail: detail)
+        let segmented = NSSegmentedControl(labels: labels, trackingMode: .selectOne, target: self, action: action)
+        segmented.identifier = NSUserInterfaceItemIdentifier(identifier)
+        segmented.selectedSegment = min(max(selectedIndex, 0), labels.count - 1)
+        segmented.translatesAutoresizingMaskIntoConstraints = false
+        row.addArrangedSubview(segmented)
+        return row
+    }
+
+    private func applyUnfocusedDimToPanes() {
+        let color = NSColor.black.withAlphaComponent(terminalUnfocusedDim).cgColor
+        for tab in terminalTabs {
+            for pane in tab.panes {
+                pane.dimOverlayView?.layer?.backgroundColor = color
+            }
+        }
+    }
+
+    @objc private func selectTerminalCaretStyleSetting(_ sender: NSSegmentedControl) {
+        let index = min(max(sender.selectedSegment, 0), Self.terminalCaretStyles.count - 1)
+        UserDefaults.standard.set(Self.terminalCaretStyles[index], forKey: "momenterm.terminal.cursorStyle")
+        populateSettingsOverlay()
+    }
+
+    @objc private func toggleTerminalCaretBlinkSetting(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "momenterm.terminal.cursorBlink")
+        populateSettingsOverlay()
+    }
+
+    @objc private func selectTerminalDimSetting(_ sender: NSSegmentedControl) {
+        let index = min(max(sender.selectedSegment, 0), Self.terminalDimLevels.count - 1)
+        terminalUnfocusedDim = Self.terminalDimLevels[index]
+        UserDefaults.standard.set(Double(terminalUnfocusedDim), forKey: "momenterm.terminal.unfocusedDim")
+        applyUnfocusedDimToPanes()
+        applyTerminalPaneSelectionStyles()
         populateSettingsOverlay()
     }
 

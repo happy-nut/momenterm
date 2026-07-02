@@ -227,6 +227,18 @@ final class NativeReviewCore {
         return .array(commits)
     }
 
+    // Parsed DiffFiles for a commit, so the history view can render the commit diff with the
+    // same red/green renderer as Changes (instead of dumping JSON) and list changed files.
+    func commitDiffFiles(root: URL, sha: String) throws -> [DiffFile] {
+        guard sha.range(of: #"^[0-9a-fA-F]{4,64}$"#, options: .regularExpression) != nil else {
+            return []
+        }
+        let repo = try gitClient.repoRoot(from: root)
+        let diffText = try gitClient.run(root: repo, arguments: ["show", sha, "--no-color", "--pretty=format:"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return UnifiedDiffParser.parse(diffText)
+    }
+
     func commitDiff(root: URL, payload: JSONValue?) throws -> JSONValue {
         let repo: URL
         do {

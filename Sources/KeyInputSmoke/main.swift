@@ -144,6 +144,41 @@ private func verifyTerminalRenderer() {
     }
 
     verifyHangulImeBackspaceRouting()
+    verifyHangulJamoImeRouting()
+}
+
+// Regression: a Hangul jamo keystroke must be handed to the input system (interpretKeyEvents)
+// so the IME composes it, NOT committed raw via the fast paths. Before the fix, jamo were sent
+// to the PTY one at a time, decomposing "면접" into "ㅁㅕㄴㅈㅓㅂ".
+private func verifyHangulJamoImeRouting() {
+    let jamo = "\u{3141}" // ㅁ
+    guard let event = NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: 0,
+        context: nil,
+        characters: jamo,
+        charactersIgnoringModifiers: jamo,
+        isARepeat: false,
+        keyCode: 0
+    ) else {
+        fputs("key input smoke failed: could not build Hangul jamo key event\n", stderr)
+        exit(1)
+    }
+    let textView = NativeTerminalTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
+    var captured: [String] = []
+    textView.onInput = { captured.append($0) }
+    textView.keyDown(with: event)
+    // Routing is the contract: the jamo must go through interpretKeyEvents (the input system),
+    // not the raw committed-text fast paths. Whether a character is then produced depends on
+    // whether a live IME is present, so only the routing is asserted here.
+    _ = captured
+    guard textView.lastKeyRoutingForSmokeTest == "ime-hangul" else {
+        fputs("key input smoke failed: Hangul jamo committed raw instead of routing to the IME: routing=\(textView.lastKeyRoutingForSmokeTest)\n", stderr)
+        exit(1)
+    }
 }
 
 // Regression: during a Hangul IME composition (marked text), Backspace must defer to

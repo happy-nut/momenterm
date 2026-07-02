@@ -83,6 +83,8 @@ enum MomentermDesign {
             let deletionBackground: NSColor
             let additionText: NSColor
             let additionBackground: NSColor
+            let modifiedText: NSColor
+            let modifiedBackground: NSColor
             let fileTreeVcsModified: NSColor
             let fileTreeVcsAdded: NSColor
             let fileTreeVcsStaged: NSColor
@@ -123,6 +125,17 @@ enum MomentermDesign {
         static let lightTeal = rgb(79, 138, 139)       // #4F8A8B
         static let lightInk = rgb(7, 3, 26)            // #07031A
 
+        // Diff highlight base colors — conventional red (removed) / green (added), like
+        // IntelliJ, instead of the app accent. Used for line backgrounds (low alpha) and
+        // intra-line word ranges (higher alpha).
+        static let diffRed = rgb(229, 83, 80)    // #E55350
+        static let diffGreen = rgb(98, 175, 98)  // #62AF62
+        static let diffBlue = rgb(104, 151, 187) // #6897BB (IntelliJ modified)
+        // Darcula diff editor line backgrounds: muted, solid tints so only the changed word
+        // (inline highlight) reads strongly. Added=green, deleted=red, modified=blue.
+        static let diffAddedBackground = rgb(41, 68, 54)      // #294436
+        static let diffDeletedBackground = rgb(74, 45, 45)    // #4A2D2D
+        static let diffModifiedBackground = rgb(43, 58, 82)   // #2B3A52
         static let intellijVcsModified = rgb(104, 151, 187)  // #6897BB
         static let intellijVcsStaged = rgb(98, 151, 85)      // #629755
         static let intellijVcsUntracked = rgb(204, 102, 110) // #CC666E
@@ -193,19 +206,27 @@ enum MomentermDesign {
                 codeHeaderBackground: dark.secondary,
                 selectionBackground: ui.accent.withAlphaComponent(0.30),
                 selectionBorder: ui.accent.withAlphaComponent(0.82),
-                activeHeaderBackground: blend(ui.accent, into: ui.secondary, amount: 0.18),
+                // Active pane header: a neutral lightening of the header, NOT an accent (gold)
+                // blend — the amber tint read as a tacky yellow highlight on the focused terminal.
+                activeHeaderBackground: blend(ui.foreground, into: ui.secondary, amount: 0.12),
                 inactiveHeaderBackground: ui.secondary,
                 hunkText: dark.accent,
                 hunkBackground: dark.accent.withAlphaComponent(0.13),
                 diffEditorToolbarBackground: dark.secondary,
                 diffEditorPathBackground: dark.secondary,
-                diffFocusedHunkBackground: dark.secondaryAccent.withAlphaComponent(0.24),
+                // Neutral faint highlight for the focused hunk (IntelliJ doesn't green-wash a
+                // whole hunk). Was secondaryAccent (teal/green) which tinted added-file panes green.
+                diffFocusedHunkBackground: dark.foreground.withAlphaComponent(0.05),
                 diffGutterBackground: dark.primary,
                 diffCenterGutterBackground: dark.secondary,
-                deletionText: blend(dark.accent, into: dark.foreground, amount: 0.48),
-                deletionBackground: dark.accent.withAlphaComponent(0.16),
-                additionText: blend(dark.secondaryAccent, into: dark.foreground, amount: 0.68),
-                additionBackground: dark.secondaryAccent.withAlphaComponent(0.18),
+                // Line backgrounds stay muted (Darcula); the saturated *Text colors are reused
+                // as the stronger inline changed-word highlight in renderDiffFile.
+                deletionText: diffRed,
+                deletionBackground: diffDeletedBackground,
+                additionText: diffGreen,
+                additionBackground: diffAddedBackground,
+                modifiedText: diffBlue,
+                modifiedBackground: diffModifiedBackground,
                 fileTreeVcsModified: intellijVcsModified,
                 fileTreeVcsAdded: intellijVcsStaged,
                 fileTreeVcsStaged: intellijVcsStaged,
@@ -444,7 +465,7 @@ enum MomentermDesign {
 
     enum Metrics {
         static let sidebarWidth: CGFloat = 214
-        static let railCollapsedWidth: CGFloat = 44
+        static let railCollapsedWidth: CGFloat = 38
         static let railExpandedWidth: CGFloat = 236
         static let sidebarRowHeight: CGFloat = 22
         static let fileTreeRowHeight: CGFloat = 20
@@ -457,7 +478,7 @@ enum MomentermDesign {
         static let panelOuterPadding: CGFloat = 14
         static let panelInnerPadding: CGFloat = 10
         static let sidebarGutter: CGFloat = Spacing.space3
-        static let railButtonSize: CGFloat = 28
+        static let railButtonSize: CGFloat = 26
         static let iconButtonSize: CGFloat = 22
         static let terminalTabHeight: CGFloat = 22
         static let terminalTextInset = NSSize(width: 12, height: 8)
@@ -487,7 +508,7 @@ enum MomentermDesign {
         static let settingsMaxWidth: CGFloat = 1180
         static let settingsMinHeight: CGFloat = 560
         static let settingsMaxHeight: CGFloat = 760
-        static let settingsRowHeight: CGFloat = 62
+        static let settingsRowHeight: CGFloat = 52
         static let settingsPromptTextWidth: CGFloat = 350
         static let sidebarSelectionScrollMarginRatio: CGFloat = 0.15
         static let codeMinimumLineHeight: CGFloat = 20
@@ -500,7 +521,7 @@ enum MomentermDesign {
         static let sidebar = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         static let sidebarSelected = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
         static let code = NSFont(name: "Monaco", size: 14) ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-        static let diffCode = NSFont(name: "Monaco", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        static let diffCode = NSFont(name: "Monaco", size: 11.5) ?? NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
         static let codeSmall = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         /// A single typographic token: size + weight + optional letter-spacing.

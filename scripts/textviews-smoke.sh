@@ -13,6 +13,7 @@ swiftc -typecheck \
   "$ROOT/Sources/Momenterm/NativeDesignSystem.swift" \
   "$ROOT/Sources/Momenterm/NativeTheme.swift" \
   "$ROOT/Sources/Momenterm/NativeAnsiRenderer.swift" \
+  "$ROOT/Sources/Momenterm/MomentermKeyDebug.swift" \
   "$ROOT/Sources/Momenterm/NativeTextViews.swift" \
   -framework AppKit
 

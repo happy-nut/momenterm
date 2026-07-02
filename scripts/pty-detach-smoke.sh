@@ -12,6 +12,7 @@ mkdir -p "$OUT"
 swiftc \
   -o "$OUT/momenterm-pty-detach-smoke" \
   "$ROOT/Sources/Momenterm/Errors.swift" \
+  "$ROOT/Sources/Momenterm/MomentermKeyDebug.swift" \
   "$ROOT/Sources/Momenterm/NativePtyManager.swift" \
   "$ROOT/Sources/PtyDetachSmoke/main.swift"
 

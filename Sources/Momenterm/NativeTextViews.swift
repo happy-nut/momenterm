@@ -255,6 +255,8 @@ final class NativeCodeTextView: NSTextView {
 final class NativeInlineReviewCommentBox: NSView {
     var onSave: ((String) -> Void)?
     var onCancel: (() -> Void)?
+    var onClose: (() -> Void)?
+    var onEdit: (() -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let shortcutLabel = NSTextField(labelWithString: "Cmd+Enter")
@@ -310,6 +312,17 @@ final class NativeInlineReviewCommentBox: NSView {
         scrollView.borderType = .noBorder
         MomentermDesign.styleMinimalScrollbars(scrollView)
 
+        // Close (x) always; Edit (pencil) only on a saved comment so it can be re-opened.
+        let closeButton = Self.iconButton(symbol: "xmark", fallback: "✕", tint: theme.secondaryText)
+        closeButton.target = self
+        closeButton.action = #selector(closeTapped)
+        addSubview(closeButton)
+        let editButton = Self.iconButton(symbol: "pencil", fallback: "✎", tint: theme.secondaryText)
+        editButton.target = self
+        editButton.action = #selector(editTapped)
+        editButton.isHidden = editable
+        addSubview(editButton)
+
         addSubview(titleLabel)
         addSubview(shortcutLabel)
         addSubview(scrollView)
@@ -317,14 +330,39 @@ final class NativeInlineReviewCommentBox: NSView {
         NSLayoutConstraint.activate([
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            closeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            closeButton.widthAnchor.constraint(equalToConstant: 18),
+            closeButton.heightAnchor.constraint(equalToConstant: 18),
+            editButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            editButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -6),
+            editButton.widthAnchor.constraint(equalToConstant: 18),
+            editButton.heightAnchor.constraint(equalToConstant: 18),
             shortcutLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            shortcutLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            shortcutLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
             scrollView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
     }
+
+    private static func iconButton(symbol: String, fallback: String, tint: NSColor) -> NSButton {
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: symbol)
+        let button = NSButton(title: image == nil ? fallback : "", target: nil, action: nil)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.image = image
+        button.imagePosition = image == nil ? .noImage : .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.contentTintColor = tint
+        button.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        return button
+    }
+
+    @objc private func closeTapped() { onClose?() }
+    @objc private func editTapped() { onEdit?() }
 
     func focusEditor(in window: NSWindow?) {
         guard editable else { return }
@@ -413,7 +451,10 @@ final class NativeTerminalTextView: NSTextView {
     private(set) var lastKeyRoutingForSmokeTest = ""
 
     func configure(theme: NativeTheme) {
-        isEditable = false
+        // Must be editable for AppKit to activate the text input context / IME. With it off, the
+        // Hangul IME never composes (no marked text) and jamo commit raw. insertText/doCommand are
+        // overridden to forward to the PTY without mutating storage, so nothing echoes into the view.
+        isEditable = true
         isSelectable = true
         isRichText = true
         allowsUndo = false
@@ -435,7 +476,12 @@ final class NativeTerminalTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         onFocus?()
-        return true
+        // Must defer to super so AppKit activates the text input context. Returning true
+        // without it leaves the view first responder but with no live input session, so the
+        // Hangul IME never engages (marked text is never set) and every jamo is committed raw
+        // — decomposing "면접" into "ㅁㅕㄴㅈㅓㅂ". This bit only when focus was set
+        // programmatically (makeFirstResponder), which workspace/tab switches now do more often.
+        return super.becomeFirstResponder()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -468,6 +514,16 @@ final class NativeTerminalTextView: NSTextView {
             interpretKeyEvents([event])
             return
         }
+        // Hangul (and other composing scripts) must reach the input system BEFORE the
+        // committed-text fast paths, or the first jamo of a syllable is committed raw and the
+        // IME never starts composing — decomposing "면접" into "ㅁㅕㄴㅈㅓㅂ". Defer these to
+        // interpretKeyEvents so the input context can compose them.
+        if eventStartsIMEComposition(event) {
+            lastKeyRoutingForSmokeTest = "ime-hangul"
+            momentermKeyDebug("TV.keyDown hangul jamo -> interpretKeyEvents")
+            interpretKeyEvents([event])
+            return
+        }
         if let sequence = sequence(for: event, flags: flags) {
             lastKeyRoutingForSmokeTest = "sequence"
             momentermKeyDebug("TV.keyDown -> sequence=\(Array(sequence.unicodeScalars.map { $0.value }))")
@@ -486,6 +542,22 @@ final class NativeTerminalTextView: NSTextView {
         }
         lastKeyRoutingForSmokeTest = "interpret"
         interpretKeyEvents([event])
+    }
+
+    // True when the keystroke carries Hangul (jamo or syllables). Such keys must go through the
+    // input context so the IME can compose; the committed-text fast paths would otherwise send
+    // each jamo to the PTY raw.
+    private func eventStartsIMEComposition(_ event: NSEvent) -> Bool {
+        guard let text = event.characters, !text.isEmpty else {
+            return false
+        }
+        return text.unicodeScalars.contains { scalar in
+            (0x1100...0x11FF).contains(scalar.value)   // Hangul Jamo
+                || (0x3130...0x318F).contains(scalar.value)   // Hangul Compatibility Jamo
+                || (0xA960...0xA97F).contains(scalar.value)   // Hangul Jamo Extended-A
+                || (0xAC00...0xD7A3).contains(scalar.value)   // Hangul Syllables
+                || (0xD7B0...0xD7FF).contains(scalar.value)   // Hangul Jamo Extended-B
+        }
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {

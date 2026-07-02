@@ -61,6 +61,8 @@ struct NativeTheme {
     let deletionBackground: NSColor
     let additionText: NSColor
     let additionBackground: NSColor
+    let modifiedText: NSColor
+    let modifiedBackground: NSColor
     let fileTreeVcsModified: NSColor
     let fileTreeVcsAdded: NSColor
     let fileTreeVcsStaged: NSColor
@@ -130,6 +132,8 @@ struct NativeTheme {
         deletionBackground = ui.deletionBackground
         additionText = ui.additionText
         additionBackground = ui.additionBackground
+        modifiedText = ui.modifiedText
+        modifiedBackground = ui.modifiedBackground
         fileTreeVcsModified = ui.fileTreeVcsModified
         fileTreeVcsAdded = ui.fileTreeVcsAdded
         fileTreeVcsStaged = ui.fileTreeVcsStaged

@@ -29,10 +29,20 @@ private final class MomentermGhosttyRuntime {
         }
         self.config = config
 
-        // Monaco has no Hangul glyphs, so Korean text renders as tofu (□) unless we
-        // supply a fallback chain. Ghostty treats repeated font-family entries as an
-        // ordered fallback list: glyphs missing from Monaco resolve against the
-        // Korean-capable fonts below (all ship with macOS by default).
+        // Terminal appearance is customizable: background/foreground follow the selected
+        // app theme, and the caret style/blink come from Settings. All read at startup
+        // (the ghostty runtime config is a singleton), each with a fallback to the historical
+        // default so a missing/invalid value is a zero-regression no-op. Monaco has no Hangul
+        // glyphs, so the repeated font-family entries give a Korean-capable fallback chain.
+        let bgHex = Self.hexString(ThemeManager.shared.theme.terminalBackground) ?? "222831"
+        let fgHex = Self.hexString(ThemeManager.shared.theme.terminalForeground) ?? "eeeeee"
+        // Neutral grey selection (theme secondary surface) instead of the old olive/yellow
+        // highlight, which read as unnecessary emphasis.
+        let selectionHex = Self.hexString(ThemeManager.shared.theme.secondarySurface) ?? "393e46"
+        let allowedCursorStyles = ["block", "bar", "underline"]
+        let cursorStyle = UserDefaults.standard.string(forKey: "momenterm.terminal.cursorStyle")
+            .flatMap { allowedCursorStyles.contains($0) ? $0 : nil } ?? "block"
+        let cursorBlink = (UserDefaults.standard.object(forKey: "momenterm.terminal.cursorBlink") as? Bool) ?? true
         let contents = """
         font-family = Monaco
         font-family = Apple SD Gothic Neo
@@ -40,11 +50,11 @@ private final class MomentermGhosttyRuntime {
         font-size = 13
         font-thicken = true
         scrollback-limit = 1048576
-        background = 222831
-        foreground = eeeeee
-        selection-background = 4d4a2f
-        cursor-style = block
-        cursor-style-blink = true
+        background = \(bgHex)
+        foreground = \(fgHex)
+        selection-background = \(selectionHex)
+        cursor-style = \(cursorStyle)
+        cursor-style-blink = \(cursorBlink)
         window-padding-x = 4
         window-padding-y = 3
         background-opacity = 1
@@ -69,6 +79,18 @@ private final class MomentermGhosttyRuntime {
         if let app = app {
             ghostty_app_set_color_scheme(app, GHOSTTY_COLOR_SCHEME_DARK)
         }
+    }
+
+    // "rrggbb" for a ghostty config color line. Returns nil if the color can't be
+    // expressed in sRGB, so the caller keeps the historical hardcoded default.
+    private static func hexString(_ color: NSColor) -> String? {
+        guard let rgb = color.usingColorSpace(.sRGB) else {
+            return nil
+        }
+        let r = Int((rgb.redComponent * 255).rounded())
+        let g = Int((rgb.greenComponent * 255).rounded())
+        let b = Int((rgb.blueComponent * 255).rounded())
+        return String(format: "%02x%02x%02x", r, g, b)
     }
 
     func register(_ view: LibGhosttyTerminalView) {

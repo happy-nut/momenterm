@@ -154,7 +154,7 @@ enum NativeMarkdownRenderer {
             output.append(rendered)
             if index < lines.count - 1 {
                 output.append(NSAttributedString(string: "\n", attributes: [
-                    .font: NSFont.systemFont(ofSize: 13),
+                    .font: markdownBodyFont,
                     .foregroundColor: theme.primaryText
                 ]))
             }
@@ -177,19 +177,19 @@ enum NativeMarkdownRenderer {
 
         if let checkbox = checklistLine(line) {
             let rendered = "\(checkbox.checked ? "☑" : "☐") \(checkbox.text)"
-            return inline(rendered, font: NSFont.systemFont(ofSize: 13), color: theme.primaryText, theme: theme)
+            return inline(rendered, font: markdownBodyFont, color: theme.primaryText, theme: theme)
         }
 
         if let bullet = bulletLine(line) {
-            return inline("• \(bullet)", font: NSFont.systemFont(ofSize: 13), color: theme.primaryText, theme: theme)
+            return inline("• \(bullet)", font: markdownBodyFont, color: theme.primaryText, theme: theme)
         }
 
         if trimmed.hasPrefix(">") {
             let text = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
-            return inline(String(text), font: NSFontManager.shared.convert(NSFont.systemFont(ofSize: 13), toHaveTrait: .italicFontMask), color: theme.secondaryText, theme: theme)
+            return inline(String(text), font: NSFontManager.shared.convert(markdownBodyFont, toHaveTrait: .italicFontMask), color: theme.secondaryText, theme: theme)
         }
 
-        return inline(line, font: NSFont.systemFont(ofSize: 13), color: theme.primaryText, theme: theme)
+        return inline(line, font: markdownBodyFont, color: theme.primaryText, theme: theme)
     }
 
     private static func headingLevel(in line: String) -> Int {
@@ -204,14 +204,19 @@ enum NativeMarkdownRenderer {
         return 0
     }
 
+    // Body matches the code font (Monaco 14) so Markdown files sit at the same size and
+    // family as every other file in the code pane. Headings step up only modestly for
+    // emphasis (monospaced so the family stays consistent) instead of the old 22/18/15.
+    static let markdownBodyFont = MomentermDesign.Fonts.code
+
     private static func headingFont(level: Int) -> NSFont {
         switch level {
         case 1:
-            return NSFont.systemFont(ofSize: 22, weight: .bold)
+            return NSFont.monospacedSystemFont(ofSize: 17, weight: .semibold)
         case 2:
-            return NSFont.systemFont(ofSize: 18, weight: .bold)
+            return NSFont.monospacedSystemFont(ofSize: 15, weight: .semibold)
         default:
-            return NSFont.systemFont(ofSize: 15, weight: .semibold)
+            return NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
         }
     }
 
@@ -273,7 +278,7 @@ enum NativeMarkdownRenderer {
 
     private static func baseAttributes(theme: NativeTheme) -> [NSAttributedString.Key: Any] {
         [
-            .font: NSFont.systemFont(ofSize: 13),
+            .font: markdownBodyFont,
             .foregroundColor: theme.primaryText
         ]
     }
