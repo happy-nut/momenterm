@@ -35,10 +35,27 @@ Current classifications:
 ## UI/Parity Gate
 
 - [ ] Darcula visual tokens and syntax classes stay covered by `scripts/parity-smoke.sh`.
+- [ ] Design-system token scales (spacing, typography, radius/border/elevation, semantic
+      colors in `NativeDesignSystem.swift`) stay covered by `scripts/design-system-smoke.sh`,
+      which pins their structural invariants (monotonic spacing, descending type ladder,
+      ordered radius/border/elevation ramps, and semantic-color contracts). The pinned
+      Darcula anchor values remain covered separately by `scripts/theme-smoke.sh`.
 - [ ] Monacori build-output parity stays covered by `scripts/ab-parity-smoke.sh` for modified, staged, untracked text, untracked binary, rename/delete/image, review signatures, source metadata, and HTTP environment fixtures.
 - [ ] Monacori-like action exposure stays covered: no topbar global action row, icon activity rail, guarded Quick Open binding, and icon-only contextual controls.
 - [ ] New keyboard shortcuts require parity smoke coverage.
 - [ ] New settings require persistence checks through the native settings bridge.
+- [ ] Terminal pane split layout persistence (pane count, split direction, split
+      groups) stays covered by `scripts/pane-layout-smoke.sh`, which pins the pure
+      `PaneLayoutCodec` encode→JSON→decode round-trip in isolation. The persisted
+      per-tab record keeps its legacy top-level `sessionKey`/`name`/`cwd` mirror so
+      readers that predate split support (`terminal-tabs.v2` without a `panes` key)
+      still restore a single working pane.
+- [ ] Scrollback restore is best-effort via tmux only: each pane spawns with
+      `tmux new-session -A -s <sessionKey>` (`NativePtyManager`), so on relaunch
+      every restored pane reattaches to its own tmux session and tmux retains that
+      session's scrollback. No separate scrollback file is written; when tmux is
+      unavailable (`MOMENTERM_ENABLE_TMUX_PERSISTENCE` unset) scrollback restore is
+      out of scope.
 
 ## Performance Gate
 
@@ -60,8 +77,10 @@ Run these before claiming a behavior or cleanup change is complete:
 ./scripts/ab-parity-smoke.sh
 ./scripts/smoke.sh /path/to/repo
 ./scripts/pty-smoke.sh /path/to/repo
+./scripts/pane-layout-smoke.sh
 ./scripts/perf-smoke.sh
 ./scripts/package-app.sh
+./scripts/package-dmg.sh
 ./scripts/launch-smoke.sh /path/to/repo
 git diff --check
 ```

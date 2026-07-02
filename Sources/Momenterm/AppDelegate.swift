@@ -1,21 +1,64 @@
 import AppKit
 import UserNotifications
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, MomentermSocketServerDelegate {
     private var controllers: [MainWindowController] = []
     private var ignoreWhitespaceItem: NSMenuItem?
+    private let socketServer = MomentermSocketServer()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMenu()
         if Bundle.main.bundleURL.pathExtension == "app" {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+            let center = UNUserNotificationCenter.current()
+            center.delegate = self
+            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
-        _ = openWindow(initialRoot: parseRepoArgument())
+        let launchOptions = parseLaunchOptions()
+        _ = openWindow(initialRoot: launchOptions.root, initialTerminalCommand: launchOptions.terminalCommand)
         NSApp.activate(ignoringOtherApps: true)
+        // Best-effort: the app stays fully usable if the control socket can't start.
+        socketServer.delegate = self
+        socketServer.start()
+    }
+
+    // MARK: - MomentermSocketServerDelegate
+
+    func socketServer(_ server: MomentermSocketServer, didReceive command: MomentermCommand) {
+        controlCommandController()?.handleControlCommand(command)
+    }
+
+    /// Picks the window that scripted commands should act on: the key/main
+    /// window if any, otherwise the most recently opened one.
+    private func controlCommandController() -> MainWindowController? {
+        focusedController() ?? controllers.last
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        if #available(macOS 11.0, *) {
+            completionHandler([.banner, .sound, .list])
+        } else {
+            completionHandler([.alert, .sound])
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Remove the control socket so a stale file doesn't block the next launch.
+        socketServer.stop()
+        // `NSApplication.terminate` (Cmd+Q) may `exit()` before window controllers'
+        // `deinit` runs, so detach terminal sessions here — while keeping the
+        // processes alive — so a later launch can reattach via tmux. Never kill on
+        // quit: that would make tmux recovery impossible.
+        for window in NSApp.windows {
+            (window.windowController as? MainWindowController)?.detachTerminalSessionsForQuit()
+        }
     }
 
     @objc private func openFolder() {
@@ -43,8 +86,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focusedController()?.openMergedView(kind: "c")
     }
 
+    @objc private func showChanges() {
+        focusedController()?.toggleChangesView()
+    }
+
+    @objc private func showFiles() {
+        focusedController()?.toggleFilesView()
+    }
+
+    @objc private func showHistory() {
+        focusedController()?.toggleHistory()
+    }
+
+    @objc private func showSettings() {
+        focusedController()?.openSettings()
+    }
+
+    @objc private func nextChange() {
+        focusedController()?.selectReviewTarget(delta: 1)
+    }
+
+    @objc private func previousChange() {
+        focusedController()?.selectReviewTarget(delta: -1)
+    }
+
     @objc private func showPromptMemo() {
         focusedController()?.openMemo()
+    }
+
+    @objc private func openWorkspaceShortcut() {
+        focusedController()?.workspaceShortcut()
+    }
+
+    @objc private func openWorkspacePickerShortcut() {
+        focusedController()?.openWorkspacePicker()
+    }
+
+    @objc private func forgetCurrentWorkspace() {
+        focusedController()?.forgetCurrentWorkspace()
+    }
+
+    @objc private func toggleOverlayMaximized() {
+        focusedController()?.toggleOverlayMaximized()
+    }
+
+    @objc private func goToLine() {
+        focusedController()?.openGoToLinePrompt()
+    }
+
+    @objc private func copyLocation() {
+        focusedController()?.copyCurrentLocation()
+    }
+
+    @objc private func quickOpenFiles() {
+        focusedController()?.openQuickOpen(mode: .all)
+    }
+
+    @objc private func findInFiles() {
+        focusedController()?.openQuickOpen(mode: .content)
+    }
+
+    @objc private func recentFiles() {
+        focusedController()?.openQuickOpen(mode: .recent)
+    }
+
+    @objc private func goToDefinition() {
+        focusedController()?.goToDefinition()
+    }
+
+    @objc private func jumpToSymbol() {
+        focusedController()?.jumpToSymbolUnderCursor()
+    }
+
+    @objc private func navigateBack() {
+        focusedController()?.navigateCursorHistory(delta: -1)
+    }
+
+    @objc private func navigateForward() {
+        focusedController()?.navigateCursorHistory(delta: 1)
+    }
+
+    @objc private func previousSourceTab() {
+        focusedController()?.cycleSourceTab(delta: -1)
+    }
+
+    @objc private func nextSourceTab() {
+        focusedController()?.cycleSourceTab(delta: 1)
+    }
+
+    @objc private func runContextualAction() {
+        focusedController()?.runContextualAction()
+    }
+
+    @objc private func copySelection() {
+        focusedController()?.copySelection(nil)
+    }
+
+    @objc private func pasteSelection() {
+        focusedController()?.pasteSelection(nil)
+    }
+
+    @objc private func selectAllContent() {
+        focusedController()?.selectAllContent(nil)
     }
 
     @objc private func toggleIgnoreWhitespace(_ sender: NSMenuItem) {
@@ -60,8 +203,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focusedController()?.toggleTerminal()
     }
 
+    @objc private func newTerminalTab() {
+        focusedController()?.newTerminalTab()
+    }
+
     @objc private func splitTerminal() {
-        focusedController()?.splitTerminal()
+        focusedController()?.splitTerminalPane()
+    }
+
+    @objc private func splitTerminalBelow() {
+        focusedController()?.splitTerminalPaneBelow()
     }
 
     @objc private func focusPreviousTerminalPane() {
@@ -76,8 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focusedController()?.renameTerminalPane()
     }
 
-    private func openWindow(initialRoot: URL?) -> MainWindowController {
-        let controller = MainWindowController(initialRoot: initialRoot)
+    private func openWindow(initialRoot: URL?, initialTerminalCommand: String? = nil) -> MainWindowController {
+        let controller = MainWindowController(initialRoot: initialRoot, initialTerminalCommand: initialTerminalCommand)
         controllers.append(controller)
         controller.showWindow(nil)
         return controller
@@ -121,17 +272,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(targetedItem("Copy", #selector(copySelection), "c"))
+        editMenu.addItem(targetedItem("Paste", #selector(pasteSelection), "v"))
+        editMenu.addItem(targetedItem("Select All", #selector(selectAllContent), "a"))
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
         let reviewItem = NSMenuItem()
         let reviewMenu = NSMenu(title: "Review")
-        reviewMenu.addItem(targetedItem("All questions", #selector(showAllQuestions), "/", [.control, .command, .shift]))
-        reviewMenu.addItem(targetedItem("All change requests", #selector(showAllChangeRequests), ".", [.control, .command, .shift]))
+        reviewMenu.addItem(targetedItem("Changes", #selector(showChanges), "0", [.command]))
+        reviewMenu.addItem(targetedItem("Files", #selector(showFiles), "1", [.command]))
+        reviewMenu.addItem(targetedItem("History", #selector(showHistory), "9", [.command]))
+        reviewMenu.addItem(NSMenuItem.separator())
+        reviewMenu.addItem(targetedItem("Next Change", #selector(nextChange), functionKey(0xF70A), []))
+        reviewMenu.addItem(targetedItem("Previous Change", #selector(previousChange), functionKey(0xF70A), [.shift]))
+        reviewMenu.addItem(targetedItem("Files View", #selector(showFiles), functionKey(0xF70B), []))
+        reviewMenu.addItem(NSMenuItem.separator())
+        reviewMenu.addItem(targetedItem("Quick Open", #selector(quickOpenFiles), "f", [.command]))
+        reviewMenu.addItem(targetedItem("Find in Files", #selector(findInFiles), "F", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("Recent Files", #selector(recentFiles), "e", [.command]))
+        reviewMenu.addItem(targetedItem("Go to Line", #selector(goToLine), "l", [.command]))
+        reviewMenu.addItem(targetedItem("Copy File:Line", #selector(copyLocation), "k", [.command]))
+        reviewMenu.addItem(targetedItem("Go to Definition", #selector(goToDefinition), "b", [.command]))
+        reviewMenu.addItem(targetedItem("Jump to Symbol", #selector(jumpToSymbol), functionKey(0xF701), [.command]))
+        reviewMenu.addItem(targetedItem("Navigate Back", #selector(navigateBack), "[", [.command]))
+        reviewMenu.addItem(targetedItem("Navigate Forward", #selector(navigateForward), "]", [.command]))
+        reviewMenu.addItem(targetedItem("Previous Source Tab", #selector(previousSourceTab), "[", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("Next Source Tab", #selector(nextSourceTab), "]", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("Run Contextual Action", #selector(runContextualAction), "\r", [.command]))
+        reviewMenu.addItem(NSMenuItem.separator())
+        reviewMenu.addItem(targetedItem("All questions", #selector(showAllQuestions), "/", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("All change requests", #selector(showAllChangeRequests), ".", [.command, .shift]))
         reviewMenu.addItem(targetedItem("Prompt memo", #selector(showPromptMemo), "N", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("Maximize Panel", #selector(toggleOverlayMaximized), "'", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("Select Workspace", #selector(openWorkspacePickerShortcut), "p", [.command]))
+        reviewMenu.addItem(targetedItem("New Workspace", #selector(openWorkspaceShortcut), "n", [.command]))
+        reviewMenu.addItem(targetedItem("Forget Current Workspace", #selector(forgetCurrentWorkspace), "\u{8}", [.command, .option]))
         reviewMenu.addItem(NSMenuItem.separator())
         let ignoreItem = targetedItem("Ignore whitespace", #selector(toggleIgnoreWhitespace(_:)), "W", [.command, .shift])
         ignoreItem.state = .off
@@ -144,19 +320,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(targetedItem("Settings", #selector(showSettings), ",", [.command]))
         windowMenu.addItem(NSMenuItem.separator())
-        windowMenu.addItem(targetedItem("Close Tab", #selector(closeTab), "w"))
+        windowMenu.addItem(targetedItem("Close Terminal Pane", #selector(closeTab), "w"))
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
 
         let terminalItem = NSMenuItem()
         let terminalMenu = NSMenu(title: "Terminal")
-        terminalMenu.addItem(targetedItem("Focus Terminal", #selector(toggleTerminal), "`", [.control]))
-        terminalMenu.addItem(targetedItem("New Terminal Tab", #selector(splitTerminal), "d", [.command]))
+        terminalMenu.addItem(targetedItem("Focus Terminal", #selector(toggleTerminal), functionKey(0xF70F), [.option]))
+        terminalMenu.addItem(targetedItem("Split Terminal Pane", #selector(newTerminalTab), "t", [.command]))
+        let cmdTabItem = targetedItem("Split Terminal Pane (Cmd+Tab compatibility)", #selector(newTerminalTab), "\t", [.command])
+        cmdTabItem.isHidden = true
+        terminalMenu.addItem(cmdTabItem)
+        terminalMenu.addItem(targetedItem("Split Terminal Pane", #selector(splitTerminal), "d", [.command]))
+        terminalMenu.addItem(targetedItem("Split Terminal Pane Below", #selector(splitTerminalBelow), "D", [.command, .shift]))
         terminalMenu.addItem(NSMenuItem.separator())
-        terminalMenu.addItem(targetedItem("Focus Previous Tab", #selector(focusPreviousTerminalPane), "[", [.command, .option]))
-        terminalMenu.addItem(targetedItem("Focus Next Tab", #selector(focusNextTerminalPane), "]", [.command, .option]))
-        terminalMenu.addItem(targetedItem("Rename Tab", #selector(renameTerminalPane), "r", [.command, .option]))
+        terminalMenu.addItem(targetedItem("Focus Previous Pane", #selector(focusPreviousTerminalPane), "[", [.command, .option]))
+        terminalMenu.addItem(targetedItem("Focus Next Pane", #selector(focusNextTerminalPane), "]", [.command, .option]))
+        terminalMenu.addItem(targetedItem("Rename Pane", #selector(renameTerminalPane), "r", [.command, .option]))
         terminalItem.submenu = terminalMenu
         mainMenu.addItem(terminalItem)
 
@@ -170,11 +352,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return item
     }
 
-    private func parseRepoArgument() -> URL? {
+    private func functionKey(_ scalar: Int) -> String {
+        String(UnicodeScalar(scalar)!)
+    }
+
+    private func parseLaunchOptions() -> (root: URL?, terminalCommand: String?) {
         let args = CommandLine.arguments
-        guard let index = args.firstIndex(of: "--repo"), args.indices.contains(index + 1) else {
-            return nil
+        let root = args.firstIndex(of: "--repo").flatMap { index -> URL? in
+            guard args.indices.contains(index + 1) else { return nil }
+            return URL(fileURLWithPath: args[index + 1])
         }
-        return URL(fileURLWithPath: args[index + 1])
+        let terminalCommand = args.firstIndex(of: "--terminal-command").flatMap { index -> String? in
+            guard args.indices.contains(index + 1) else { return nil }
+            return args[index + 1]
+        }
+        return (root, terminalCommand)
     }
 }

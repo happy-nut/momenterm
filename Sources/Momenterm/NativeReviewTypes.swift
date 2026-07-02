@@ -2,14 +2,16 @@ import Foundation
 
 struct ReviewDocument {
     let root: String?
-    let html: String
+    let branch: String
+    let isGitRepository: Bool
+    let diffFiles: [DiffFile]
+    let sourceFiles: [SourceFile]
+    let fileStates: [JSONValue]
+    let httpEnvironments: JSONValue
     let files: Int
     let hunks: Int
     let signature: String
     let generatedAt: String
-    let lazyBodies: [String]
-    let lazySourceData: String
-    let update: JSONValue?
 }
 
 enum JSONValue: Codable {
@@ -190,11 +192,32 @@ struct DiffFile {
         }
         return selected
     }
+
+    func jsonValue() -> JSONValue {
+        .object([
+            "oldPath": .string(oldPath),
+            "newPath": .string(newPath),
+            "displayPath": .string(displayPath),
+            "status": .string(status),
+            "added": .number(Double(added)),
+            "removed": .number(Double(removed)),
+            "binary": .bool(binary),
+            "vcs": vcs.map { .string($0) } ?? .null,
+            "hunks": .array(hunks.map { $0.jsonValue() })
+        ])
+    }
 }
 
 struct DiffHunk {
     let header: String
     var lines: [DiffLine]
+
+    func jsonValue() -> JSONValue {
+        .object([
+            "header": .string(header),
+            "lines": .array(lines.map { $0.jsonValue() })
+        ])
+    }
 }
 
 struct DiffLine {
@@ -209,4 +232,28 @@ struct DiffLine {
     let oldNumber: Int?
     let newNumber: Int?
     let text: String
+
+    func jsonValue() -> JSONValue {
+        .object([
+            "kind": .string(kind.jsonName),
+            "oldNumber": oldNumber.map { .number(Double($0)) } ?? .null,
+            "newNumber": newNumber.map { .number(Double($0)) } ?? .null,
+            "text": .string(text)
+        ])
+    }
+}
+
+private extension DiffLine.Kind {
+    var jsonName: String {
+        switch self {
+        case .context:
+            return "context"
+        case .addition:
+            return "addition"
+        case .deletion:
+            return "deletion"
+        case .meta:
+            return "meta"
+        }
+    }
 }

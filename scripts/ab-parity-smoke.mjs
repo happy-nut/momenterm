@@ -3,14 +3,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const monacoriRoot = process.env.MONACORI_REPO || path.resolve(root, "../monacori");
-const monacoriBuild = path.join(monacoriRoot, "dist/build.js");
 const out = path.join(root, ".build/debug");
-const dumpBin = path.join(out, "momenterm-ab-parity-dump");
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "momenterm-ab-parity-"));
+const dumpBin = path.join(out, "momenterm-native-model-dump");
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "momenterm-native-model-"));
 const failures = [];
 
 function run(command, args, options = {}) {
@@ -40,8 +38,8 @@ function initRepo(name) {
   const dir = path.join(tmp, name);
   fs.mkdirSync(dir, { recursive: true });
   run("git", ["init", "-q"], { cwd: dir });
-  run("git", ["config", "user.email", "ab-parity@example.com"], { cwd: dir });
-  run("git", ["config", "user.name", "AB Parity"], { cwd: dir });
+  run("git", ["config", "user.email", "native-model@example.com"], { cwd: dir });
+  run("git", ["config", "user.name", "Native Model"], { cwd: dir });
   write(path.join(dir, "README.md"), "# fixture\n");
   write(path.join(dir, ".gitignore"), ".monacori/\n");
   run("git", ["add", "."], { cwd: dir });
@@ -115,7 +113,7 @@ function compileDump() {
     path.join(root, "Sources/Momenterm/NativeGitClient.swift"),
     path.join(root, "Sources/Momenterm/NativeReviewTypes.swift"),
     path.join(root, "Sources/Momenterm/UnifiedDiffParser.swift"),
-    path.join(root, "Sources/Momenterm/NativeHTMLRenderer.swift"),
+    path.join(root, "Sources/Momenterm/NativeSyntaxHighlighting.swift"),
     path.join(root, "Sources/Momenterm/NativeSourceCollector.swift"),
     path.join(root, "Sources/Momenterm/NativeHttpEnvironmentReader.swift"),
     path.join(root, "Sources/Momenterm/NativeReviewCore.swift"),
@@ -124,145 +122,59 @@ function compileDump() {
   ]);
 }
 
-function asObject(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+function dump(repo) {
+  return JSON.parse(run(dumpBin, [repo]));
 }
 
-function sorted(value) {
-  return [...value].sort((a, b) => String(a).localeCompare(String(b)));
+function paths(items) {
+  return items.map((item) => item.displayPath || item.path).sort((a, b) => a.localeCompare(b));
 }
 
-function fileStates(review) {
-  const update = asObject(review.update);
-  return (update.fileStates || [])
-    .map((item) => ({ path: item.path, signature: item.signature }))
-    .sort((a, b) => a.path.localeCompare(b.path));
+function hasPath(items, wanted) {
+  return paths(items).includes(wanted);
 }
 
-function sourceMeta(review) {
-  const update = asObject(review.update);
-  return (update.sourceFilesMeta || [])
-    .map((file) => ({
-      path: file.path,
-      name: file.name,
-      language: file.language,
-      size: file.size,
-      changed: file.changed,
-      embedded: file.embedded,
-      changedLines: file.changedLines || [],
-      signature: file.signature,
-      skippedReason: file.skippedReason || "",
-      image: file.image || "",
-      vcs: file.vcs || ""
-    }))
-    .sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function sourceDataPaths(review) {
-  const raw = review.lazySourceData || "[]";
-  const files = JSON.parse(raw);
-  return sorted(files.map((file) => file.path));
-}
-
-function lazySourceContract(review) {
-  const raw = review.lazySourceData || "[]";
-  const files = JSON.parse(raw);
-  return files
-    .map((file) => ({
-      path: file.path,
-      name: file.name,
-      language: file.language,
-      size: file.size,
-      changed: file.changed,
-      embedded: file.embedded,
-      changedLines: file.changedLines || [],
-      signature: file.signature,
-      content: file.content || "",
-      skippedReason: file.skippedReason || "",
-      image: file.image || "",
-      vcs: file.vcs || ""
-    }))
-    .sort((a, b) => a.path.localeCompare(b.path));
-}
-
-function markerContract(html) {
-  return {
-    activityRail: html.includes("activity-rail"),
-    quickOpen: html.includes("quick-open"),
-    settings: html.includes("settings-modal"),
-    sourceViewer: html.includes("source-viewer"),
-    history: html.includes("history-view") || html.includes("history-viewer"),
-    terminal: html.includes("terminal-panel"),
-    viewed: html.includes("diff-viewed-toggle"),
-    syntax: html.includes("hljs") || (html.includes("tok-keyword") && html.includes("highlightCode"))
-  };
-}
-
-function stable(value) {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.keys(value).sort((a, b) => a.localeCompare(b)).map((key) => [key, stable(value[key])]));
-  }
-  return value;
-}
-
-function equalJSON(left, right) {
-  return JSON.stringify(stable(left)) === JSON.stringify(stable(right));
-}
-
-function compareScenario(name, monacori, momenterm) {
-  note(`${name}: file count`, monacori.files === momenterm.files, `${monacori.files} != ${momenterm.files}`);
-  note(`${name}: hunk count`, monacori.hunks === momenterm.hunks, `${monacori.hunks} != ${momenterm.hunks}`);
-  note(`${name}: review signature`, monacori.signature === momenterm.signature, `${monacori.signature} != ${momenterm.signature}`);
-  note(`${name}: branch`, (asObject(monacori.update).branch || "") === (asObject(momenterm.update).branch || ""));
-  note(`${name}: update keys`, equalJSON(sorted(Object.keys(asObject(monacori.update))), sorted(Object.keys(asObject(momenterm.update)))));
-  note(`${name}: file states`, equalJSON(fileStates(monacori), fileStates(momenterm)), `${JSON.stringify(fileStates(monacori))} != ${JSON.stringify(fileStates(momenterm))}`);
-  note(`${name}: source metadata`, equalJSON(sourceMeta(monacori), sourceMeta(momenterm)), `${JSON.stringify(sourceMeta(monacori))} != ${JSON.stringify(sourceMeta(momenterm))}`);
-  note(`${name}: lazy source paths`, equalJSON(sourceDataPaths(monacori), sourceDataPaths(momenterm)));
-  note(`${name}: lazy source data`, equalJSON(lazySourceContract(monacori), lazySourceContract(momenterm)));
-  note(`${name}: http environments`, equalJSON(asObject(monacori.update).httpEnvironments || {}, asObject(momenterm.update).httpEnvironments || {}));
-  note(`${name}: lazy body count`, (monacori.lazyBodies || []).length === (momenterm.lazyBodies || []).length);
-  note(`${name}: app shell markers`, equalJSON(markerContract(monacori.html), markerContract(momenterm.html)), `${JSON.stringify(markerContract(monacori.html))} != ${JSON.stringify(markerContract(momenterm.html))}`);
-  note(`${name}: momenterm Darcula markers`, momenterm.html.includes("#2b2b2b") && momenterm.html.includes("#cc7832"));
+function validateCommon(name, review) {
+  note(`${name}: native model root`, typeof review.root === "string" && review.root.length > 0);
+  note(`${name}: native model branch`, typeof review.branch === "string" && review.branch.length > 0);
+  note(`${name}: native model signature`, typeof review.signature === "string" && review.signature.length === 40);
+  note(`${name}: diff count matches`, review.files === review.diffFiles.length);
+  note(`${name}: hunk count matches`, review.hunks === review.diffFiles.reduce((sum, file) => sum + file.hunks.length, 0));
+  note(`${name}: source files are native objects`, Array.isArray(review.sourceFiles) && review.sourceFiles.every((file) => typeof file.path === "string"));
+  note(`${name}: file states are native objects`, Array.isArray(review.fileStates) && review.fileStates.every((item) => item.path && item.signature));
 }
 
 try {
-  if (!fs.existsSync(monacoriBuild)) {
-    throw new Error(`Monacori build not found at ${monacoriBuild}. Run npm run build in ${monacoriRoot}.`);
-  }
   compileDump();
-  const { buildDiffReview } = await import(pathToFileURL(monacoriBuild));
-  const scenarios = [
-    ["modified", scenarioModified()],
-    ["staged", scenarioStaged()],
-    ["untracked text", scenarioUntrackedText()],
-    ["untracked binary", scenarioUntrackedBinary()],
-    ["source env", scenarioSourceAndEnv()],
-    ["rename delete image", scenarioRenameDeleteImage()]
-  ];
-  for (const [name, repo] of scenarios) {
-    const monacori = buildDiffReview({
-      root: repo,
-      includeUntracked: true,
-      context: 80,
-      staged: false,
-      ignoreWhitespace: false,
-      lazy: true,
-      lazyLoad: true,
-      app: true,
-      watch: true,
-      title: "A/B parity"
-    });
-    const momenterm = JSON.parse(run(dumpBin, [repo], { maxBuffer: 100 * 1024 * 1024 }));
-    compareScenario(name, monacori, momenterm);
+  const cases = {
+    modified: dump(scenarioModified()),
+    staged: dump(scenarioStaged()),
+    "untracked text": dump(scenarioUntrackedText()),
+    "untracked binary": dump(scenarioUntrackedBinary()),
+    "source env": dump(scenarioSourceAndEnv()),
+    "rename delete image": dump(scenarioRenameDeleteImage())
+  };
+
+  for (const [name, review] of Object.entries(cases)) {
+    validateCommon(name, review);
   }
+
+  note("modified: changed TypeScript diff", hasPath(cases.modified.diffFiles, "src/app.ts"));
+  note("modified: source metadata marks changed file", cases.modified.sourceFiles.some((file) => file.path === "src/app.ts" && file.changed));
+  note("staged: staged diff included", hasPath(cases.staged.diffFiles, "src/staged.js"));
+  note("untracked text: native added file diff", hasPath(cases["untracked text"].diffFiles, "notes/new.md"));
+  note("untracked text: source includes new file", hasPath(cases["untracked text"].sourceFiles, "notes/new.md"));
+  note("untracked binary: large binary diff capped", cases["untracked binary"].diffFiles.some((file) => file.binary || JSON.stringify(file).includes("Binary files /dev/null")));
+  note("source env: source includes plan", hasPath(cases["source env"].sourceFiles, ".monacori/plan.md"));
+  note("source env: HTTP environments parsed", JSON.stringify(cases["source env"].httpEnvironments).includes("example.test"));
+  note("rename delete image: rename diff present", hasPath(cases["rename delete image"].diffFiles, "src/new-name.swift"));
+  note("rename delete image: delete diff present", hasPath(cases["rename delete image"].diffFiles, "src/remove-me.txt"));
+
+  if (failures.length) {
+    console.error(`\n${failures.length} native model fixture checks failed`);
+    process.exit(1);
+  }
+  console.log("\nnative model fixture smoke ok");
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
-
-if (failures.length) {
-  console.error(`\n${failures.length} A/B parity checks failed`);
-  process.exit(1);
-}
-
-console.log("\nA/B parity smoke ok");

@@ -48,7 +48,12 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 open .build/Momenterm.app --args --repo /path/to/repo
 ```
 
-The package script builds a self-contained app bundle. It does not copy Node, Electron, or Monacori artifacts.
+```bash
+./scripts/package-dmg.sh
+open .build/Momenterm.dmg
+```
+
+The package scripts build a self-contained app bundle and a drag-to-Applications DMG. They do not copy Node, Electron, or Monacori artifacts.
 
 ## Why This Shape
 

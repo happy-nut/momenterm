@@ -1,6 +1,11 @@
 import CryptoKit
 import Foundation
 
+struct LinkedWorktree {
+    let url: URL
+    let branch: String
+}
+
 final class NativeReviewCore {
     private static let diffContextLines = 80
     private static let maxInlineUntrackedDiffBytes = 500_000
@@ -11,6 +16,34 @@ final class NativeReviewCore {
         self.gitClient = gitClient
     }
 
+    func gitRoot(from url: URL) -> URL? {
+        try? gitClient.repoRoot(from: url).standardizedFileURL
+    }
+
+    func branchName(from url: URL) -> String? {
+        guard let root = gitRoot(from: url),
+              let head = gitHeadContent(for: root) else {
+            return nil
+        }
+        if head.hasPrefix("ref: refs/heads/") {
+            return String(head.dropFirst("ref: refs/heads/".count))
+        }
+        if !head.isEmpty {
+            return "detached \(String(head.prefix(7)))"
+        }
+        return nil
+    }
+
+    func createLinkedWorktree(from url: URL) throws -> LinkedWorktree {
+        let repoRoot = try gitClient.repoRoot(from: url).standardizedFileURL
+        let token = Self.worktreeToken()
+        let branch = "momenterm/linked-\(token)"
+        let target = uniqueLinkedWorktreeURL(repoRoot: repoRoot, token: token)
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        _ = try gitClient.run(root: repoRoot, arguments: ["worktree", "add", "-b", branch, target.path])
+        return LinkedWorktree(url: target.standardizedFileURL, branch: branch)
+    }
+
     func build(root requestedRoot: URL, ignoreWhitespace: Bool) throws -> ReviewDocument {
         let repoRoot = try? gitClient.repoRoot(from: requestedRoot)
         let root = repoRoot ?? requestedRoot.standardizedFileURL
@@ -18,7 +51,7 @@ final class NativeReviewCore {
         let diffText = isGitRepository ? try workingTreeDiff(root: root, ignoreWhitespace: ignoreWhitespace) : ""
         var files = isGitRepository ? UnifiedDiffParser.parse(diffText) : []
         let sourceCollector = NativeSourceCollector(gitClient: gitClient)
-        let sourceFiles = try sourceCollector.collect(files: files, root: root)
+        let sourceFiles = isGitRepository ? try sourceCollector.collect(files: files, root: root) : []
         let sourceVcs = Dictionary(uniqueKeysWithValues: sourceFiles.compactMap { file in file.vcs.map { (file.path, $0) } })
         for index in files.indices {
             files[index].vcs = sourceVcs[files[index].displayPath]
@@ -29,57 +62,127 @@ final class NativeReviewCore {
         let branch = isGitRepository
             ? (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
             : "Not a Git repository"
-        let diffHtml = isGitRepository ? NativeHTMLRenderer.renderDiff(files) : NativeHTMLRenderer.renderNonGitDiffNotice(root: root)
-        let changesPanel = isGitRepository ? NativeHTMLRenderer.renderChangesPanel(files) : NativeHTMLRenderer.renderNonGitChangesPanel()
-        let filesTree = NativeHTMLRenderer.renderFilesPanel(sourceFiles)
-        let reviewStatus = NativeHTMLRenderer.renderReviewStatus(files: files.count, hunks: files.reduce(0) { $0 + $1.hunks.count }, generatedAt: generatedAt, ignoreWhitespace: ignoreWhitespace)
-        let sourceJSON = JSONValue.array(sourceFiles.map { $0.jsonValue(includeContent: true) }).jsonString()
         let signaturePayload = [
             diffText,
             sourceCollector.signaturePayload(sourceFiles),
             httpEnvironments.stableJsonString()
         ]
         let signature = sha1((isGitRepository ? signaturePayload : ["non-git", root.path] + signaturePayload).joined(separator: "\n"))
-        let html = NativeHTMLRenderer.renderReview(
-            root: root,
-            branch: branch,
-            files: files,
-            sourceFiles: sourceFiles,
-            diffHtml: diffHtml,
-            changesPanel: changesPanel,
-            filesTree: filesTree,
-            reviewStatus: reviewStatus,
-            signature: signature,
-            generatedAt: generatedAt,
-            ignoreWhitespace: ignoreWhitespace
-        )
-        let update: JSONValue = .object([
-            "signature": .string(signature),
-            "generatedAt": .string(generatedAt),
-            "branch": .string(branch),
-            "diffContainer": .string(diffHtml.isEmpty ? "<div class=\"empty\">No diff to review.</div>" : diffHtml),
-            "changesPanel": .string(changesPanel),
-            "filesTree": .string(filesTree),
-            "reviewStatus": .string(reviewStatus),
-            "fileStates": .array(fileStates),
-            "sourceFilesMeta": .array(sourceFiles.map { $0.jsonValue(includeContent: false) }),
-            "httpEnvironments": httpEnvironments
-        ])
         return ReviewDocument(
             root: root.path,
-            html: html,
+            branch: branch,
+            isGitRepository: isGitRepository,
+            diffFiles: files,
+            sourceFiles: sourceFiles,
+            fileStates: fileStates,
+            httpEnvironments: httpEnvironments,
             files: files.count,
             hunks: files.reduce(0) { $0 + $1.hunks.count },
             signature: signature,
-            generatedAt: generatedAt,
-            lazyBodies: files.map { NativeHTMLRenderer.renderDiffFile($0) },
-            lazySourceData: sourceJSON,
-            update: update
+            generatedAt: generatedAt
         )
     }
 
-    func welcome(recent: [JSONValue]) -> String {
-        NativeHTMLRenderer.renderWelcome(recent: recent)
+    private func gitHeadContent(for root: URL) -> String? {
+        let marker = root.appendingPathComponent(".git")
+        let gitDirectory: URL
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: marker.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            gitDirectory = marker
+        } else if let markerContent = try? String(contentsOf: marker, encoding: .utf8),
+                  markerContent.hasPrefix("gitdir:") {
+            let rawPath = markerContent.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if rawPath.hasPrefix("/") {
+                gitDirectory = URL(fileURLWithPath: rawPath).standardizedFileURL
+            } else {
+                gitDirectory = URL(fileURLWithPath: rawPath, relativeTo: root).standardizedFileURL
+            }
+        } else {
+            return nil
+        }
+        return try? String(contentsOf: gitDirectory.appendingPathComponent("HEAD"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func uniqueLinkedWorktreeURL(repoRoot: URL, token: String) -> URL {
+        let repoName = sanitizedPathComponent(repoRoot.lastPathComponent.isEmpty ? "worktree" : repoRoot.lastPathComponent)
+        let parent = repoRoot.deletingLastPathComponent()
+        for index in 0..<64 {
+            let suffix = index == 0 ? token : "\(token)-\(index + 1)"
+            let candidate = parent.appendingPathComponent("\(repoName)-linked-\(suffix)", isDirectory: true).standardizedFileURL
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return parent.appendingPathComponent("\(repoName)-linked-\(UUID().uuidString.lowercased())", isDirectory: true).standardizedFileURL
+    }
+
+    private func sanitizedPathComponent(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+        let result = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-."))
+        return result.isEmpty ? "worktree" : result
+    }
+
+    private static func worktreeToken() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let time = formatter.string(from: Date())
+        let random = UUID().uuidString.prefix(6).lowercased()
+        return "\(time)-\(random)"
+    }
+
+    func fileListing(root requestedRoot: URL) throws -> ReviewDocument {
+        let repoRoot = try? gitClient.repoRoot(from: requestedRoot)
+        let root = repoRoot ?? requestedRoot.standardizedFileURL
+        let isGitRepository = repoRoot != nil
+        let sourceCollector = NativeSourceCollector(gitClient: gitClient)
+        let sourceFiles = isGitRepository
+            ? try sourceCollector.list(root: root)
+            : try sourceCollector.shallowList(root: root)
+        let branch = isGitRepository
+            ? (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
+            : "Not a Git repository"
+        return ReviewDocument(
+            root: root.path,
+            branch: branch,
+            isGitRepository: isGitRepository,
+            diffFiles: [],
+            sourceFiles: sourceFiles,
+            fileStates: sourceCollector.fileStates(files: [], sourceFiles: sourceFiles),
+            httpEnvironments: .array([]),
+            files: 0,
+            hunks: 0,
+            signature: sha1((["files", root.path] + sourceFiles.map { "\($0.path)\0\($0.size)" }).joined(separator: "\n")),
+            generatedAt: isoNow()
+        )
+    }
+
+    func fileListingChildren(root requestedRoot: URL, folderPath: String) throws -> [SourceFile] {
+        let repoRoot = try? gitClient.repoRoot(from: requestedRoot)
+        let root = repoRoot ?? requestedRoot.standardizedFileURL
+        let normalized = folderPath.replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.isEmpty,
+              !normalized.hasPrefix("/"),
+              !normalized.split(separator: "/").contains(".."),
+              !normalized.contains("\0") else {
+            return []
+        }
+        return try NativeSourceCollector(gitClient: gitClient).shallowList(root: root, folderPath: normalized)
+    }
+
+    func filePreview(root requestedRoot: URL, path: String, changed: Bool = false, changedLines: [Int] = [], vcs: String? = nil) -> SourceFile? {
+        let repoRoot = try? gitClient.repoRoot(from: requestedRoot)
+        let root = repoRoot ?? requestedRoot.standardizedFileURL
+        guard !path.contains("\0"), !path.hasPrefix("/") else {
+            return nil
+        }
+        let normalized = path.replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.split(separator: "/").contains("..") else {
+            return nil
+        }
+        return NativeSourceCollector(gitClient: gitClient).preview(path: normalized, root: root, changed: changed, changedLines: changedLines, vcs: vcs)
     }
 
     func gitLog(root: URL, payload: JSONValue?) throws -> JSONValue {
@@ -139,7 +242,7 @@ final class NativeReviewCore {
         let fields = meta.components(separatedBy: fs)
         let parents = field(fields, 5).split(separator: " ")
         let diffText = try gitClient.run(root: repo, arguments: ["show", sha, "--no-color", "--pretty=format:"]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let diffHtml = NativeHTMLRenderer.renderDiff(UnifiedDiffParser.parse(diffText))
+        let diffFiles = UnifiedDiffParser.parse(diffText)
         return .object([
             "hash": .string(field(fields, 0, fallback: sha)),
             "author": .string(field(fields, 1)),
@@ -147,7 +250,9 @@ final class NativeReviewCore {
             "date": .string(field(fields, 3)),
             "refs": .string(field(fields, 4)),
             "message": .string(field(fields, 6).trimmingCharacters(in: .whitespacesAndNewlines)),
-            "diffHtml": .string(diffHtml),
+            "diffFiles": .array(diffFiles.map { $0.jsonValue() }),
+            "files": .number(Double(diffFiles.count)),
+            "hunks": .number(Double(diffFiles.reduce(0) { $0 + $1.hunks.count })),
             "isMerge": .bool(parents.count > 1)
         ])
     }

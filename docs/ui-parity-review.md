@@ -49,3 +49,43 @@ This pass compares Momenterm against Monacori's visible review surface instead o
 - UI, code, and terminal surfaces keep stable macOS/Korean/Nerd Font fallback stacks
 - deleted Quick Open toolbar wiring is guarded so WebView boot does not crash
 - Monacori/Electron/Node runtime markers are absent
+
+## US-7 Design System (intentional visual改선)
+
+The US-7 pass formalized the ad-hoc Darcula tokens into a design system in
+`NativeDesignSystem.swift` / `NativeTheme.swift`. These are deliberate visual
+elevations layered on top of the existing Darcula identity — the pinned syntax
+anchors (`syntaxKeyword`/`String`/`Number`/`Comment`/`Metadata`, `codeBackground`,
+`codeText`) are unchanged, so `scripts/theme-smoke.sh` still passes byte-for-byte.
+
+Token system added (all under `MomentermDesign`):
+
+- **Spacing** — 4-based scale `space1..space7` (4/6/8/12/16/24/32). `sidebarGutter`
+  and `panelInnerPadding` now source from it; rail rows and the agent-alert dot use it.
+- **Radius / Border / Elevation** — `Radius.hairline..large`, `Border.hairline/regular/emphasis`,
+  and dark-tuned soft `Elevation.low/medium/high` presets (`applyElevation`).
+  `Metrics.controlRadius` is sourced from `Radius.control`.
+- **Typography (`Fonts.UI`)** — a `Style` type (size + weight + tracking) and a named
+  role ladder `display/title/heading/header/body/label/caption/micro` drawn from the
+  sizes already in use (21/15/14/13/12/11/10). Adds `styleEyebrowLabel` for小 ALL-CAPS
+  section markers.
+- **Semantic colors** — surface hierarchy (`surfaceBase/Panel/Elevated/Hover`, `separator`),
+  a third text rank (`tertiaryText`), and a state palette (`stateAccent/Positive/Attention/Danger`)
+  where `stateAttention == accent` so the agent-alert grammar is one signal.
+
+Intentional visual deltas from the prior build:
+
+- Agent-alert grammar unified: rail dot, pane ring, and status now share `stateAttention`
+  (amber) and `Border.emphasis` weight; the rail dot gained a soft attention-tinted halo.
+- Rail row hierarchy sharpened: name (primary) › branch (accent) › notification (tertiary,
+  was secondary) with the vertical rhythm on the spacing scale.
+- Overlay chrome gained a consistent hairline header divider (`separator` token) and its
+  title/subtitle moved onto `Fonts.UI.header` / `caption` with the subtitle at tertiary rank.
+- Diff file header: the path label is now primary text (file identity) above the secondary
+  status/metadata line.
+- Settings section headers are now ALL-CAPS eyebrow labels (`Fonts.UI.micro`).
+
+Coverage: `scripts/design-system-smoke.sh` (new) compiles the token layer in isolation
+and pins the structural invariants — strict-monotonic spacing, descending type ladder,
+ordered radius/border/elevation ramps, and the semantic-color contracts (attention==accent,
+distinct state colors, descending text-opacity hierarchy, distinct surface tiers).

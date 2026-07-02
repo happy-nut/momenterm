@@ -9,6 +9,64 @@ struct NativeSourceCollector {
 
     let gitClient: GitClient
 
+    func shallowList(root: URL, folderPath: String? = nil, limit: Int = 700) throws -> [SourceFile] {
+        let root = root.standardizedFileURL
+        let folderURL = folderPath.map { root.appendingPathComponent($0) } ?? root
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey],
+            options: [.skipsPackageDescendants]
+        )
+        let prefix = folderPath.flatMap { $0.isEmpty ? nil : $0 + "/" } ?? ""
+        var result: [SourceFile] = []
+        for url in urls {
+            let path = prefix + url.lastPathComponent
+            guard isSourceCandidate(path) else {
+                continue
+            }
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            if values?.isDirectory == true {
+                result.append(folderSummary(path: path))
+            } else if values?.isRegularFile == true {
+                result.append(sourceSummary(path: path, root: root, changed: false, changedLines: [], vcs: nil))
+            }
+            if result.count >= limit {
+                break
+            }
+        }
+        return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
+    func list(root: URL) throws -> [SourceFile] {
+        let root = root.standardizedFileURL
+        let vcsByPath = gitStatusMap(root: root)
+        var paths = Set<String>()
+        let listedPaths = gitListedSourcePaths(root: root) ?? filesystemSourcePaths(root: root)
+        for path in listedPaths where isSourceCandidate(path) {
+            paths.insert(path)
+        }
+        let planPath = ".monacori/plan.md"
+        if FileManager.default.fileExists(atPath: root.appendingPathComponent(planPath).path) {
+            paths.insert(planPath)
+        }
+        return paths
+            .sorted(by: { $0.localizedCompare($1) == .orderedAscending })
+            .prefix(Self.sourceMaxFiles)
+            .map { sourceSummary(path: $0, root: root, changed: false, changedLines: [], vcs: vcsByPath[$0]) }
+    }
+
+    func preview(path: String, root: URL, changed: Bool = false, changedLines: [Int] = [], vcs: String? = nil) -> SourceFile {
+        sourceFile(
+            path: path,
+            root: root.standardizedFileURL,
+            changed: changed,
+            changedLines: changedLines,
+            vcs: vcs,
+            embeddedFiles: 0,
+            embeddedBytes: 0
+        )
+    }
+
     func collect(files: [DiffFile], root: URL) throws -> [SourceFile] {
         let changed = Set(files.map { $0.displayPath }.filter { !$0.isEmpty && $0 != "/dev/null" })
         let changedLinesByPath = changedLines(files)
@@ -26,26 +84,52 @@ struct NativeSourceCollector {
             paths.insert(planPath)
         }
 
-        var embeddedFiles = 0
-        var embeddedBytes = 0
         var result: [SourceFile] = []
         for path in paths.sorted(by: { $0.localizedCompare($1) == .orderedAscending }) {
-            let file = sourceFile(
+            let file = sourceSummary(
                 path: path,
                 root: root,
                 changed: changed.contains(path),
                 changedLines: changedLinesByPath[path] ?? [],
-                vcs: vcsByPath[path],
-                embeddedFiles: embeddedFiles,
-                embeddedBytes: embeddedBytes
+                vcs: vcsByPath[path]
             )
-            if file.embedded {
-                embeddedFiles += 1
-                embeddedBytes += file.size
-            }
             result.append(file)
         }
         return result
+    }
+
+    private func sourceSummary(path: String, root: URL, changed: Bool, changedLines: [Int], vcs: String?) -> SourceFile {
+        let url = root.appendingPathComponent(path)
+        let size = fileSize(url)
+        return SourceFile(
+            path: path,
+            size: size,
+            embedded: false,
+            content: "",
+            skippedReason: "Select a file to preview.",
+            language: languageForPath(path),
+            changed: changed,
+            changedLines: changedLines,
+            signature: sha1("\(path)\0summary\0\(size)"),
+            image: "",
+            vcs: vcs
+        )
+    }
+
+    private func folderSummary(path: String) -> SourceFile {
+        SourceFile(
+            path: path,
+            size: 0,
+            embedded: false,
+            content: "",
+            skippedReason: "Folder. Press Enter to expand.",
+            language: "folder",
+            changed: false,
+            changedLines: [],
+            signature: sha1("\(path)\0folder"),
+            image: "",
+            vcs: nil
+        )
     }
 
     private func gitListedSourcePaths(root: URL) -> [String]? {
@@ -148,21 +232,25 @@ struct NativeSourceCollector {
     ) -> SourceFile {
         let url = root.appendingPathComponent(path)
         let language = languageForPath(path)
-        guard let data = try? Data(contentsOf: url), isRegularFile(url) else {
+        guard isRegularFile(url) else {
             return skippedSource(path: path, size: 0, reason: "file is not present in the working tree", signatureKind: "missing", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
         }
+        let size = fileSize(url)
         if let mime = imageMime(for: path) {
-            if data.count <= Self.imageMaxBytes {
+            if size <= Self.imageMaxBytes, let data = try? Data(contentsOf: url) {
                 let image = "data:\(mime);base64,\(data.base64EncodedString())"
                 return SourceFile(path: path, size: data.count, embedded: false, content: "", skippedReason: "", language: language, changed: changed, changedLines: changedLines, signature: sha1("\(path)\0image\0\(data.count)"), image: image, vcs: vcs)
             }
-            return skippedSource(path: path, size: data.count, reason: "image larger than \(formatBytes(Self.imageMaxBytes))", signatureKind: "image-large", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
+            return skippedSource(path: path, size: size, reason: "image larger than \(formatBytes(Self.imageMaxBytes))", signatureKind: "image-large", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
+        }
+        if size > Self.sourceMaxFileBytes {
+            return skippedSource(path: path, size: size, reason: "larger than \(formatBytes(Self.sourceMaxFileBytes))", signatureKind: "large", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
         }
         if isLikelyBinary(url) {
-            return skippedSource(path: path, size: data.count, reason: "binary file", signatureKind: "binary", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
+            return skippedSource(path: path, size: size, reason: "binary file", signatureKind: "binary", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
         }
-        if data.count > Self.sourceMaxFileBytes {
-            return skippedSource(path: path, size: data.count, reason: "larger than \(formatBytes(Self.sourceMaxFileBytes))", signatureKind: "large", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
+        guard let data = try? Data(contentsOf: url) else {
+            return skippedSource(path: path, size: size, reason: "file is not present in the working tree", signatureKind: "missing", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
         }
         if embeddedFiles >= Self.sourceMaxFiles || embeddedBytes + data.count > Self.sourceMaxTotalBytes {
             return skippedSource(path: path, size: data.count, reason: "source index budget reached", signatureKind: "budget", language: language, changed: changed, changedLines: changedLines, vcs: vcs)
@@ -192,7 +280,7 @@ struct NativeSourceCollector {
             return [:]
         }
         var result: [String: String] = [:]
-        for line in out.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines) where line.count >= 3 {
+        for line in out.components(separatedBy: .newlines) where line.count >= 3 {
             let chars = Array(line)
             let x = chars[0]
             let y = chars[1]
@@ -219,6 +307,11 @@ struct NativeSourceCollector {
             return false
         }
         return attributes[.type] as? FileAttributeType == .typeRegular
+    }
+
+    private func fileSize(_ url: URL) -> Int {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes?[.size] as? Int ?? 0
     }
 
     private func isLikelyBinary(_ url: URL) -> Bool {
@@ -267,24 +360,7 @@ struct NativeSourceCollector {
     }
 
     private func languageForPath(_ path: String) -> String {
-        let lower = path.lowercased()
-        if lower.hasSuffix(".ts") || lower.hasSuffix(".tsx") { return "typescript" }
-        if lower.hasSuffix(".js") || lower.hasSuffix(".jsx") || lower.hasSuffix(".mjs") || lower.hasSuffix(".cjs") { return "javascript" }
-        if lower.hasSuffix(".json") { return "json" }
-        if lower.hasSuffix(".css") || lower.hasSuffix(".scss") || lower.hasSuffix(".sass") { return "css" }
-        if lower.hasSuffix(".html") || lower.hasSuffix(".htm") || lower.hasSuffix(".xml") || lower.hasSuffix(".svg") { return "markup" }
-        if lower.hasSuffix(".md") || lower.hasSuffix(".mdx") { return "markdown" }
-        if lower.hasSuffix(".py") { return "python" }
-        if lower.hasSuffix(".rb") { return "ruby" }
-        if lower.hasSuffix(".go") { return "go" }
-        if lower.hasSuffix(".rs") { return "rust" }
-        if lower.hasSuffix(".java") || lower.hasSuffix(".kt") || lower.hasSuffix(".kts") { return "java" }
-        if lower.hasSuffix(".sh") || lower.hasSuffix(".bash") || lower.hasSuffix(".zsh") { return "shell" }
-        if lower.hasSuffix(".yml") || lower.hasSuffix(".yaml") { return "yaml" }
-        if lower.hasSuffix(".toml") { return "toml" }
-        if lower.hasSuffix(".sql") { return "sql" }
-        if lower.hasSuffix(".http") || lower.hasSuffix(".rest") { return "http" }
-        return "text"
+        NativeLanguageRegistry.language(forPath: path)
     }
 
     private func imageMime(for path: String) -> String? {
@@ -294,7 +370,13 @@ struct NativeSourceCollector {
         if lower.hasSuffix(".gif") { return "image/gif" }
         if lower.hasSuffix(".webp") { return "image/webp" }
         if lower.hasSuffix(".bmp") { return "image/bmp" }
+        if lower.hasSuffix(".tif") || lower.hasSuffix(".tiff") { return "image/tiff" }
+        if lower.hasSuffix(".heic") { return "image/heic" }
+        if lower.hasSuffix(".heif") { return "image/heif" }
         if lower.hasSuffix(".ico") { return "image/x-icon" }
+        if lower.hasSuffix(".icns") { return "image/icns" }
+        if lower.hasSuffix(".svg") { return "image/svg+xml" }
+        if lower.hasSuffix(".pdf") { return "application/pdf" }
         if lower.hasSuffix(".avif") { return "image/avif" }
         if lower.hasSuffix(".apng") { return "image/apng" }
         return nil

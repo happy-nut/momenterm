@@ -1,0 +1,7 @@
+{
+  "tool_name": "mcp__computer-use__zoom",
+  "tool_input_preview": "{\"region\":[0,806,751,820]}",
+  "error": "region exceeds screenshot bounds (1456×819)",
+  "timestamp": "2026-07-02T06:13:04.388Z",
+  "retry_count": 1
+}

@@ -8,10 +8,13 @@ MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 
 BIN="$("$ROOT/scripts/build.sh")"
+SOURCE_ICON="$ROOT/assets/icon.icns"
+ICON="$RESOURCES/Momenterm.icns"
 
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$BIN" "$MACOS/Momenterm"
+cp "$SOURCE_ICON" "$ICON"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,6 +30,10 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
+  <string>Momenterm</string>
+  <key>CFBundleIconFile</key>
+  <string>Momenterm.icns</string>
+  <key>CFBundleIconName</key>
   <string>Momenterm</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>

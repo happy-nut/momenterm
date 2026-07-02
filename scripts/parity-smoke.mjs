@@ -1,31 +1,41 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import vm from "node:vm";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url);
-const sourceFiles = [
-  "Sources/Momenterm/NativeReviewCore.swift",
-  "Sources/Momenterm/NativeSourceCollector.swift",
-  "Sources/Momenterm/NativeHttpEnvironmentReader.swift",
-  "Sources/Momenterm/NativeHTMLRenderer.swift",
-  "Sources/Momenterm/NativeReviewTypes.swift",
-  "Sources/Momenterm/UnifiedDiffParser.swift",
-  "Sources/Momenterm/NativeGitClient.swift",
-  "Sources/Momenterm/MainWindowController.swift"
-];
-const core = sourceFiles.map((path) => fs.readFileSync(new URL(path, root), "utf8")).join("\n");
-const scriptMatch = core.match(/private static let clientScript = """\n([\s\S]*?)\n    """\n\n    private static func escape/);
-if (!scriptMatch) {
-  console.error("not ok - embedded client script was not found");
-  process.exit(1);
-}
-
-function decodeSwiftMultilineString(value) {
-  return value.replace(/\\\\/g, "\\");
-}
-
-const clientScript = decodeSwiftMultilineString(scriptMatch[1]);
+const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const read = (relative) => fs.readFileSync(path.join(root, relative), "utf8");
+const files = {
+  package: read("Package.swift"),
+  build: read("scripts/build.sh"),
+  libGhosttyEnv: read("scripts/libghostty-env.sh"),
+  packageApp: read("scripts/package-app.sh"),
+  installApp: read("scripts/install-app.sh"),
+  packageDmg: read("scripts/package-dmg.sh"),
+  launchSmoke: read("scripts/launch-smoke.sh"),
+  keyInputSmoke: read("scripts/key-input-smoke.sh"),
+  appDelegate: read("Sources/Momenterm/AppDelegate.swift"),
+  controller: read("Sources/Momenterm/MainWindowController.swift"),
+  httpClient: read("Sources/Momenterm/NativeHttpClient.swift"),
+  syntax: read("Sources/Momenterm/NativeSyntaxHighlighting.swift"),
+  libGhosttyView: read("Sources/Momenterm/LibGhosttyTerminalView.swift"),
+  designSystem: read("Sources/Momenterm/NativeDesignSystem.swift"),
+  keyInputSmokeSource: read("Sources/KeyInputSmoke/main.swift"),
+  gitClient: read("Sources/Momenterm/NativeGitClient.swift"),
+  reviewCore: read("Sources/Momenterm/NativeReviewCore.swift"),
+  reviewTypes: read("Sources/Momenterm/NativeReviewTypes.swift"),
+  sourceCollector: read("Sources/Momenterm/NativeSourceCollector.swift"),
+  pty: read("Sources/Momenterm/NativePtyManager.swift"),
+  terminalCore: read("Sources/Momenterm/NativeTerminalCore.swift"),
+  coreSmoke: read("Sources/CoreSmoke/main.swift"),
+  ptySmoke: read("Sources/PtySmoke/main.swift"),
+  perfSmoke: read("Sources/PerfSmoke/main.swift")
+};
+const all = Object.values(files).join("\n");
 const failures = [];
+const findInFilesWidthHelper = files.controller.match(/private func constrainFindInFilesRowWidth\(_ view: NSView\) \{[\s\S]*?\n    \}/)?.[0] || "";
+const populateSearchOverlayBody = files.controller.match(/private func populateSearchOverlay\(title: String, markers: \[String\]\) \{[\s\S]*?\n    \}\n\n    private func isMergedPromptOverlayActive/)?.[0] || "";
+const mergedPromptContentBody = files.controller.match(/private func mergedPromptContent\(title: String\) -> MergedPromptContent \{[\s\S]*?\n    \}\n\n    private func mergedPromptTerminalCandidates/)?.[0] || "";
 
 function check(name, ok, detail = "") {
   if (ok) {
@@ -36,257 +46,356 @@ function check(name, ok, detail = "") {
   }
 }
 
-function has(pattern) {
-  return typeof pattern === "string" ? core.includes(pattern) || clientScript.includes(pattern) : pattern.test(core) || pattern.test(clientScript);
+function has(source, pattern) {
+  return pattern instanceof RegExp ? pattern.test(source) : source.includes(pattern);
 }
 
-class FakeClassList {
-  add() {}
-  remove() {}
-  toggle() { return false; }
-  contains() { return false; }
-}
-
-class FakeElement {
-  constructor(id = "") {
-    this.id = id;
-    this.dataset = {};
-    this.style = {};
-    this.classList = new FakeClassList();
-    this.children = [];
-    this.attributes = [];
-    this.value = "";
-    this.textContent = "";
-    this.innerHTML = "";
-    this.scrollTop = 0;
-    this.scrollHeight = 0;
-  }
-  addEventListener() {}
-  setAttribute(name, value) { this[name] = String(value); }
-  getAttribute(name) { return this[name] || ""; }
-  removeAttribute(name) { delete this[name]; }
-  appendChild(child) { this.children.push(child); return child; }
-  querySelector() { return new FakeElement(); }
-  querySelectorAll() { return []; }
-  closest() { return null; }
-  focus() {}
-  scrollIntoView() {}
-  getBoundingClientRect() { return { top: 80 }; }
-  remove() {}
-}
-
-const elementCache = new Map();
-function fakeElement(selector) {
-  if (!elementCache.has(selector)) elementCache.set(selector, new FakeElement(selector));
-  return elementCache.get(selector);
-}
-
-const localStore = new Map();
-const sandbox = {
-  console,
-  setTimeout,
-  clearTimeout,
-  Promise,
-  CSS: { escape: (value) => String(value).replace(/"/g, '\\"') },
-  localStorage: {
-    getItem: (key) => localStore.has(key) ? localStore.get(key) : null,
-    setItem: (key, value) => localStore.set(key, String(value))
-  },
-  document: {
-    documentElement: new FakeElement("html"),
-    body: new FakeElement("body"),
-    querySelector: (selector) => fakeElement(selector),
-    querySelectorAll: () => [],
-    createElement: (tag) => new FakeElement(tag),
-    createRange: () => ({ selectNodeContents() {} }),
-    addEventListener() {}
-  },
-  window: {
-    __momentermData: { root: "/tmp/momenterm-parity", sourceFiles: [] },
-    momentermSettings: { all: {}, set() {} },
-    momentermPty: { spawn: () => Promise.resolve({ ok: true, id: 1 }), write() {}, kill() {}, onData() {}, onExit() {} },
-    momentermGit: { log: () => Promise.resolve([]), commitDiff: () => Promise.resolve({}) },
-    momentermHttp: { send: () => Promise.resolve({ ok: true }) },
-    momentermClipboard: { write() {} },
-    momentermApp: { revealInFinder() {}, openTerminalAt() {} },
-    getSelection: () => ({ removeAllRanges() {}, addRange() {} })
-  }
-};
-sandbox.window.window = sandbox.window;
-sandbox.window.document = sandbox.document;
-sandbox.window.localStorage = sandbox.localStorage;
-sandbox.window.CSS = sandbox.CSS;
-sandbox.window.setTimeout = setTimeout;
-sandbox.window.clearTimeout = clearTimeout;
-
-try {
-  vm.runInNewContext(clientScript, sandbox, { filename: "momenterm-client.js" });
-  check("embedded client script boots in VM", true);
-} catch (error) {
-  check("embedded client script boots in VM", false, error.stack || String(error));
-}
-
-const highlighter = sandbox.window.__momentermHighlightCode;
-if (typeof highlighter === "function") {
-  const html = highlighter("@MainActor function makeThing(value) { let model: Widget = 42; return model }", "src/app.ts");
-  check("syntax: decorators highlighted", html.includes("tok-decorator"));
-  check("syntax: keywords highlighted", html.includes("tok-keyword"));
-  check("syntax: function calls highlighted", html.includes("tok-fn"));
-  check("syntax: PascalCase types highlighted", html.includes("tok-type"));
-  check("syntax: numbers highlighted", html.includes("tok-number"));
-} else {
-  check("syntax: highlighter exported for smoke", false);
-}
-
-const shortcutChecks = [
-  ["shortcut: F7 next change", /e\.key === 'F7'.*navigateDiff\(e\.shiftKey \? -1 : 1\)/s],
-  ["shortcut: Shift+F7 previous change", /e\.key === 'F7'.*e\.shiftKey \? -1 : 1/s],
-  ["shortcut: Cmd+0 focuses changes", /e\.key === '0'.*#changes-panel \.file-link/s],
-  ["shortcut: Cmd+1 opens source", /e\.key === '1'.*openSource\(current\.path \|\| firstChangedPath\(\)\)/s],
-  ["shortcut: Cmd+9 opens history", /e\.key === '9'.*loadHistory\(\)/s],
-  ["shortcut: Cmd+Down opens source at caret", /e\.key === 'ArrowDown'.*openSource\(current\.path \|\| firstChangedPath\(\), current\.line\)/s],
-  ["shortcut: Cmd+A scopes selection", /key\.toLowerCase\(\) === 'a'.*selectNodeContents\(target\)/s],
-  ["shortcut: double Shift opens quick open", /e\.key === 'Shift'.*openQuickOpen\(\)/s],
-  ["shortcut: quick-open ArrowDown", /#quick-open-input[\s\S]*e\.key === 'ArrowDown'[\s\S]*quickMove\(1\)/],
-  ["shortcut: quick-open ArrowUp", /#quick-open-input[\s\S]*e\.key === 'ArrowUp'[\s\S]*quickMove\(-1\)/],
-  ["shortcut: quick-open Enter", /#quick-open-input[\s\S]*e\.key === 'Enter'[\s\S]*openSource\(active\.dataset\.path\)/],
-  ["shortcut: q opens question composer", /e\.key === 'q'.*openComposer\('q'\)/s],
-  ["shortcut: c opens change composer", /e\.key === 'c'.*openComposer\('c'\)/s],
-  ["shortcut: Cmd+Enter saves composer", /e\.metaKey \|\| e\.ctrlKey.*e\.key === 'Enter'.*save\(\)/s],
-  ["shortcut: ArrowDown selects comment", /e\.key === 'ArrowDown'.*selectAdjacentComment/s],
-  ["shortcut: ArrowUp selects comment", /e\.key === 'ArrowUp'.*selectAdjacentComment/s],
-  ["shortcut: e edits selected comment", /e\.key === 'e'.*editSelectedComment\(\)/s],
-  ["shortcut: Backspace deletes selected comment", /e\.key === 'Backspace'.*deleteSelectedComment\(\)/s],
-  ["shortcut: Escape clears selected comment", /e\.key === 'Escape'.*selectComment\(null\)/s],
-  ["shortcut: viewed toggle", /e\.key === 'v'.*toggleViewed\(current\.path\)/s],
-  ["shortcut: PageUp and PageDown scroll diff", /PageDown.*PageUp.*scrollTop/s],
-  ["shortcut: merged Opt+Enter menu", /e\.altKey && e\.key === 'Enter'.*openMergedMenu/s],
-  ["shortcut: merged Opt+Arrow headers", /e\.altKey && \(e\.key === 'ArrowDown' \|\| e\.key === 'ArrowUp'\).*stepMergedHeader/s],
-  ["shortcut: dock maximize Cmd+Shift+quote", /e\.shiftKey && e\.key === "'"/],
-  ["shortcut: sidebar ArrowDown", /function sidebarKeydown[\s\S]*e\.key === 'ArrowDown'/],
-  ["shortcut: sidebar ArrowUp", /function sidebarKeydown[\s\S]*e\.key === 'ArrowUp'/],
-  ["shortcut: sidebar Enter opens row", /function sidebarKeydown[\s\S]*e\.key === 'Enter'[\s\S]*e\.currentTarget\.click\(\)/],
-  ["shortcut: sidebar Opt+Enter opens action menu", /e\.altKey && e\.key === 'Enter'[\s\S]*openFileActionMenu/],
-  ["shortcut: history ArrowDown", /current\.view === 'history' && e\.key === 'ArrowDown'.*historyMove\(1\)/s],
-  ["shortcut: history ArrowUp", /current\.view === 'history' && e\.key === 'ArrowUp'.*historyMove\(-1\)/s],
-  ["shortcut: history Enter opens commit", /current\.view === 'history' && e\.key === 'Enter'.*openHistoryCommit/s],
-  ["shortcut: Ctrl+backtick focuses terminal", /e\.ctrlKey && e\.key === '`'.*toggleTerminal\(\)/s],
-  ["shortcut: terminal Enter", /#terminal-panes[\s\S]*e\.key === 'Enter'[\s\S]*writeActive\('\\\\r'\)/],
-  ["shortcut: terminal Backspace", /#terminal-panes[\s\S]*e\.key === 'Backspace'[\s\S]*String\.fromCharCode\(127\)/],
-  ["shortcut: terminal Tab", /#terminal-panes[\s\S]*e\.key === 'Tab'[\s\S]*writeActive\('\\\\t'\)/],
-  ["shortcut: terminal Ctrl+C", /e\.ctrlKey && e\.key\.toLowerCase\(\) === 'c'[\s\S]*String\.fromCharCode\(3\)/]
-];
-for (const [name, pattern] of shortcutChecks) check(name, has(pattern));
-
-const settingsChecks = [
-  ["settings: Darcula default", /theme:\s*'darcula'/],
-  ["settings: Darcula theme option", /data-theme-option=\\?"darcula\\?"/],
-  ["settings: theme selector", "settings-theme"],
-  ["settings: language selector", "settings-language"],
-  ["settings: plan prompt template", "settings-prompt-plan"],
-  ["settings: question prompt template", "settings-prompt-q"],
-  ["settings: change prompt template", "settings-prompt-c"],
-  ["settings: reset action", "settings-reset"],
-  ["settings: saved state", "settings-saved"],
-  ["settings: local persistence", "momenterm-setting-"],
-  ["settings: native bridge persistence", /momentermSettings\)\s*window\.momentermSettings\.set/],
-  ["settings: theme restored on boot", /applyTheme\(getSetting\('theme'\)\)/],
-  ["settings: prompt templates feed merged handoff", /getSetting\('promptC'\).*getSetting\('promptQ'\).*getSetting\('promptPlan'\)/s]
-];
-for (const [name, pattern] of settingsChecks) check(name, has(pattern));
-
-const darculaChecks = [
-  ["darcula: editor background", "--bg:#2b2b2b"],
-  ["darcula: tool window panel", "--panel:#3c3f41"],
-  ["darcula: foreground", "--text:#a9b7c6"],
-  ["darcula: stable UI font token", "--ui-font:-apple-system"],
-  ["darcula: Korean UI fallback", "Apple SD Gothic Neo"],
-  ["darcula: stable code font token", "--code-font:\"SF Mono\""],
-  ["darcula: stable terminal font token", "--terminal-font:\"MesloLGS NF\""],
-  ["darcula: terminal nerd font fallback", "JetBrainsMono Nerd Font Mono"],
-  ["darcula: terminal uses font token", ".terminal-output{display:none;margin:0;height:100%;overflow:auto;padding:12px;font-family:var(--terminal-font)"],
-  ["darcula: keyword orange", "--kw:#cc7832"],
-  ["darcula: string green", "--str:#6a8759"],
-  ["darcula: function yellow", "--fn:#ffc66d"],
-  ["darcula: type foreground", "--type:#a9b7c6"],
-  ["darcula: decorator olive", "--decor:#bbb529"],
-  ["darcula: topbar compact", ".topbar{position:fixed;left:0;right:0;top:0;height:44px"],
-  ["darcula: compact activity rail", ".activity-rail{position:fixed;top:44px;bottom:0;left:0;width:54px"],
-  ["darcula: activity active state", ".rail-btn.active"],
-  ["darcula: source editor background", ".source-body{padding:10px 12px"],
-  ["darcula: diff editor background", ".diff2html-container{padding:10px 12px"],
-  ["darcula: sidebar tab wiring", "function setSidebarTab"]
-];
-for (const [name, pattern] of darculaChecks) check(name, has(pattern));
-
-const topbarMarkup = core.match(/<header class="topbar">([\s\S]*?)<\/header>/);
-check("action exposure: topbar has no global action buttons", !!topbarMarkup && !topbarMarkup[1].includes("data-action"));
-check("action exposure: activity rail buttons use SVG icons", /class="rail-btn"[\s\S]*miniIcon/.test(core));
-check("action exposure: rail tooltips carry shortcuts", /class="rail-tip"[\s\S]*<kbd>/.test(core));
-check("action exposure: rail action set matches Monacori app shell", (core.match(/railButton\(kind: "/g) || []).length === 8);
-check("action exposure: quick-open toolbar button removed", !core.includes('<button id="quick-open-button"'));
-check("action exposure: quick-open binding guarded", /var quickOpenButton = qs\('#quick-open-button'\);[\s\S]*if \(quickOpenButton\) quickOpenButton\.addEventListener/.test(clientScript));
-check("action exposure: viewed toggle is revealed from selection state", /function updateViewedToggle\(\)[\s\S]*toggle\.hidden = !path/.test(clientScript));
-check("action exposure: terminal controls are icon buttons", /id="terminal-split" class="icon-btn"/.test(core) && /id="terminal-rename" class="icon-btn"/.test(core) && /id="terminal-close" class="icon-btn"/.test(core));
-check("action exposure: settings close is icon button", /id="settings-close" class="icon-btn"/.test(core));
-check("action exposure: dock controls are icon buttons", /class="icon-btn" data-dock-maximize/.test(clientScript) && /class="icon-btn" data-dock-close/.test(clientScript));
-check("action exposure: file header controls are icon buttons", /class="icon-btn" data-view-file/.test(clientScript) && /class="icon-btn" data-viewed-file/.test(clientScript));
-
-const featureChecks = [
-  ["feature: terminal base boots by default", /var current = \{ view: 'terminal'[\s\S]*ensureTerminal\(\);/],
-  ["feature: review tools are floating overlay", "id=\"review-overlay\" class=\"review-overlay hidden\""],
-  ["feature: showPane opens review overlay", /function showPane\(id\)[\s\S]*openReviewOverlay\(\)/],
-  ["feature: terminal new tab", /function splitTerminal\(\)\{ closeReviewOverlay\(\); spawnTerminal\(\); \}/],
-  ["feature: terminal tab close uses native PTY kill", /function closeTerminalTab[\s\S]*momentermPty\.kill/],
-  ["feature: terminal starts in home directory", /homeDirectoryForCurrentUser[\s\S]*ptyManager\.spawn\(cols: cols, rows: rows, cwd: cwd\)/],
-  ["feature: non-git diff guidance", "renderNonGitDiffNotice"],
-  ["feature: non-git changes guidance", "renderNonGitChangesPanel"],
-  ["feature: file view falls back to filesystem scan", "filesystemSourcePaths"],
-  ["feature: markdown HTML is sanitized", "sanitizeInlineHtml"],
-  ["feature: CSV render path", "parseCsvLine"],
-  ["feature: image source preview", "renderImageView"],
-  ["feature: image lightbox", "openLightbox"],
-  ["feature: VCS status classes", "vcs-new.source-link"],
-  ["feature: diff update defers while composing or typing", /if \(composing \|\| isTextEditingActive\(\)\) \{ pendingUpdate = update; schedulePendingUpdate\(\); return; \}/],
-  ["feature: comment remap keeps comments", "function remapComments"],
-  ["feature: terminal split", "function splitTerminal"],
-  ["feature: terminal pane focus", "function focusTerminalPane"],
-  ["feature: terminal pane rename", "function renameTerminalPane"],
-  ["feature: terminal strips OSC title escapes", /function stripAnsi[\s\S]*\\x1b\\]/],
-  ["feature: terminal strips save-restore cursor escapes", /function stripAnsi[\s\S]*\\x1b\[=>78\]/],
-  ["feature: history graph", "computeHistoryGraph"],
-  ["feature: HTTP dock", "http-client"]
-];
-for (const [name, pattern] of featureChecks) check(name, has(pattern));
-
-const performanceChecks = [
-  ["performance: large diff context is bounded", "--unified=\\(Self.diffContextLines)"],
-  ["performance: 100000-line diff context removed", !core.includes("--unified=100000")],
-  ["performance: large untracked inline diff capped", "largeUntrackedBinaryDiff"],
-  ["performance: large untracked cap matches Monacori", "maxInlineUntrackedDiffBytes = 500_000"],
-  ["parity: unstaged review includes staged changes", "args.append(contentsOf: [\"HEAD\", \"--\"])"],
-  ["parity: diff rename detection matches Monacori", "--find-renames"],
-  ["performance: diff index cache present", "var diffIndex ="],
-  ["performance: source path index present", "rebuildSourceIndex"],
-  ["performance: syntax highlighting is chunked", "requestIdleCallback"],
-  ["performance: source view windowing present", "source-window-note"],
-  ["performance: refresh builds do not overlap", "isLoadingDocument"]
-];
-for (const [name, pattern] of performanceChecks) check(name, typeof pattern === "boolean" ? pattern : has(pattern));
-
-const forbiddenRuntime = [
+const forbidden = [
+  "import Web" + "Kit",
+  "WK" + "WebView",
+  "WK" + "ScriptMessage",
+  "WK" + "UserContentController",
+  "window.web" + "kit",
+  "evaluate" + "JavaScript",
+  "loadHTML" + "String",
+  "Native" + "HTMLRenderer",
+  "client" + "Script",
+  "inner" + "HTML",
+  "-framework Web" + "Kit",
+  ".linkedFramework(\"Web" + "Kit\")",
   "monacori" + "/dist",
   "monacori" + "-bridge",
   "MONACORI" + "_DIST",
   "NODE" + "_BIN",
-  "buildDiff" + "Review(",
-  "renderWelcome" + "Html(",
-  "performHttp" + "Request("
+  "buildDiff" + "Review("
 ];
-for (const marker of forbiddenRuntime) check(`runtime dependency absent: ${marker}`, !core.includes(marker));
+for (const marker of forbidden) {
+  check(`forbidden non-native marker absent: ${marker}`, !all.includes(marker));
+}
+
+check("package links AppKit", files.package.includes('.linkedFramework("AppKit")'));
+check("package does not link browser framework", !files.package.includes("Web" + "Kit"));
+check("swiftc build does not link browser framework", !files.build.includes("Web" + "Kit"));
+
+check("ReviewDocument has no browser payload field", !(new RegExp("let " + "html" + "\\b")).test(files.reviewTypes));
+check("ReviewDocument has no legacy payload fields", !(new RegExp(["lazy" + "Bodies", "lazy" + "SourceData", "update: JSON" + "Value"].join("|"))).test(files.reviewTypes));
+check("ReviewDocument carries native diff model", /let diffFiles: \[DiffFile\]/.test(files.reviewTypes));
+check("ReviewDocument carries native source model", /let sourceFiles: \[SourceFile\]/.test(files.reviewTypes));
+check("DiffFile exposes native JSON contract", /func jsonValue\(\) -> JSONValue/.test(files.reviewTypes));
+check("DiffHunk exposes native JSON contract", /struct DiffHunk[\s\S]*func jsonValue\(\) -> JSONValue/.test(files.reviewTypes));
+check("DiffLine exposes native JSON contract", /struct DiffLine[\s\S]*func jsonValue\(\) -> JSONValue/.test(files.reviewTypes));
+
+check("ReviewCore no longer renders browser markup", !(new RegExp(["render" + "Review", "render" + "Welcome", "diff" + "Html", "changes" + "Panel", "files" + "Tree", "review" + "Status"].join("|"))).test(files.reviewCore));
+check("ReviewCore returns native file states", /fileStates: fileStates/.test(files.reviewCore));
+check("ReviewCore returns native HTTP environments", /httpEnvironments: httpEnvironments/.test(files.reviewCore));
+check("native HTTP client parses IntelliJ .http requests and env files", /NativeHttpRequestParser/.test(files.httpClient) && /hasPrefix\("###"\)/.test(files.httpClient) && /http-client\.env\.json/.test(files.httpClient) && /http-client\.private\.env\.json/.test(files.httpClient) && /NativeHttpEnvironmentStore\.selected/.test(files.httpClient));
+check("native HTTP client substitutes variables and sends URLSession requests", /private func substitute/.test(files.httpClient) && /unresolvedVariables/.test(files.httpClient) && /URLSession\.shared\.dataTask/.test(files.httpClient) && /urlRequest\.httpMethod = request\.method/.test(files.httpClient));
+check("file view renders HTTP run gutter and response pane", /renderHttpSourceFile/.test(files.controller) && /installHttpRunButtons/.test(files.controller) && /contentTintColor = theme\.additionText/.test(files.controller) && /httpRunButtonsUsePaletteForSmokeTest/.test(files.controller) && /setSingleCodePaneVisible\(false\)/.test(files.controller) && /newTextView\.textStorage\?\.setAttributedString/.test(files.controller));
+check("Option+Enter runs selected HTTP request", /runHttpRequestAtCaretIfAvailable/.test(files.controller) && /sendMergedPromptToSelectedTerminal/.test(files.controller) && /event\.keyCode == 36 \|\| event\.keyCode == 76/.test(files.controller));
+check("commit diff returns native diff files", /"diffFiles": \.array\(diffFiles\.map \{ \$0\.jsonValue\(\) \}\)/.test(files.reviewCore));
+check("non-git changes build avoids source tree crawl", /let sourceFiles = isGitRepository \? try sourceCollector\.collect\(files: files, root: root\) : \[\]/.test(files.reviewCore));
+check("git root detection uses fast marker walk instead of rev-parse", /func repoRoot\(from url: URL\) throws -> URL[\s\S]*fastRepoRoot\(from: url\)/.test(files.gitClient) && files.gitClient.includes('appendingPathComponent(".git")') && !files.gitClient.includes("rev-parse"));
+
+check("main window is AppKit controller only", /final class MainWindowController: NSWindowController, NSWindowDelegate, NativePtyManagerDelegate/.test(files.controller));
+check("native terminal text view handles keyDown", /private final class NativeTerminalTextView: NSTextView[\s\S]*override func keyDown\(with event: NSEvent\)/.test(files.controller));
+check("native terminal focus is restored after showWindow", /override func showWindow\(_ sender: Any\?\)[\s\S]*focusTerminalIfAppropriate/.test(files.controller));
+check("native terminal focus is restored when window becomes key", /func windowDidBecomeKey\(_ notification: Notification\)[\s\S]*focusTerminalIfAppropriate/.test(files.controller));
+check("native terminal smoke exposes first responder probe", /terminalIsFirstResponderForSmokeTest/.test(files.controller));
+check("native terminal smoke exposes output probe", /terminalOutputForSmokeTest/.test(files.controller));
+check("terminal Enter maps to CR", /case 36, 76:\s*return "\\r"/.test(files.controller));
+check("terminal Backspace maps to DEL", /case 51:\s*return String\(UnicodeScalar\(127\)!\)/.test(files.controller));
+check("terminal Tab maps to tab", /case 48:\s*return "\\t"/.test(files.controller));
+check("terminal Ctrl keys map natively", /flags\.contains\(\.control\)[\s\S]*UnicodeScalar\(scalar\.value - 64\)/.test(files.controller));
+check("terminal paste writes to PTY", /override func paste\(_ sender: Any\?\)[\s\S]*onPaste\?\(text\)/.test(files.controller));
+check("terminal IME insertText writes to PTY", /override func insertText\(_ insertString: Any, replacementRange: NSRange\)[\s\S]*onInput\?/.test(files.controller));
+check("terminal committed non-ASCII keyDown bypasses IME decomposition", /committedNonASCIIText/.test(files.controller) && /text\.unicodeScalars\.contains/.test(files.controller));
+check("terminal starts in home directory", /spawnTerminal\(\s*name: "~",\s*cwd: FileManager\.default\.homeDirectoryForCurrentUser/.test(files.controller));
+check("plain app launch does not auto-create a workspace", /verifyPlainLaunchStaysHomeWithoutWorkspace/.test(files.keyInputSmokeSource) && /plain app launch created or activated a workspace instead of behaving like a normal terminal/.test(files.keyInputSmokeSource) && /plain app launch activated a saved workspace without an active workspace marker/.test(files.keyInputSmokeSource) && /plain app launch resurrected a deleted workspace from stale persisted terminal state/.test(files.keyInputSmokeSource));
+check("empty native workspace state blocks legacy remigration", /private func loadArray\(forKey key: String\) -> \[JSONValue\]\?[\s\S]*defaults\.object\(forKey: key\) != nil/.test(files.terminalCore) && /if let native = loadArray\(forKey: nativeKey\) \{[\s\S]*return native[\s\S]*\}/.test(files.terminalCore));
+check("launch smoke does not persist repo workspace into user settings", /MOMENTERM_DISABLE_STATE_PERSISTENCE=1/.test(files.launchSmoke) && /disableStatePersistenceEnv = "MOMENTERM_DISABLE_STATE_PERSISTENCE"/.test(files.controller) && /guard !Self\.statePersistenceDisabled else \{[\s\S]*return[\s\S]*\}[\s\S]*terminalCore\.saveTabs/.test(files.controller) && /clearPersistedState\(\)[\s\S]*print\("key input smoke ok"\)/.test(files.keyInputSmokeSource));
+check("terminal uses native PTY spawn", /ptyManager\.spawnPersistent\(\s*cols: size\.cols,\s*rows: size\.rows,\s*cwd: cwd,\s*sessionKey: sessionKey,\s*enforceCwd: enforceWorkspaceCwd\s*\)/.test(files.controller));
+check("terminal output has native ANSI renderer", /private final class NativeAnsiRenderer/.test(files.controller) && /applySGR/.test(files.controller));
+check("terminal can build libghostty GPU renderer", /configure_libghostty/.test(files.build) && /configure_libghostty/.test(files.keyInputSmoke) && /GhosttyKit\.xcframework\.zip/.test(files.libGhosttyEnv) && /-D MOMENTERM_LIBGHOSTTY/.test(files.libGhosttyEnv) && /-framework Metal/.test(files.libGhosttyEnv) && /-framework IOSurface/.test(files.libGhosttyEnv));
+check("terminal libghostty renderer is native Metal host-managed surface", /#if MOMENTERM_LIBGHOSTTY/.test(files.libGhosttyView) && /import libghostty/.test(files.libGhosttyView) && /CAMetalLayer/.test(files.libGhosttyView) && /GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED/.test(files.libGhosttyView) && /ghostty_surface_write_buffer/.test(files.libGhosttyView));
+check("terminal PTY output is forwarded to libghostty renderer", /var ghosttyView: LibGhosttyTerminalView\?/.test(files.controller) && /session\.ghosttyView\?\.receive\(data\)/.test(files.controller) && /terminalUsesLibGhosttyRendererForSmokeTest/.test(files.controller) && /terminal is not using libghostty Metal renderer/.test(files.keyInputSmokeSource));
+check("ANSI truecolor is supported", /case 38, 48:[\s\S]*values\[index \+ 1\] == 2/.test(files.controller));
+check("terminal renderer uses native screen buffer", /private final class NativeAnsiRenderer[\s\S]*private var screen: \[\[Cell\]\]/.test(files.controller));
+check("terminal renderer supports alternate screen", /case 47, 1047, 1049:/.test(files.controller) && /alternateScreen = true/.test(files.controller));
+check("terminal renderer supports cursor addressing", /case "H", "f":[\s\S]*moveCursor/.test(files.controller) && /case "G":[\s\S]*cursorColumn/.test(files.controller));
+check("terminal renderer clips stale oversized right prompts after pane split", /horizontalOverflowClipActive/.test(files.controller) && /moveCursorColumnClippingOverflow/.test(files.controller) && /seedTerminalStaleWidthRightPromptsForSplitSmokeTest/.test(files.controller));
+check("terminal renderer supports native terminal responses", /handleStatusReport/.test(files.controller) && /consumeResponses/.test(files.controller) && files.controller.includes('pendingResponses.append("\\u{1b}[?1;2c")') && files.controller.includes('pendingResponses.append("\\u{1b}[0n")'));
+check("carriage-return redraw is handled natively", /cursorColumn = 0/.test(files.controller) && /private func eraseLine\(_ mode: Int/.test(files.controller));
+check("terminal PTY and renderer resize together", /func windowDidResize/.test(files.controller) && /session\.renderer\.resize\(columns: size\.cols, rows: size\.rows\)/.test(files.controller) && /ptyManager\.resize\(id: session\.id, cols: size\.cols, rows: size\.rows\)/.test(files.controller));
+check("terminal resize keeps right prompt inside viewport", /func windowDidResize\(_ notification: Notification\)[\s\S]*syncTerminalSizes\(\)[\s\S]*scheduleTerminalResize\(\)/.test(files.controller) && /terminalColumnFitSafetyColumns = 4/.test(files.controller) && /textContainer\?\.lineBreakMode = \.byClipping/.test(files.controller) && /textContainer\.lineBreakMode = \.byClipping/.test(files.controller) && /func terminalRightPromptFitsAfterResizeForSmokeTest\(\) -> Bool/.test(files.controller));
+check("terminal panes allow repeated splits beyond two", /maxTerminalPanesPerTab = 8/.test(files.controller) && /trimTerminalPanesIfNeeded/.test(files.controller));
+check("Cmd+D split never falls back to pane navigation", /func splitTerminalPane\(\)[\s\S]*splitTerminalPane\(splitVertically: true\)/.test(files.controller) && /private func splitTerminalPane\(splitVertically: Bool\)[\s\S]*createPane\(\s*in: tab/.test(files.controller) && !/private func splitTerminalPane\(splitVertically: Bool\)[\s\S]*focusTerminalPane\(delta: 1\)[\s\S]*createPane\(\s*in: tab/.test(files.controller) && !/private func createPane\([\s\S]*in tab:[\s\S]*focusTerminalPane\(delta: 1\)[\s\S]*let initialSize/.test(files.controller));
+check("Cmd+Shift+D splits focused terminal pane below without rotating all panes", /splitTerminalBelow/.test(files.appDelegate) && /Split Terminal Pane Below/.test(files.appDelegate) && /func splitTerminalPaneBelow\(\)[\s\S]*splitTerminalPane\(splitVertically: false\)/.test(files.controller) && /case "d":[\s\S]*splitTerminalPaneBelow\(\)/.test(files.controller) && /func terminalFocusedPaneSplitBelowOnlyForSmokeTest\(\) -> Bool/.test(files.controller) && /createTerminalBelowSplitView/.test(files.controller) && /tab\.addBelowSplit\(focusedPaneId: focusedPaneId, newPaneId: pane\.id\)/.test(files.controller));
+check("Cmd+D inside a below split only side-splits the focused below pane", /belowSideSplitGroups/.test(files.controller) && /addSideSplitInsideBelowGroup/.test(files.controller) && /createTerminalSideSplitView/.test(files.controller) && /terminalBelowPaneSideSplitForSmokeTest/.test(files.controller));
+check("maximum terminal pane notice is compact", /private func showTerminalPaneLimitNotice\(\)[\s\S]*showWorkspaceToast\("Maximum terminal panes reached\."\)/.test(files.controller) && /terminalPaneLimitNoticeIsCompactForSmokeTest/.test(files.controller));
+check("terminal scroll is vertical only", /MomentermDesign\.styleMinimalScrollbars\(scroll\)/.test(files.controller) && /terminalScrollsVerticallyOnlyForSmokeTest/.test(files.controller));
+check("terminal font defaults to Monaco", /"Monaco"[\s\S]*NSFont\(name: name, size: size\)/.test(files.controller) && /terminalFontNameForSmokeTest/.test(files.controller));
+check("terminal size uses rendered font metrics", /NativeTerminalFont\.cellMetrics/.test(files.controller) && /textContainerInset = Self\.terminalTextInset/.test(files.controller));
+check("terminal document view fills viewport", /fitTerminalDocumentView/.test(files.controller) && /terminalDocumentFillsViewportForSmokeTest/.test(files.controller));
+check("terminal short output stays top-aligned", /scrollToBeginningOfDocument/.test(files.controller) && /terminalShortOutputStartsAtTopForSmokeTest/.test(files.controller) && /trimLeadingBlankLines/.test(files.designSystem));
+check("terminal renderer trims leading blank screen rows", /firstNonBlankScreenRow/.test(files.controller) && /let firstRow = alternateScreen \? 0 : firstNonBlankScreenRow\(\)/.test(files.controller));
+check("terminal renderer trims leading blank scrollback rows", /firstNonBlankScrollbackLine/.test(files.controller) && /scrollbackStart/.test(files.controller));
+check("terminal renderer hides wide-character continuation cells", /isWideContinuation/.test(files.controller) && /if cell\.isWideContinuation \{\s*continue\s*\}/.test(files.controller));
+check("terminal output is bounded per renderer path", /terminalGhosttyTranscriptLimit = 120_000/.test(files.controller) && /terminalFallbackTranscriptLimit = 240_000/.test(files.controller) && /transcriptLimit\(for session: TerminalSession\)/.test(files.controller));
+check("libghostty terminal output does not refresh hidden AppKit text on every burst", /private func processTerminalOutput\(_ data: Data, for session: TerminalSession\)[\s\S]*if session\.ghosttyView == nil \{\s*syncTerminalSize\(for: session\)[\s\S]*session\.ghosttyView\?\.receive\(data\)[\s\S]*if session\.ghosttyView == nil \{\s*refreshTerminalTextView\(for: session\)/.test(files.controller));
+check("libghostty surfaces are explicitly released with terminal sessions", /func releaseSurface\(\)[\s\S]*ghostty_surface_free/.test(files.libGhosttyView) && /private func disposeTerminalSession\(_ session: TerminalSession[\s\S]*releaseSurface\(\)[\s\S]*textStorage\?\.setAttributedString\(NSAttributedString\(\)\)/.test(files.controller));
+check("libghostty config caps scrollback", /scrollback-limit = 1048576/.test(files.libGhosttyView));
+check("background review refresh is limited to live review overlays", /overlayNeedsLiveReviewReload/.test(files.controller) && /case \.changes, \.questions, \.changeRequests, \.history/.test(files.controller) && /guard let self = self, self\.root != nil, self\.overlayNeedsLiveReviewReload else \{ return \}/.test(files.controller));
+check("PTY data is coalesced before render", /pendingPtyData[\s\S]*milliseconds\(8\)[\s\S]*flushPtyData/.test(files.controller));
+check("large PTY bursts flush immediately", /pendingBytes >= 64 \* 1024[\s\S]*flushPtyData\(\)/.test(files.controller));
+check("PTY writes never block the main thread", /private let writeQueue: DispatchQueue/.test(files.pty) && /writeQueue\.async[\s\S]*masterHandle\.write/.test(files.pty));
+check("PTY output coalescing avoids repeated string concatenation", /private var pendingPtyData: \[Int: \[Data\]\]/.test(files.controller) && /pendingPtyData\[id, default: \[\]\]\.append\(data\)/.test(files.controller) && /private static func joinDataChunks\(_ chunks: \[Data\]\) -> Data/.test(files.controller) && !/\.value\.joined\(\)/.test(files.controller));
+check("terminal PTY preserves split UTF-8 chunks", /private final class NativeUTF8StreamDecoder/.test(files.controller) && /decodeTerminalUTF8ChunksForSmokeTest/.test(files.controller) && /split UTF-8 PTY chunks decoded incorrectly/.test(files.keyInputSmokeSource));
+check("terminal copy and long unicode paste use controller path", /@objc func copySelection/.test(files.controller) && /@objc func pasteSelection/.test(files.controller) && /copyActiveTerminalText/.test(files.controller) && /pasteIntoActiveTerminalFromPasteboard/.test(files.controller) && /terminalLargeUnicodePasteUsesControllerPathForSmokeTest/.test(files.controller) && /terminalCopyCopiesTranscriptForSmokeTest/.test(files.controller) && /large unicode terminal paste through controller path blocked/.test(files.keyInputSmokeSource) && /terminal copy did not place transcript text on the pasteboard/.test(files.keyInputSmokeSource) && /targetedItem\("Copy", #selector\(copySelection\), "c"\)/.test(files.appDelegate) && /targetedItem\("Paste", #selector\(pasteSelection\), "v"\)/.test(files.appDelegate));
+check("PTY writes are chunked off the main thread", /let chunkSize = 16 \* 1024/.test(files.pty) && /writeQueue\.async/.test(files.pty) && /masterHandle\.write/.test(files.pty));
+check("PTY smoke verifies raw Data unicode output", /didReceiveData data: Data/.test(files.ptySmoke) && /momenterm-pty-unicode:한글🙂/.test(files.ptySmoke) && /PtyUTF8StreamDecoder/.test(files.ptySmoke));
+check("terminal bell raises workspace agent completion notification", /UNUserNotificationCenterDelegate/.test(files.appDelegate) && /willPresent notification: UNNotification/.test(files.appDelegate) && /\.banner/.test(files.appDelegate) && /private var workspaceAgentAlertPaths = Set<String>\(\)/.test(files.controller) && /private func handleTerminalBell\(for session: TerminalSession\)/.test(files.controller) && /data\.contains\(0x07\)/.test(files.controller) && /showBellNotification\(\.object/.test(files.controller) && /workspaceAgentAlertDot/.test(files.controller));
+
+check("review overlay is native split view", /private let overlayBodySplitView = NSSplitView\(\)/.test(files.controller) && /private let overlayDiffSplitView = MomentermBalancedSplitView\(\)/.test(files.controller));
+check("terminal pane split view is native", /private let terminalPaneSplitView = MomentermBalancedSplitView\(\)/.test(files.controller) && /func splitTerminalPane\(\)/.test(files.controller));
+check("native design system exists", /enum MomentermDesign/.test(files.designSystem) && /final class MomentermBalancedSplitView: NSSplitView/.test(files.designSystem));
+check("native design system defines padded panels and compact controls", /panelOuterPadding: CGFloat = 14/.test(files.designSystem) && /panelInnerPadding: CGFloat = 10/.test(files.designSystem) && /railButtonSize: CGFloat = 28/.test(files.designSystem) && /iconButtonSize: CGFloat = 22/.test(files.designSystem) && /terminalTabHeight: CGFloat = 22/.test(files.designSystem));
+check("terminal pane split is centered", /private let terminalPaneSplitView = MomentermBalancedSplitView\(\)/.test(files.controller) && /balancesVisibleSubviews = true/.test(files.controller) && /balanceVisibleSubviews/.test(files.designSystem) && /terminalPaneSplitIsBalancedForSmokeTest/.test(files.controller));
+check("active terminal pane is highlighted by dimming inactive panes", /private func applyTerminalPaneSelectionStyles\(\)[\s\S]*container\.alphaValue = !hasSplitPanes \|\| active \? 1\.0 : 0\.48/.test(files.controller) && /paneContainerView/.test(files.controller) && /terminalPaneSelectionStyleIsVisibleForSmokeTest/.test(files.controller));
+check("terminal tab UI is removed in favor of pane headers", /terminalTabStack\.isHidden = true/.test(files.controller) && /private func rebuildTerminalTabs\(\)[\s\S]*terminalTabStack\.arrangedSubviews\.forEach[\s\S]*terminalTabStack\.isHidden = true[\s\S]*tab\.tabButton = nil/.test(files.controller) && files.controller.includes('pane.paneTitleLabel?.stringValue = "Terminal \\(index + 1)"') && /terminalTabUiIsRemovedForSmokeTest/.test(files.controller) && /terminalPaneHeadersAreVisibleForSmokeTest/.test(files.controller));
+check("terminal top path bar is removed and pane headers own controls", /terminalPaneSplitView\.topAnchor\.constraint\(equalTo: terminalView\.topAnchor\)/.test(files.controller) && /private func updateTerminalStatus\(\)[\s\S]*terminalStatusLabel\.stringValue = ""/.test(files.controller) && /terminalPaneHeaderButton/.test(files.controller) && /splitTerminalFromPaneHeader/.test(files.controller) && /terminalTopPathBarIsRemovedForSmokeTest/.test(files.controller) && /terminalPaneHeaderControlsHaveShortcutTooltipsForSmokeTest/.test(files.controller));
+check("newTerminalTab compatibility splits a pane instead of creating tab UI", /func newTerminalTab\(\) \{\s*splitTerminalPane\(\)\s*\}/.test(files.controller) && /private func createTerminalGroupForActiveScope\(\)/.test(files.controller));
+check("split terminal pane does not create a tab", /func splitTerminalPane\(\)[\s\S]*createPane\(\s*in: tab/.test(files.controller));
+check("side-by-side diff is exactly old/new native code text views", /private let oldTextView = NativeCodeTextView\(\)/.test(files.controller) && /private let newTextView = NativeCodeTextView\(\)/.test(files.controller) && /private final class NativeCodeTextView: NSTextView/.test(files.controller));
+check("changes diff keeps side-by-side panes visible", /balanceOverlayDiffSplit/.test(files.controller) && /changesOverlayIsSideBySideForSmokeTest/.test(files.controller));
+check("diff renderer writes old side", /renderDiffFile\(_ file: DiffFile\)[\s\S]*appendCodeLine\(number: line\.oldNumber/.test(files.controller));
+check("diff renderer writes new side", /renderDiffFile\(_ file: DiffFile\)[\s\S]*appendCodeLine\(number: line\.newNumber/.test(files.controller));
+check("changes diff uses IntelliJ-style editor chrome outside code text", /private let diffEditorChromeView = NSView\(\)/.test(files.controller) && /private let diffEditorCurrentVersionCheckbox = NSButton\(checkboxWithTitle: "Current version"/.test(files.controller) && /private func configureDiffEditorChrome\(for file: DiffFile\)/.test(files.controller) && files.controller.includes('diffEditorStatusLabel.stringValue = "\\(differences) \\(suffix), 0 included"') && /diffEditorChromeHeight: CGFloat = 46/.test(files.designSystem) && /changesDiffViewHasEnhancedHeaderAndInlineHighlightsForSmokeTest/.test(files.controller) && /IntelliJ-style editor chrome/.test(files.keyInputSmokeSource));
+check("diff and source views use native syntax highlighter", /private enum NativeSyntaxHighlighter/.test(files.controller) && /renderDiffFile\(_ file: DiffFile\)[\s\S]*NativeSyntaxHighlighter\.highlight/.test(files.controller) && /changesOverlayHasSyntaxHighlightingForSmokeTest/.test(files.controller));
+check("diff and file code views use readable Monaco spacing", files.designSystem.includes('NSFont(name: "Monaco", size: 14)') && files.designSystem.includes('NSFont(name: "Monaco", size: 13)') && /codeMinimumLineHeight: CGFloat = 20/.test(files.designSystem) && /codeLineSpacing: CGFloat = 3/.test(files.designSystem) && /NativeSyntaxHighlighter[\s\S]*MomentermDesign\.Fonts\.code/.test(files.controller) && /appendCodeLine\([\s\S]*MomentermDesign\.Fonts\.diffCode/.test(files.controller) && /font\.pointSize >= 12\.5[\s\S]*font\.pointSize < 14/.test(files.controller) && /changesDiffUsesReadableMonacoAndSingleScrollerForSmokeTest/.test(files.controller) && /slightly smaller Monaco diff text/.test(files.keyInputSmokeSource));
+check("diff renderer omits inline plus minus markers and hunk/header text", !/appendCodeLine\([\s\S]*marker:/.test(files.controller) && !/marker: String = ""/.test(files.controller) && !/appendDiffHeader/.test(files.controller) && !/appendLine\(hunk\.header/.test(files.controller) && files.controller.includes('combined.range(of: #"(?m)^@@ "') && /changesDiffOmitsInlineChangeMarkersForSmokeTest/.test(files.controller));
+check("changes diff exposes one right scrollbar with synced panes", /configureCodeScrollersForCurrentOverlay\(singlePane:/.test(files.controller) && /overlayMode == \.changes && !singlePane[\s\S]*oldScroll\?\.hasVerticalScroller = false[\s\S]*newScroll\?\.hasVerticalScroller = true/.test(files.controller) && /configureDiffScrollSync/.test(files.controller) && /NSView\.boundsDidChangeNotification/.test(files.controller));
+check("overlay sidebar text is themed", /styleSidebarButton/.test(files.designSystem) && /button\.attributedTitle = NSAttributedString/.test(files.designSystem) && /overlaySidebarTextIsReadableForSmokeTest/.test(files.controller));
+check("diff sidebar renders compact signed file metadata natively", /private struct DiffSidebarRow/.test(files.controller) && /private func diffSidebarRowButton\(_ row: DiffSidebarRow\) -> NSButton[\s\S]*NSImage\(systemSymbolName: diffFileIconName/.test(files.controller) && !/diffStatusBadgeText\(row\.status\)/.test(files.controller) && /diffSidebarStatsLabel\(\s*identifier: "diff-stat-additions"[\s\S]*color: theme\.fileTreeVcsStaged/.test(files.controller) && /diffSidebarStatsLabel\(\s*identifier: "diff-stat-deletions"[\s\S]*color: theme\.fileTreeVcsDeleted/.test(files.controller) && /additionsLabel\.widthAnchor\.constraint\(equalToConstant: 53\)/.test(files.controller) && /deletionsLabel\.widthAnchor\.constraint\(equalToConstant: 43\)/.test(files.controller) && /countsStack\.widthAnchor\.constraint\(equalToConstant: 99\)/.test(files.controller) && /diffSidebarStatsText\(additions: row\.additions, deletions: row\.deletions\)/.test(files.controller) && /NSAttributedString\(string: "\+\\\(additions\)"/.test(files.controller) && /NSAttributedString\(string: "-\\\(deletions\)"/.test(files.controller) && !/countsStack\.orientation = \.vertical/.test(files.controller) && /changesSidebarStatsAreStableAndColorCodedForSmokeTest/.test(files.controller) && /Changes sidebar \+added\/-deleted stats moved during refresh or used non-green\/non-red colors/.test(files.keyInputSmokeSource));
+check("diff sidebar renders viewed and review comment badges", /let questionCount: Int/.test(files.controller) && /let changeRequestCount: Int/.test(files.controller) && /diffReviewBadgeLabel\("VIEWED"/.test(files.controller) && /diffReviewBadgeLabel\("Q\\\(row\.questionCount\)"/.test(files.controller) && /diffReviewBadgeLabel\("CR\\\(row\.changeRequestCount\)"/.test(files.controller) && /changesSidebarShowsReviewStateBadgesForSmokeTest/.test(files.controller));
+check("diff sidebar colors by IntelliJ git status and file type", /private func diffStatusColor\(status: String, vcs: String\?\) -> NSColor[\s\S]*theme\.fileTreeVcsUntracked[\s\S]*theme\.fileTreeVcsStaged[\s\S]*theme\.fileTreeVcsDeleted[\s\S]*theme\.fileTreeVcsModified/.test(files.controller) && /private func diffFileIconName\(for row: DiffSidebarRow\) -> String[\s\S]*markdown[\s\S]*shell/.test(files.controller));
+check("diff renderer highlights changed tokens inline", /private func changedTextRange\(in text: String, comparedTo other: String\) -> NSRange\?/.test(files.controller) && /inlineHighlight: addition\.flatMap/.test(files.controller) && /inlineHighlightColor: theme\.additionText\.withAlphaComponent/.test(files.controller));
+check("Momenterm app palette defines primary and secondary dark and light schema", /struct Palette[\s\S]*let primary: NSColor[\s\S]*let secondary: NSColor[\s\S]*var background: NSColor \{ primary \}[\s\S]*var surface: NSColor \{ secondary \}/.test(files.designSystem) && /enum Colors[\s\S]*darkBase = rgb\(34, 40, 49\)[\s\S]*#222831/.test(files.designSystem) && /darkSurface = rgb\(57, 62, 70\)[\s\S]*#393E46/.test(files.designSystem) && /darkAccent = rgb\(255, 211, 105\)[\s\S]*#FFD369/.test(files.designSystem) && /darkForeground = rgb\(238, 238, 238\)[\s\S]*#EEEEEE/.test(files.designSystem) && /lightBase = rgb\(244, 246, 255\)[\s\S]*#F4F6FF/.test(files.designSystem) && /lightAccent = rgb\(251, 212, 109\)[\s\S]*#FBD46D/.test(files.designSystem) && /lightTeal = rgb\(79, 138, 139\)[\s\S]*#4F8A8B/.test(files.designSystem) && /lightInk = rgb\(7, 3, 26\)[\s\S]*#07031A/.test(files.designSystem));
+check("IntelliJ VCS colors stay separate from app palette colors", /intellijVcsModified = rgb\(104, 151, 187\)[\s\S]*#6897BB/.test(files.designSystem) && /intellijVcsStaged = rgb\(98, 151, 85\)[\s\S]*#629755/.test(files.designSystem) && /intellijVcsUntracked = rgb\(204, 102, 110\)[\s\S]*#CC666E/.test(files.designSystem) && /fileTreeVcsModified: intellijVcsModified/.test(files.designSystem) && /fileTreeVcsAdded: intellijVcsStaged/.test(files.designSystem) && /fileTreeVcsUntracked: intellijVcsUntracked/.test(files.designSystem) && /fileTreeSidebarHasGitStatusColorsForSmokeTest[\s\S]*staged-tool\.sh/.test(files.controller));
+check("design system separates app semantic colors from Darcula syntax colors", /struct SemanticColors/.test(files.designSystem) && /static let appDark = SemanticColors/.test(files.designSystem) && /struct DarculaSyntaxColors/.test(files.designSystem) && /static let darculaSyntax = DarculaSyntaxColors/.test(files.designSystem) && /keyword: rgb\(204, 120, 50\)[\s\S]*#CC7832/.test(files.designSystem) && /string: rgb\(106, 135, 89\)[\s\S]*#6A8759/.test(files.designSystem) && /number: rgb\(104, 151, 187\)[\s\S]*#6897BB/.test(files.designSystem) && /comment: rgb\(128, 128, 128\)[\s\S]*#808080/.test(files.designSystem));
+check("Native theme composes design-system UI tokens and Darcula syntax tokens", /private struct NativeTheme[\s\S]*static let darcula/.test(files.controller) && /private static let ui = MomentermDesign\.Colors\.appDark/.test(files.controller) && /private static let syntax = MomentermDesign\.Colors\.darculaSyntax/.test(files.controller) && /let primaryBackground = Self\.ui\.primaryBackground/.test(files.controller) && /let windowBackground = Self\.ui\.windowBackground/.test(files.controller) && /let panelBackground = Self\.ui\.panelBackground/.test(files.controller) && /let codeBackground = Self\.syntax\.background/.test(files.controller) && /let syntaxKeyword = Self\.syntax\.keyword/.test(files.controller) && /let syntaxString = Self\.syntax\.string/.test(files.controller) && /let syntaxNumber = Self\.syntax\.number/.test(files.controller) && /let syntaxComment = Self\.syntax\.comment/.test(files.controller));
+check("Momenterm palette routes chrome through primary and secondary tokens without off-palette navy", /primaryBackground: dark\.primary/.test(files.designSystem) && /secondaryBackground: dark\.secondary/.test(files.designSystem) && /railBackground: dark\.primary/.test(files.designSystem) && /toolbarBackground: dark\.secondary/.test(files.designSystem) && /panelBackground: dark\.secondary/.test(files.designSystem) && /terminalBackground: dark\.primary/.test(files.designSystem) && /selectionBackground: dark\.accent\.withAlphaComponent\(0\.30\)/.test(files.designSystem) && !/railBackground: blend\(dark\.(?:background|primary), into: light\.foreground/.test(files.designSystem) && /paletteSemanticTokenDiagnosticsForSmokeTest/.test(files.controller) && /off-palette navy/.test(files.keyInputSmokeSource));
+check("UI chrome avoids legacy system colors", !/NSColor\.system(?:Red|Green|Blue)|\.system(?:Red|Green|Blue)/.test(files.controller) && !/NSColor\.black/.test(files.controller) && !files.controller.includes("#4a88c7") && !files.terminalCore.includes("#4a88c7"));
+check("key input smoke verifies Momenterm palette schema and visible contrast", /colorSchemaDiagnosticsForSmokeTest/.test(files.controller) && /visiblePaletteContrastDiagnosticsForSmokeTest/.test(files.controller) && /paletteSemanticTokenDiagnosticsForSmokeTest/.test(files.controller) && /app color schema does not match the Momenterm dark\/light palettes/.test(files.keyInputSmokeSource) && /app color palette is not visibly applied to chrome\/selection surfaces/.test(files.keyInputSmokeSource) && /app chrome leaked off-palette navy/.test(files.keyInputSmokeSource));
+check("Darcula syntax registry covers common extensions", /enum NativeLanguageRegistry/.test(files.syntax) && /extensionLanguageMap: \[String: String\]/.test(files.syntax) && /"kt": "kotlin"/.test(files.syntax) && /"tsx": "typescript"/.test(files.syntax) && /"http": "http"/.test(files.syntax) && /darculaHighlightedLanguages/.test(files.syntax) && /NativeLanguageRegistry\.language\(forPath: path\)/.test(files.controller) && /NativeLanguageRegistry\.language\(forPath: path\)/.test(files.sourceCollector));
+check("Darcula highlighter has language-specific rules", /rulesForLanguage/.test(files.controller) && /case "kotlin"/.test(files.controller) && /case "python"/.test(files.controller) && /case "json"/.test(files.controller) && /case "yaml", "toml"/.test(files.controller) && /case "markup", "xml", "svg"/.test(files.controller) && /case "http"/.test(files.controller) && /cachedRegex/.test(files.controller));
+check("key input smoke verifies Darcula syntax extension coverage", /darculaSyntaxCoverageDiagnosticsForSmokeTest/.test(files.controller) && /Darcula syntax highlighting did not cover expected file extensions/.test(files.keyInputSmokeSource));
+check("core smoke builds include syntax registry", /NativeSyntaxHighlighting\.swift/.test(files.smoke ?? read("scripts/smoke.sh")) && /NativeSyntaxHighlighting\.swift/.test(files.perfSmokeScript ?? read("scripts/perf-smoke.sh")) && /NativeSyntaxHighlighting\.swift/.test(files.abParity ?? read("scripts/ab-parity-smoke.mjs")));
+check("Prompt memo is native docked side panel", /private let memoSidePanel = NSView\(\)/.test(files.controller) && /private func configureMemoSidePanel\(\)/.test(files.controller) && !/NativePromptMemoPanel: NSPanel/.test(files.controller));
+check("Prompt memo side panel uses 40 percent right dock width", /memoSidePanel\.widthAnchor\.constraint\(equalTo: rootView\.widthAnchor, multiplier: 0\.40\)/.test(files.controller) && /memoPanelVisibleTrailingConstraint = memoSidePanel\.trailingAnchor\.constraint\(equalTo: rootView\.trailingAnchor\)/.test(files.controller));
+check("Prompt memo has sliding animation and panel shadow", /memoPanelHiddenLeadingConstraint = memoSidePanel\.leadingAnchor\.constraint\(equalTo: rootView\.trailingAnchor\)/.test(files.controller) && /animateMemoPanelLayout\(animated:/.test(files.controller) && /memoPanelAnimationDuration/.test(files.controller) && /shadowOpacity = 0\.34/.test(files.controller) && /shadowRadius = 22/.test(files.controller) && /shadowOffset = NSSize\(width: -8, height: 0\)/.test(files.controller));
+check("Prompt memo uses native markdown text view", /private final class NativeMarkdownMemoTextView: NSTextView/.test(files.controller));
+check("Prompt memo renders checklist, divider, quote, and bullet tokens", /normalizeMarkdown[\s\S]*☐/.test(files.controller) && /normalizeHorizontalRuleLine[\s\S]*────────────/.test(files.controller) && /normalizeBlockquoteLine[\s\S]*▌/.test(files.controller) && /normalizeBulletLine[\s\S]*•/.test(files.controller));
+check("Prompt memo continues list on native Enter", /override func insertNewline\(_ sender: Any\?\)[\s\S]*insertMarkdownListContinuation/.test(files.controller) && /private func insertMarkdownListContinuation\(\) -> Bool/.test(files.controller));
+check("Prompt memo focuses text view when opened", /window\?\.makeFirstResponder\(memoTextView\)/.test(files.controller));
+check("Prompt memo closes on Escape while text view is focused", /var onEscapeKey: \(\(\) -> Void\)\?/.test(files.controller) && /event\.keyCode == 53 \|\| key == "\\u\{1b\}"/.test(files.controller) && /hideMemoPanel\(focusTerminalAfterClose: true\)/.test(files.controller));
+check("prompt memo is scoped to active workspace", /promptMemoSettingsKey = "momenterm\.prompt-memo\.by-workspace"/.test(files.controller) && /private func storedPromptMemoText\(\) -> String[\s\S]*workspaceScopedString/.test(files.controller) && /private func finishWorkspaceScopedStateChange\(changed: Bool\)[\s\S]*reloadPromptMemoForCurrentWorkspace/.test(files.controller));
+check("workspace picker is native sliding rail list", /private let workspaceStack = NativeWorkspaceRailListView\(\)/.test(files.controller) && /private var workspaceRailExpanded = false/.test(files.controller) && /func openWorkspacePicker\(\)[\s\S]*if workspaceRailExpanded[\s\S]*setWorkspaceRailPickerVisible\(false, animated: true\)[\s\S]*restoreTerminalFocusAfterPanelClose\(\)[\s\S]*hideOverlay\(\)[\s\S]*setWorkspaceRailPickerVisible\(true, animated: true\)[\s\S]*focusWorkspaceRailPicker\(\)/.test(files.controller) && !/func openWorkspacePicker\(\)[\s\S]*showOverlay\(\.workspacePicker\)/.test(files.controller));
+check("workspace folder picker remains explicit native NSOpenPanel", /private func openWorkspaceFolderPicker\(\)[\s\S]*NSOpenPanel\(\)/.test(files.controller));
+check("workspace shortcut avoids picker", /func workspaceShortcut\(\) \{\s*createWorkspaceFromActiveTerminal\(revealReview: false\)\s*\}/.test(files.controller));
+check("duplicate git workspace creates linked worktree", /struct LinkedWorktree/.test(files.reviewCore) && /func createLinkedWorktree\(from url: URL\) throws -> LinkedWorktree/.test(files.reviewCore) && /"worktree", "add", "-b", branch, target\.path/.test(files.reviewCore) && /momenterm\/linked-/.test(files.reviewCore) && /if duplicate, service\.gitRoot\(from: directory\) != nil[\s\S]*service\.createLinkedWorktree\(from: directory\)[\s\S]*attachActiveTab: false/.test(files.controller));
+check("linked worktree branch is read from git HEAD", /func branchName\(from url: URL\) -> String\?/.test(files.reviewCore) && /gitHeadContent\(for: root\)/.test(files.reviewCore) && /markerContent\.hasPrefix\("gitdir:"\)/.test(files.reviewCore) && /ref: refs\/heads\//.test(files.reviewCore));
+check("workspace rail shows worktree branch", /branchName: String\?/.test(files.controller) && /workspaceBranchName\(for:/.test(files.controller) && /workspaceBranchDisplayName\(for:/.test(files.controller) && /workspaceBranchLabel/.test(files.controller) && /workspaceRailShowsBranchForSmokeTest/.test(files.controller));
+check("key input smoke verifies linked worktree creation", /verifyDuplicateWorkspaceCreatesLinkedWorktree/.test(files.keyInputSmokeSource) && /Cmd\+N on an existing git workspace did not create a separate linked worktree/.test(files.keyInputSmokeSource) && /momenterm\/linked-/.test(files.keyInputSmokeSource) && /expanded workspace rail did not show linked worktree branch/.test(files.keyInputSmokeSource));
+check("workspace tracks terminal pane group membership", /var workspacePath: String\?/.test(files.controller) && /activeWorkspacePath/.test(files.controller));
+check("workspace terminal pane groups are scoped", /private func terminalTabs\(in workspacePath: String\?\) -> \[TerminalTab\]/.test(files.controller) && /private func activeTab\(\) -> TerminalTab\?[\s\S]*terminalTabs\(in: activeWorkspacePath\)[\s\S]*return scopedTabs\.first/.test(files.controller));
+check("workspace opening creates scoped terminal pane group", /activateOrCreateWorkspaceTerminal\(for: standardized, focus: true\)/.test(files.controller) && /private func activateOrCreateWorkspaceTerminal\(for workspaceURL: URL, focus: Bool\) -> Bool/.test(files.controller) && /setActiveTerminal\(id: paneId, focus: focus\)/.test(files.controller) && !/attachSessionTabToWorkspace/.test(files.controller));
+check("workspace switching replaces rendered terminal pane groups", /renderedTerminalPaneCountForSmokeTest/.test(files.controller) && /verifyWorkspaceSwitchReplacesRenderedTerminalPanes/.test(files.keyInputSmokeSource) && /workspace A did not show two rendered terminal panes after split/.test(files.keyInputSmokeSource) && /workspace B did not replace the rendered terminal pane group with one pane|did not replace the rendered terminal pane group with one pane/.test(files.keyInputSmokeSource) && !/activeTerminalTabId = tab\.id\s*\n\s*setActiveTerminal\(id: pane\.id/.test(files.controller) && !/activeTerminalTabId = tab\.id\s*\n\s*setActiveTerminal\(id: paneId/.test(files.controller));
+check("new terminal pane group starts at workspace path", /private func createTerminalGroupForActiveScope\(\)[\s\S]*activeWorkspaceURL\(\)[\s\S]*workspacePath: activeWorkspacePath/.test(files.controller));
+check("workspace switching rebuilds panes and ignores stale off-scope terminal focus", /workspaceScopeChanged \|\| previousTabId != activeTerminalTabId/.test(files.controller) && /activeTab\(\)\?\.panes\.contains\(where: \{ \$0\.id == pane\.id \}\) == true/.test(files.controller));
+check("workspace rail picker rows do not duplicate on arrow navigation", /private func rebuildWorkspaceButtons\(\)[\s\S]*for \(index, workspace\) in workspaces\.enumerated\(\)/.test(files.controller) && /private func moveWorkspacePickerSelection\(delta: Int\)[\s\S]*workspaceRailExpanded[\s\S]*rebuildWorkspaceButtons\(\)/.test(files.controller) && /workspacePickerHasStableRowsForSmokeTest/.test(files.controller));
+check("workspace rail picker slides open without floating overlay", /railCollapsedWidth: CGFloat = 44/.test(files.designSystem) && /railExpandedWidth: CGFloat = 236/.test(files.designSystem) && /railWidthConstraint/.test(files.controller) && /workspaceRailAnimationDuration: TimeInterval = 0\.16/.test(files.controller) && /workspaceRailLastAnimatedTransition/.test(files.controller) && /private func setWorkspaceRailPickerVisible\(_ visible: Bool, animated: Bool\)[\s\S]*NSAnimationContext\.runAnimationGroup[\s\S]*context\.duration = workspaceRailAnimationDuration[\s\S]*updateRailActionRowsForWorkspaceRailState\(animated: true\)[\s\S]*railWidthConstraint\?\.constant = toWidth[\s\S]*rootView\.animator\(\)\.layoutSubtreeIfNeeded\(\)/.test(files.controller) && /overlayView\.isHidden/.test(files.controller) && /func workspacePickerIsCompactForSmokeTest\(\)/.test(files.controller) && /workspaceRailUsesAnimatedToggleForSmokeTest/.test(files.controller));
+check("workspace rail expands action labels and shortcut tooltips", /railActionTitleLabels/.test(files.controller) && /railActionShortcutLabels/.test(files.controller) && /private func railButton\(symbol: String, fallback: String, action: Selector, label: String, shortcut: String\)/.test(files.controller) && /private func tooltipText\(label: String, shortcut: String\?\) -> String/.test(files.controller) && /updateRailActionRowsForWorkspaceRailState/.test(files.controller) && /workspaceRailExpandedActionLabelsAndTooltipsForSmokeTest/.test(files.controller) && /workspaceRailCollapsedHidesActionLabelsForSmokeTest/.test(files.controller));
+check("workspace rail action labels do not overlap icons", /titleLabel\.translatesAutoresizingMaskIntoConstraints = false/.test(files.controller) && /shortcutLabel\.translatesAutoresizingMaskIntoConstraints = false/.test(files.controller) && /workspaceRailExpandedActionRowsAvoidIconLabelOverlapForSmokeTest/.test(files.controller) && /labelsAvoidIcon/.test(files.controller) && /Cmd\+P expanded rail overlapped sidebar icons with action labels/.test(files.keyInputSmokeSource));
+check("workspace rail icons keep the same size collapsed and expanded", /fixedRailSymbolImage\(symbol: symbol, label: label\)/.test(files.controller) && /button\.imageScaling = \.scaleNone/.test(files.controller) && /image\.size = NSSize\(width: 16, height: 16\)/.test(files.controller) && /\[titleLeading, titleTrailing, shortcutLeading, shortcutTrailing\]\.forEach[\s\S]*priority = \.defaultHigh/.test(files.controller) && /workspaceRailActionIconSizesStableForSmokeTest/.test(files.controller) && /Cmd\+P expanded rail changed sidebar icon sizes compared with collapsed rail/.test(files.keyInputSmokeSource));
+check("workspace rail picker deletes selected workspace", /private func forgetSelectedWorkspacePickerItem\(\) -> Bool[\s\S]*workspaceRailExpanded[\s\S]*forgetWorkspace\(path: workspaces\[selectedWorkspacePickerIndex\]\.path, keepWorkspacePickerOpen: true\)/.test(files.controller) && /private func handleWorkspaceRailKey\(_ event: NSEvent\) -> Bool[\s\S]*case 51:[\s\S]*forgetSelectedWorkspacePickerItem/.test(files.controller));
+check("workspace terminal spawn uses workspace root as cwd", /private func spawnTerminal\([\s\S]*workspacePath: String\?,[\s\S]*sessionKey: String,[\s\S]*makeActive: Bool,[\s\S]*allowImplicitActivation: Bool = true[\s\S]*let normalizedWorkspacePath = normalizedWorkspacePath\(workspacePath\)[\s\S]*let spawnCwd = normalizedWorkspacePath\.map/.test(files.controller) && /private func alignTab\(_ tab: TerminalTab, to workspaceURL: URL\)/.test(files.controller));
+check("workspace creation animates visible feedback", /CABasicAnimation\(keyPath: "transform\.scale"\)/.test(files.controller) && /Workspace created/.test(files.controller));
+check("workspace can be forgotten without deleting files", /func forgetCurrentWorkspace\(\)[\s\S]*forgetWorkspace\(path: workspacePath, keepWorkspacePickerOpen: false\)/.test(files.controller) && /private func forgetWorkspace\(path workspacePath: String, keepWorkspacePickerOpen: Bool\) -> Bool[\s\S]*workspaces\.removeAll[\s\S]*terminalTabs\.removeAll[\s\S]*rebuildWorkspaceButtons\(\)[\s\S]*activateHomeTerminal\(\)/.test(files.controller) && /targetedItem\("Forget Current Workspace", #selector\(forgetCurrentWorkspace\), "\\u\{8\}", \[\.command, \.option\]\)/.test(files.appDelegate));
+check("workspace forget handles mouse-clicked rail selection", /func clickWorkspaceButtonForSmokeTest\(path: String\) -> Bool[\s\S]*button\.performClick\(nil\)/.test(files.controller) && /matchesActiveWindow/.test(files.controller) && /matchesOnlyVisibleMomentermWindow/.test(files.controller) && /workspaceRailButtonCountForSmokeTest/.test(files.controller));
+check("startup restore preserves only valid active workspace terminal", /restoreOrCreateInitialTerminal\(\)[\s\S]*let savedWorkspacePaths = Set\(workspaces\.compactMap \{ normalizedWorkspacePath\(\$0\.path\) \}\)[\s\S]*savedWorkspacePaths\.contains\(workspacePath\)[\s\S]*activateRestoredTerminalAfterLaunch\(\)[\s\S]*persistTerminalState\(\)/.test(files.controller) && /private func activateRestoredTerminalAfterLaunch\(\)[\s\S]*terminalTabs\.first \{ \$0\.workspacePath == nil \}/.test(files.controller) && !/private func activateRestoredTerminalAfterLaunch\(\)[\s\S]*terminalTabs\.first \{ \$0\.workspacePath != nil \}/.test(files.controller));
+check("workspace tmux sessions reset when their cwd mismatches workspace root", /spawnPersistent\(cols: Int, rows: Int, cwd: URL\?, sessionKey: String\?, enforceCwd: Bool = false\)/.test(files.pty) && /MOMENTERM_ENABLE_TMUX_PERSISTENCE/.test(files.pty) && /MOMENTERM_DISABLE_TMUX_PERSISTENCE/.test(files.pty) && /resetTmuxSessionIfDirectoryMismatch[\s\S]*kill-session/.test(files.pty) && /enforceWorkspaceCwd: normalizedWorkspacePath != nil/.test(files.controller));
+check("F7 git root creates workspace before diff", /func openChangesView\(from directory: URL\)[\s\S]*service\.gitRoot[\s\S]*openWorkspace\(repoRoot, revealReview: true/.test(files.controller));
+check("non-git F7 stays workspace-free with guidance", /func openChangesView\(from directory: URL\)[\s\S]*activeWorkspacePath == nil[\s\S]*root = standardized/.test(files.controller) && /Diff view requires a Git repository/.test(files.controller));
+check("file view opens without git workspace", /func openFilesView\(from directory: URL\)[\s\S]*service\.fileListing\(root: listingRoot\)/.test(files.controller));
+check("file view does not wait for review build", /func fileListing\(root requestedRoot: URL\) throws -> ReviewDocument/.test(files.reviewCore) && /overlayMode != \.files/.test(files.controller));
+check("file view opens every root without synchronous git or filesystem listing", /func openFilesView\(from directory: URL\)[\s\S]*let listingRoot = standardized[\s\S]*showOverlay\(\.files\)[\s\S]*DispatchQueue\.global\(qos: \.userInitiated\)\.async[\s\S]*service\.fileListing\(root: listingRoot\)/.test(files.controller) && !/func openFilesView\(from directory: URL\)[\s\S]*if gitRoot == nil[\s\S]*service\.fileListing\(root: listingRoot\)/.test(files.controller) && !/func openFilesView\(from directory: URL\)[\s\S]*let gitRoot = service\.gitRoot/.test(files.controller) && /func fileListing\(root requestedRoot: URL\) throws -> ReviewDocument[\s\S]*isGitRepository[\s\S]*sourceCollector\.shallowList/.test(files.reviewCore));
+check("file view lazy-loads folder children", /func fileListingChildren\(root requestedRoot: URL, folderPath: String\) throws -> \[SourceFile\]/.test(files.reviewCore) && /private func expandFileTreeFolder\(_ folderPath: String, focusSidebarAfterLoad: Bool\)/.test(files.controller));
+check("file view loads git listing off the main thread", /private var isLoadingFileListing = false/.test(files.controller) && /func openFilesView\(from directory: URL\)[\s\S]*DispatchQueue\.global\(qos: \.userInitiated\)\.async[\s\S]*service\.fileListing\(root: listingRoot\)/.test(files.controller));
+check("file view reuses cached listing on repeated Cmd+1", /private var fileListingLoadCount = 0/.test(files.controller) && /func openFilesView\(from directory: URL\)[\s\S]*if let fileListingDocument = fileListingDocument[\s\S]*normalizedWorkspacePath\(fileListingDocument\.root\) == listingRootPath[\s\S]*showOverlay\(\.files\)[\s\S]*return/.test(files.controller) && /fileListingLoadCount \+= 1/.test(files.controller));
+check("file tree arrow navigation uses active file listing", /private func moveOverlaySelection\(delta: Int\)[\s\S]*case \.files:[\s\S]*activeFilesDocument\(\)[\s\S]*selectedSourceIndex/.test(files.controller));
+check("file tree arrow navigation keeps selected row visible with margin", /sidebarSelectionScrollMarginRatio: CGFloat = 0\.15/.test(files.designSystem) && /private func ensureSelectedSidebarRowVisible\(identifier: String\)/.test(files.controller) && /selectedSidebarRowIsInsideScrollMargin/.test(files.controller));
+check("file tree rapid navigation avoids sidebar rebuild and coalesces preview", /visibleFileTreeRows/.test(files.controller) && /updateVisibleFileTreeSelection\(selectedIndex: selectedSourceIndex\)/.test(files.controller) && /scheduleSelectedSourcePreviewRender\(\)/.test(files.controller));
+check("file view arrow navigation stays in code pane after Enter", /private func handleOverlayNavigationKey\(_ event: NSEvent, key: String\) -> Bool[\s\S]*overlayCodePaneForNavigationKey\(event\)[\s\S]*codeView\.moveReviewCursorForNavigationKey\(event\.keyCode\)[\s\S]*return true/.test(files.controller) && /private func overlayCodePaneForNavigationKey\(_ event: NSEvent\) -> NativeCodeTextView\?[\s\S]*overlayMode == \.files \|\| overlayMode == \.changes[\s\S]*case 123, 124, 125, 126[\s\S]*firstResponderIsOrDescends\(from: oldTextView\)/.test(files.controller) && /func moveReviewCursorForNavigationKey\(_ keyCode: UInt16\) -> Bool/.test(files.controller) && /moveReadOnlyCursor\(for: keyCode\)/.test(files.controller) && /syncReviewCursorToSelection/.test(files.controller) && /fileOverlayPreviewCursorLineForSmokeTest/.test(files.controller));
+check("file view uses a single code pane", /setSingleCodePaneVisible/.test(files.controller) && /fileOverlayUsesSingleCodePaneForSmokeTest/.test(files.controller));
+check("file view sidebar renders a native tree", /private struct FileTreeRow/.test(files.controller) && /private func fileTreeRows\(for files: \[SourceFile\], selectedIndex: Int\) -> \[FileTreeRow\]/.test(files.controller) && /source-folder:/.test(files.controller) && /fileTreeRowButton/.test(files.controller));
+check("file view sidebar colors by IntelliJ-style git status and file type", /fileTreeVcsModified/.test(files.controller) && /fileTreeVcsAdded/.test(files.controller) && /fileTreeVcsStaged/.test(files.controller) && /fileTreeVcsUntracked/.test(files.controller) && /private func fileTreeVcsColor\(_ status: String\) -> NSColor\?[\s\S]*case "new", "untracked", "unknown":[\s\S]*theme\.fileTreeVcsUntracked/.test(files.controller) && /private func fileTreeVcsColor\(_ status: String\) -> NSColor\?[\s\S]*case "added":[\s\S]*theme\.fileTreeVcsAdded/.test(files.controller) && /private func fileTreeVcsColor\(_ status: String\) -> NSColor\?[\s\S]*case "staged":[\s\S]*theme\.fileTreeVcsStaged/.test(files.controller) && /private func fileTreeVcsColor\(_ status: String\) -> NSColor\?[\s\S]*case "edited", "modified", "changed", "renamed":[\s\S]*theme\.fileTreeVcsModified/.test(files.controller) && /private func fileTreeIconName\(for row: FileTreeRow\) -> String[\s\S]*markdown[\s\S]*shell/.test(files.controller) && !/case "edited":[\s\S]*return theme\.deletionText/.test(files.controller));
+check("all native file lists share VCS color rules", /recentFilesTint\(language: language, item: item, selected: selected\)/.test(files.controller) && /findInFilesResultRowButton\(item: QuickOpenItem[\s\S]*recentFilesTint\(language: language, item: item, selected: selected\)/.test(files.controller) && /findInFilesResultRowButton\(item: QuickOpenItem[\s\S]*recentFilesRowBackground\(for: item, selected: selected\)/.test(files.controller) && /fileTreeTint\(for row: FileTreeRow\)[\s\S]*fileTreeVcsColor\(vcs\)/.test(files.controller));
+check("file view sidebar uses compact row metrics", /fileTreeRowHeight: CGFloat = 20/.test(files.designSystem) && /fileTreeIconSize: CGFloat = 13/.test(files.designSystem) && /fileTreeIndentStep: CGFloat = 13/.test(files.designSystem) && /private func configureFilesOverlayBodyLayout\(\)[\s\S]*overlaySidebarStack\.spacing = 0/.test(files.controller) && /button\.heightAnchor\.constraint\(equalToConstant: MomentermDesign\.Metrics\.fileTreeRowHeight\)/.test(files.controller));
+check("git porcelain parser preserves leading status columns", /for line in out\.components\(separatedBy: \.newlines\) where line\.count >= 3/.test(files.sourceCollector) && !/out\.trimmingCharacters\(in: \.whitespacesAndNewlines\)\.components\(separatedBy: \.newlines\)/.test(files.sourceCollector));
+check("code scrollbars are vertical only", /private func codeScrollView\(_ textView: NSTextView\) -> NSScrollView[\s\S]*MomentermDesign\.styleCodeScrollView\(scroll\)/.test(files.controller) && /styleCodeScrollView[\s\S]*styleMinimalScrollbars\(scroll\)/.test(files.designSystem) && /codeScrollsVerticallyOnlyForSmokeTest/.test(files.controller));
+check("native scrollbars are minimized", /final class MomentermMinimalScroller: NSScroller/.test(files.designSystem) && /minimalScrollbarWidth: CGFloat = 5/.test(files.designSystem) && /static func styleMinimalScrollbars\(_ scroll: NSScrollView/.test(files.designSystem) && /scroll\.verticalScroller = scroller/.test(files.designSystem) && /scrollbarsAreMinimizedForSmokeTest/.test(files.controller));
+check("file view renders Markdown natively", /private enum NativeMarkdownRenderer/.test(files.controller) && /renderSourceFile\(_ file: SourceFile[\s\S]*NativeMarkdownRenderer\.render/.test(files.controller) && /markdownPreviewIsRenderedForSmokeTest/.test(files.controller));
+check("file view renders images natively", /sourcePreviewImageView/.test(files.controller) && /private func nativeImage\(fromDataURL value: String\) -> NSImage\?[\s\S]*NSImage\(data: data\)/.test(files.controller) && /private func renderImagePreview\(_ image: NSImage\)/.test(files.controller) && /imagePreviewIsVisibleForSmokeTest/.test(files.controller));
+check("file view renders expanded image formats natively", /private func imageMime\(for path: String\) -> String\?[\s\S]*\.icns/.test(files.sourceCollector) && /private func imageMime\(for path: String\) -> String\?[\s\S]*\.svg/.test(files.sourceCollector) && /private func imageMime\(for path: String\) -> String\?[\s\S]*\.pdf/.test(files.sourceCollector) && /private func isNativeImagePreviewPath\(_ path: String\) -> Bool[\s\S]*\.icns[\s\S]*\.svg[\s\S]*\.pdf/.test(files.controller) && /SVG file preview did not render a native image view/.test(files.keyInputSmokeSource) && /ICNS file preview did not render a native image view/.test(files.keyInputSmokeSource));
+check("file view renders CSV and TSV natively", /private enum NativeCsvRenderer/.test(files.controller) && /renderSourceFile\(_ file: SourceFile[\s\S]*NativeCsvRenderer\.render/.test(files.controller) && /"csv": "csv"/.test(files.syntax) && /"tsv": "tsv"/.test(files.syntax) && /NativeLanguageRegistry\.language\(forPath: path\)/.test(files.sourceCollector) && /csvPreviewIsRenderedForSmokeTest/.test(files.controller) && /CSV file preview did not render a native table preview/.test(files.keyInputSmokeSource));
+check("workspace rail uses native buttons", /private func rebuildWorkspaceButtons\(\)[\s\S]*NSButton/.test(files.controller));
+check("settings panel does not use blank legacy status text", !files.controller.includes("Native runtime is active"));
+check("settings panel is native controls overlay", /private let overlaySettingsScrollView = NSScrollView\(\)/.test(files.controller) && /private func populateSettingsOverlay\(\)/.test(files.controller));
+check("settings overlay swaps out diff content", /private func setSettingsContentVisible\(_ visible: Bool\)[\s\S]*overlayDiffSplitView\.isHidden = visible[\s\S]*overlaySettingsScrollView\.isHidden = !visible/.test(files.controller));
+check("settings panel uses compact preferences modal layout", /overlayMode == \.settings/.test(files.controller) && /updateSettingsCompactSize\(\)/.test(files.controller) && /configureSettingsOverlayBodyLayout\(\)/.test(files.controller) && /settingsOverlayMatchesPreferencesDesignForSmokeTest/.test(files.controller));
+check("settings panel has searchable selectable preferences sidebar", /settingsSidebarSearchField\(\)/.test(files.controller) && /SettingsCategory\.allCases/.test(files.controller) && /settings-sidebar-category-/.test(files.controller) && /selectSettingsCategoryAction/.test(files.controller) && /settingsSidebarSelectionWorksForSmokeTest/.test(files.controller));
+check("settings panel uses divider rows and omits fake density and prompt-memo controls", /private func settingsDivider\(\) -> NSView[\s\S]*settings-row-divider/.test(files.controller) && /settingsSection\(\s*title: "일반"/.test(files.controller) && /settingsSection\(\s*title: "터미널"/.test(files.controller) && /settingsSection\(\s*title: "리뷰"/.test(files.controller) && !/settingsSection\(\s*title: "프롬프트 메모"/.test(files.controller) && !/case memo/.test(files.controller) && !/settings-sidebar-category-memo/.test(files.controller) && !/settingsSection\(\s*title: "모양"/.test(files.controller) && !/settingsInfoRow\(title: "밀도"/.test(files.controller) && !/value: "Compact"/.test(files.controller) && !/입력 중 Markdown 렌더링/.test(files.controller) && !/체크리스트 단축/.test(files.controller) && !/private func settingsSection\(title: String, rows: \[NSView\]\) -> NSView \{[\s\S]{0,1200}layer\?\.cornerRadius = 7/.test(files.controller));
+check("settings toggles are wired without prompt memo defaults", /#selector\(toggleIgnoreWhitespaceSetting\(_:\)\)/.test(files.controller) && !/#selector\(toggleMemoMarkdownSetting\(_:\)\)/.test(files.controller) && !/memo\.liveMarkdown/.test(files.controller));
+check("settings exposes visible editable Monacori merge prompts", /settingsSection\(\s*title: "프롬프트 합본"/.test(files.controller) && /settingsPromptTextRow\(\s*kind: "plan"/.test(files.controller) && /settingsPromptTextRow\(\s*kind: "q"/.test(files.controller) && /settingsPromptTextRow\(\s*kind: "c"/.test(files.controller) && /NativeSettingsPromptTextView: NSTextView/.test(files.controller) && /displayedMergePromptText\(kind: kind\)/.test(files.controller) && /resetMergePromptSettings[\s\S]*defaultMergePrompt\(kind: kind\)/.test(files.controller));
+check("merge prompts persist per workspace and feed merged overlays", /mergePromptsSettingsKey = "monacori-merge-prompts"/.test(files.controller) && /private func workspaceScopedObject\(rootKey: String\) -> \[String: JSONValue\]/.test(files.controller) && /saveWorkspaceScopedObject\(rootKey: Self\.mergePromptsSettingsKey, value: prompts\)/.test(files.controller) && /mergePromptFor\(kind: "plan"\)/.test(files.controller) && /mergePromptFor\(kind: promptKind\)/.test(files.controller));
+check("merged prompt panels use right sliding side panel", /private let mergedPromptSidePanel = NSView\(\)/.test(files.controller) && /configureMergedPromptSidePanel\(\)/.test(files.controller) && /showMergedPromptSidePanel\(kind:/.test(files.controller) && /hideMergedPromptSidePanel\(focusTerminalAfterClose:/.test(files.controller) && /mergedPromptSidePanel\.widthAnchor\.constraint\(equalTo: rootView\.widthAnchor, multiplier: 0\.40\)/.test(files.controller) && /mergedPromptPanelVisibleTrailingConstraint/.test(files.controller) && /mergedPromptPanelHiddenLeadingConstraint/.test(files.controller) && /applyMergedPromptPanelShadow/.test(files.controller) && /mergedPromptSidePanelOccupiesRightSideForSmokeTest/.test(files.controller) && /mergedPromptSidePanelIsVisibleForSmokeTest/.test(files.keyInputSmokeSource) && /Esc did not close the merged prompt side panel/.test(files.keyInputSmokeSource));
+check("merged prompt panel can send to a selected terminal with Option+Enter", /selectedMergedPromptTerminalId/.test(files.controller) && /mergedPromptTerminalTargetButton/.test(files.controller) && /addMergedPromptTerminalTargetRows\(to: mergedPromptTargetStack\)/.test(files.controller) && /isMergedPromptPanelActive\(\)/.test(files.controller) && /isMergedPromptSidePanelActive\(\) \? mergedPromptTextView\.string : oldTextView\.string/.test(files.controller) && /option, !command, !control, !shift[\s\S]*sendMergedPromptToSelectedTerminal\(\)/.test(files.controller) && /writeToTerminal\(id: targetId, data: text \+ "\\r"\)/.test(files.controller) && /selectMergedPromptTerminalForSmokeTest/.test(files.controller) && /setTerminalWriteObserverForSmokeTest/.test(files.controller) && /Option\+Enter did not send the merged prompt text to the selected terminal session/.test(files.keyInputSmokeSource));
+check("merged comment panels use user review notes, not source marker matches", mergedPromptContentBody.includes("reviewNotes.filter { $0.kind == noteKind }") && mergedPromptContentBody.includes("bodyLines.append(\"# \\(title) (\\(notes.count))\")") && mergedPromptContentBody.includes("let emptyMessage = \"No \\(noteLabel)s yet.\"") && !mergedPromptContentBody.includes("sourceMarkerMatches") && !populateSearchOverlayBody.includes("sourceMarkerMatches") && /targetedItem\("All questions", #selector\(showAllQuestions\), "\/", \[\.command, \.shift\]\)/.test(files.appDelegate) && /targetedItem\("All change requests", #selector\(showAllChangeRequests\), "\.", \[\.command, \.shift\]\)/.test(files.appDelegate) && /command, shift, !control, !option[\s\S]*typedKey == "\?"[\s\S]*event\.keyCode == 44[\s\S]*openMergedView\(kind: "q"\)[\s\S]*typedKey == ">"[\s\S]*event\.keyCode == 47[\s\S]*openMergedView\(kind: "c"\)/.test(files.controller) && /Cmd\+Shift\+\? did not open the right-side merged prompt panel/.test(files.keyInputSmokeSource) && /Cmd\+Shift\+> did not open an empty right-side merged prompt panel/.test(files.keyInputSmokeSource));
+check("plain review note shortcuts stay in file/diff context", /private func reviewNoteShortcutContextIsActive\(\) -> Bool[\s\S]*guard !isMergedPromptPanelActive\(\)[\s\S]*case \.files:[\s\S]*case \.changes:[\s\S]*default:[\s\S]*return false/.test(files.controller) && /guard overlayMode == \.files \|\| overlayMode == \.changes,[\s\S]*let path = selectedFilePath\(\),[\s\S]*!path\.isEmpty/.test(files.controller) && !files.controller.includes('let path = selectedFilePath() ?? "(no file)"') && !files.controller.includes("sourcePreviewWithReviewNotes(rendered") && /refreshInlineReviewCommentBoxes\(\)/.test(files.controller) && /Plain Shift\+\? inside the merged Questions panel created bogus review notes/.test(files.keyInputSmokeSource) && /Shift\+\? in file view did not open a focused inline question editor under the file cursor/.test(files.keyInputSmokeSource));
+
+check("Cmd+0/Cmd+1 toggle changes/files", /targetedItem\("Changes", #selector\(showChanges\), "0", \[\.command\]\)/.test(files.appDelegate) && /targetedItem\("Files", #selector\(showFiles\), "1", \[\.command\]\)/.test(files.appDelegate) && /func toggleChangesView\(\)[\s\S]*overlayMode == \.changes[\s\S]*hideOverlay\(\)[\s\S]*openChangesView\(\)/.test(files.controller) && /func toggleFilesView\(\)[\s\S]*overlayMode == \.files[\s\S]*hideOverlay\(\)[\s\S]*openFilesView\(\)/.test(files.controller) && /case "0":[\s\S]*toggleChangesView\(\)/.test(files.controller) && /case "1":[\s\S]*toggleFilesView\(\)/.test(files.controller));
+check("Cmd+9 opens native history", /targetedItem\("History", #selector\(showHistory\), "9", \[\.command\]\)/.test(files.appDelegate) && /func toggleHistory\(\)/.test(files.controller));
+check("F7 and Shift+F7 navigate review hunks before files", /targetedItem\("Next Change", #selector\(nextChange\), functionKey\(0xF70A\), \[\]\)/.test(files.appDelegate) && /targetedItem\("Previous Change", #selector\(previousChange\), functionKey\(0xF70A\), \[\.shift\]\)/.test(files.appDelegate) && /private var selectedDiffHunkIndex = 0/.test(files.controller) && /private var awaitingNextFileAfterLastHunk = false/.test(files.controller) && /func selectReviewTarget\(delta: Int\)[\s\S]*selectedDiffHunkIndex \+ 1 < currentHunkCount[\s\S]*awaitingNextFileAfterLastHunk/.test(files.controller) && /appendHunkNavigationHint/.test(files.controller));
+check("Cmd+, opens native settings", /targetedItem\("Settings", #selector\(showSettings\), ",", \[\.command\]\)/.test(files.appDelegate) && /func openSettings\(\) \{\s*showOverlay\(\.settings\)\s*\}/.test(files.controller));
+check("monacori prompt memo shortcut is Cmd+Shift+N", /targetedItem\("Prompt memo", #selector\(showPromptMemo\), "N", \[\.command, \.shift\]\)/.test(files.appDelegate));
+check("Cmd+P opens native workspace rail picker", /targetedItem\("Select Workspace", #selector\(openWorkspacePickerShortcut\), "p", \[\.command\]\)/.test(files.appDelegate) && /case "p":[\s\S]*openWorkspacePicker\(\)/.test(files.controller) && /NativeWorkspaceRailListView/.test(files.controller));
+check("Cmd+N creates a new workspace", /targetedItem\("New Workspace", #selector\(openWorkspaceShortcut\), "n", \[\.command\]\)/.test(files.appDelegate) && /case "n":[\s\S]*workspaceShortcut\(\)/.test(files.controller));
+check("Cmd+Shift+apostrophe toggles native overlay maximize", /targetedItem\("Maximize Panel", #selector\(toggleOverlayMaximized\), "'", \[\.command, \.shift\]\)/.test(files.appDelegate) && /func toggleOverlayMaximized\(\)/.test(files.controller) && /overlayMaximized\.toggle\(\)/.test(files.controller));
+check("quick open shortcuts are native", /targetedItem\("Quick Open", #selector\(quickOpenFiles\), "f", \[\.command\]\)/.test(files.appDelegate) && /targetedItem\("Find in Files", #selector\(findInFiles\), "F", \[\.command, \.shift\]\)/.test(files.appDelegate) && /targetedItem\("Recent Files", #selector\(recentFiles\), "e", \[\.command\]\)/.test(files.appDelegate) && /func openQuickOpen\(mode: QuickOpenMode\)/.test(files.controller));
+check("Find in Files searches content off the main thread with native preview", /quickOpenSearchQueue = DispatchQueue\(label: "momenterm\.quick-open\.content-search"/.test(files.controller) && /scheduleQuickOpenContentSearchIfNeeded\(\)/.test(files.controller) && /DispatchQueue\.main\.async[\s\S]*quickOpenContentResults = results/.test(files.controller) && /renderQuickOpenContentPreview/.test(files.controller) && /syntaxHighlightedPreviewWithLineNumbers/.test(files.controller));
+check("Find in Files uses compact floating search panel with bottom syntax preview", /case \.content:\s*return "파일 내용 검색"/.test(files.controller) && /configureFindInFilesOverlayBodyLayout\(\)[\s\S]*overlayBodySplitView\.isVertical = false/.test(files.controller) && /findPanelMaxWidth: CGFloat = 980/.test(files.designSystem) && /findInFilesSearchPromptRow\(\)/.test(files.controller) && /findInFilesResultRowButton\(item: item, index: index/.test(files.controller) && /findInFilesOverlayMatchesSearchPanelForSmokeTest/.test(files.controller));
+check("Find in Files row width avoids cross-hierarchy Auto Layout constraints", /constraint\(equalToConstant:/.test(findInFilesWidthHelper) && !/constraint\(equalTo:[\s\S]*contentView\.widthAnchor/.test(findInFilesWidthHelper));
+check("recent files overlay matches compact native recent files popup", /private let quickOpenRecentResultsScrollView = NativeOverlaySidebarScrollView\(\)/.test(files.controller) && /configureRecentFilesOverlayBodyLayout\(\)[\s\S]*recentFilesSidebarWidth/.test(files.controller) && /populateRecentFilesCategories\(\)/.test(files.controller) && /Show edited only\s+⌘E/.test(files.controller) && /label\.textColor = theme\.primaryText/.test(files.controller) && /labelHasReadableContrast/.test(files.controller) && /recentFilesEditedOnlyControlIsReadableForSmokeTest/.test(files.controller) && /recentFilesRowsAreCompactForSmokeTest/.test(files.controller) && /recentFilesResultRowHeight: CGFloat = 22/.test(files.designSystem) && /quickOpenRecentFooterLabel/.test(files.controller) && /recentFilesMaxWidth: CGFloat = 900/.test(files.designSystem) && /recentFilesOverlayHasSingleSelectionAndCleanScrollForSmokeTest/.test(files.controller));
+check("recent files rail only exposes implemented actions", /"Changes", "⌘0", "changes"/.test(files.controller) && /"Files", "⌘1", "files"/.test(files.controller) && /"Prompt Memo", "⇧⌘N", "memo"/.test(files.controller) && /activateRecentFilesCategory/.test(files.controller) && !/\"Bookmarks\", \"⌘2\"/.test(files.controller) && !/\"Problems\", \"⌘6\"/.test(files.controller) && !/\"TODO\", \"⌘/.test(files.controller));
+check("recent files arrow navigation updates visible selection without rebuilding", /quickOpenRecentPopulateCount/.test(files.controller) && /updateVisibleRecentFilesSelection\(items: items\)/.test(files.controller) && /recentFilesRapidNavigationKeepsUpForSmokeTest/.test(files.controller));
+check("goto/copy/definition/navigation shortcuts are native", /targetedItem\("Go to Line", #selector\(goToLine\), "l", \[\.command\]\)/.test(files.appDelegate) && /targetedItem\("Copy File:Line", #selector\(copyLocation\), "k", \[\.command\]\)/.test(files.appDelegate) && /targetedItem\("Go to Definition", #selector\(goToDefinition\), "b", \[\.command\]\)/.test(files.appDelegate) && /targetedItem\("Jump to Symbol", #selector\(jumpToSymbol\), functionKey\(0xF701\), \[\.command\]\)/.test(files.appDelegate));
+check("local NSEvent shortcut monitor separates app shortcuts from terminal input", /NSEvent\.addLocalMonitorForEvents\(matching: \.keyDown\)/.test(files.controller) && /handleShortcut\(_ event: NSEvent\)/.test(files.controller) && /terminalFocused/.test(files.controller) && /guard primary else/.test(files.controller));
+check("terminal focus blocks review navigation brackets", /shouldHandleReviewNavigationShortcut[\s\S]*terminalIsFirstResponderForSmokeTest/.test(files.controller) && /case "\[":[\s\S]*shouldHandleReviewNavigationShortcut\(\)[\s\S]*navigateCursorHistory\(delta: -1\)/.test(files.controller) && /case "\]":[\s\S]*shouldHandleReviewNavigationShortcut\(\)[\s\S]*navigateCursorHistory\(delta: 1\)/.test(files.controller));
+check("terminal focus shortcut uses Option+F12 keyCode fallback only", /event\.keyCode == 111/.test(files.controller) && !/event\.keyCode == 50[\s\S]*toggleTerminal\(\)/.test(files.controller));
+check("review note and viewed shortcuts are native state", /private var viewedFilePaths = Set<String>\(\)/.test(files.controller) && /private var reviewNotes: \[ReviewNote\] = \[\]/.test(files.controller) && /func addReviewNote\(kind: String\)/.test(files.controller) && /func toggleViewedForSelectedFile\(\)/.test(files.controller));
+check("Option+F12 focuses terminal", /targetedItem\("Focus Terminal", #selector\(toggleTerminal\), functionKey\(0xF70F\), \[\.option\]\)/.test(files.appDelegate) && /func toggleTerminal\(\)[\s\S]*setWorkspaceRailPickerVisible\(false, animated: true\)[\s\S]*hideOverlay\(\)/.test(files.controller));
+check("Cmd+T splits a terminal pane", /targetedItem\("Split Terminal Pane", #selector\(newTerminalTab\), "t", \[\.command\]\)/.test(files.appDelegate) && /case "t":[\s\S]*newTerminalTab\(\)/.test(files.controller));
+check("Cmd+Tab event splits a terminal pane when delivered", /Split Terminal Pane \(Cmd\+Tab compatibility\)/.test(files.appDelegate) && /event\.keyCode == 48 \|\| key == "\\t"[\s\S]*newTerminalTab\(\)/.test(files.controller));
+check("Cmd+D splits current terminal pane", /targetedItem\("Split Terminal Pane", #selector\(splitTerminal\), "d", \[\.command\]\)/.test(files.appDelegate) && /case "d":[\s\S]*splitTerminalPane\(\)/.test(files.controller));
+check("Cmd+Option brackets focus terminal panes", /targetedItem\("Focus Previous Pane", #selector\(focusPreviousTerminalPane\), "\[", \[\.command, \.option\]\)/.test(files.appDelegate) && /targetedItem\("Focus Next Pane", #selector\(focusNextTerminalPane\), "\]", \[\.command, \.option\]\)/.test(files.appDelegate) && /case "\[":[\s\S]*focusTerminalPane\(delta: -1\)/.test(files.controller) && /case "\]":[\s\S]*focusTerminalPane\(delta: 1\)/.test(files.controller));
+check("Cmd+W closes active split terminal pane before tab", /func closeTab\(\)[\s\S]*closeActiveTerminalPane\(in: tab\)/.test(files.controller) && /private func closeActiveTerminalPane\(in tab: TerminalTab\) -> Bool[\s\S]*tab\.panes\.remove\(at: closingIndex\)[\s\S]*disposeTerminalSession\(closingPane\)/.test(files.controller));
+check("Cmd+W leaves the last workspace terminal pane open", /func closeTab\(\)[\s\S]*if closeActiveTerminalPane\(in: tab\)[\s\S]*if shouldTerminateWhenClosingLastHomeTerminal\(\)[\s\S]*terminateApplicationHandler\(\)/.test(files.controller) && !/func closeTab\(\)[\s\S]{0,500}closeTerminalTab\(tab\)/.test(files.controller));
+check("Cmd+W quits when only home terminal remains", /targetedItem\("Close Terminal Pane", #selector\(closeTab\), "w"\)/.test(files.appDelegate) && /case "w":[\s\S]*closeTab\(\)/.test(files.controller) && /shouldTerminateWhenClosingLastHomeTerminal[\s\S]*workspaces\.isEmpty[\s\S]*terminalTabs\.count == 1/.test(files.controller));
+check("startup opens terminal window immediately", /openWindow\(initialRoot: launchOptions\.root, initialTerminalCommand: launchOptions\.terminalCommand\)/.test(files.appDelegate) && /private func runInitialTerminalCommandIfNeeded\(ptyId: Int\)[\s\S]*ptyManager\.write\(id: ptyId, data: command \+ "\\r"\)/.test(files.controller) && !/runInitialTerminalCommandIfNeeded\(ptyId: Int\)[\s\S]*asyncAfter\(deadline: \.now\(\) \+ 0\.4\)/.test(files.controller) && /initial terminal shell readiness was too slow before smoke input/.test(files.keyInputSmokeSource));
+
+check("tmux persistence remains native but opt-in", /MOMENTERM_ENABLE_TMUX_PERSISTENCE/.test(files.pty) && /MOMENTERM_DISABLE_TMUX_PERSISTENCE/.test(files.pty) && /"new-session", "-A", "-s", sessionName, "-c", launchDirectory/.test(files.pty));
+check("native PTY exposes current tmux directory", /func currentDirectory\(id: Int\) -> URL\?/.test(files.pty) && /#\{pane_current_path\}/.test(files.pty));
+check("app shutdown detaches PTY clients", /ptyManager\.detachAll\(\)/.test(files.controller) && /func detachAll\(\)/.test(files.pty));
+check("terminal pane groups persist through NativeTerminalCore v2", /momenterm\.native\.terminal-tabs\.v2/.test(files.terminalCore));
+check("workspaces persist through NativeTerminalCore", /momenterm\.native\.workspaces/.test(files.terminalCore));
+
+check("core smoke validates native model", /native review model metadata/.test(files.coreSmoke) && !files.coreSmoke.includes("review." + "html"));
+check("perf smoke validates native rows", /native diff rows/.test(files.perfSmoke) && !files.perfSmoke.includes("review." + "html"));
+check("perf smoke verifies lazy source loading", /review build eagerly embedded source contents/.test(files.perfSmoke) && /source preview did not lazily load selected file/.test(files.perfSmoke) && /file listing should return summary-only source rows/.test(files.perfSmoke));
+check("perf smoke verifies non-git shallow file listing", /non-git file listing did not stay shallow/.test(files.perfSmoke) && /shallow non-git listing took/.test(files.perfSmoke));
+check("perf smoke verifies non-git changes review is fast", /non-git changes review should not build a source tree/.test(files.perfSmoke) && /non-git changes review took/.test(files.perfSmoke));
+check("perf smoke verifies huge file preview stays nonblocking", /huge file preview blocked/.test(files.perfSmoke) && /huge file preview was embedded instead of skipped/.test(files.perfSmoke));
+check("review source collection is summary-only", /func collect\(files: \[DiffFile\], root: URL\) throws -> \[SourceFile\][\s\S]*sourceSummary\(/.test(files.sourceCollector) && /func preview\(path: String[\s\S]*sourceFile\(/.test(files.sourceCollector));
+check("large source preview checks file size before reading file contents", /let size = fileSize\(url\)[\s\S]*if size > Self\.sourceMaxFileBytes[\s\S]*if isLikelyBinary\(url\)[\s\S]*guard let data = try\? Data\(contentsOf: url\)/.test(files.sourceCollector));
+check("large diff context remains bounded", /diffContextLines = 80/.test(files.reviewCore));
+check("large untracked inline diff remains capped", /maxInlineUntrackedDiffBytes = 500_000/.test(files.reviewCore));
+
+check("app icon source exists", fs.existsSync(path.join(root, "assets/icon.icns")));
+check("package app copies checked-in icon", /cp "\$SOURCE_ICON" "\$ICON"/.test(files.packageApp) && /<key>CFBundleIconFile<\/key>\s*<string>Momenterm\.icns<\/string>/.test(files.packageApp) && /<key>CFBundleIconName<\/key>\s*<string>Momenterm<\/string>/.test(files.packageApp));
+check("install app refreshes LaunchServices icon registration", /ditto "\$APP" "\$DEST"/.test(files.installApp) && /xattr -cr "\$DEST"/.test(files.installApp) && /lsregister/.test(files.installApp) && /touch "\$DEST" "\$DEST\/Contents\/Info\.plist"/.test(files.installApp));
+check("package dmg creates installer image", /hdiutil create/.test(files.packageDmg) && /ln -s \/Applications/.test(files.packageDmg) && /Momenterm\.dmg/.test(files.packageDmg));
+check("launch smoke checks bundled icon", /cmp -s "\$ROOT\/assets\/icon\.icns"/.test(files.launchSmoke) && /check_app_icon/.test(files.launchSmoke) && /NSWorkspace\.shared\.icon\(forFile: appPath\)/.test(files.launchSmoke) && /CFBundleIconFile"\) as\? String == "Momenterm\.icns"/.test(files.launchSmoke));
+check("launch smoke checks dmg contents", /package-dmg\.sh/.test(files.launchSmoke) && /hdiutil attach/.test(files.launchSmoke) && /Momenterm\.app/.test(files.launchSmoke) && /Applications/.test(files.launchSmoke));
+check("launch smoke runs key input smoke", /key-input-smoke\.sh/.test(files.launchSmoke));
+check("key input smoke compiles native app sources", /Sources\/KeyInputSmoke\/main\.swift/.test(files.keyInputSmoke));
+check("key input smoke sends AppKit key events", /NSEvent\.keyEvent/.test(files.keyInputSmokeSource) && /window\.sendEvent\(event\)/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Korean PTY read output", /momenterm-key:abc한글/.test(files.keyInputSmokeSource) && /momenterm-keyabc한글/.test(files.keyInputSmokeSource) && /momenterm-key:abc한 글/.test(files.keyInputSmokeSource));
+check("key input smoke fails if terminal lacks first responder", /terminal is not first responder before key input/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt redraw renderer", /old prompt\\r\\u\{1b\}\[Knew prompt/.test(files.keyInputSmokeSource));
+check("key input smoke verifies absolute-column renderer", /\\u\{1b\}\[4GZ\\u\{1b\}\[K/.test(files.keyInputSmokeSource));
+check("key input smoke verifies cursor-address renderer", /cursor-address renderer output/.test(files.keyInputSmokeSource) && /\\u\{1b\}\[3;4Hhi/.test(files.keyInputSmokeSource));
+check("key input smoke verifies terminal top blank trimming", /top-blank renderer output/.test(files.keyInputSmokeSource) && /scrollback top-blank renderer output/.test(files.keyInputSmokeSource) && /terminalDocumentFillsViewportForSmokeTest/.test(files.keyInputSmokeSource) && /terminal short output is not top-aligned/.test(files.keyInputSmokeSource));
+check("key input smoke verifies terminal resize does not preserve stale prompt rows", /terminal resize promoted stale prompt row into scrollback/.test(files.keyInputSmokeSource) && /resizeTerminalOutputForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies alternate-screen renderer", /alternate-screen renderer output/.test(files.keyInputSmokeSource) && /\\u\{1b\}\[\?1049h/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Monaco terminal font", /terminal font smoke/.test(files.keyInputSmokeSource) && /terminalFontNameForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Hangul terminal width", /hangul-width renderer output/.test(files.keyInputSmokeSource) && /hangul-sequence renderer output/.test(files.keyInputSmokeSource));
+check("key input smoke verifies terminal cursor report", /cursor-report responses/.test(files.keyInputSmokeSource) && /renderTerminalResponsesForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies tab UI removal", /terminal tab UI is still visible instead of pane-only terminal headers/.test(files.keyInputSmokeSource) && /terminalTabUiIsRemovedForSmokeTest/.test(files.controller) && /terminalPaneHeadersAreVisibleForSmokeTest/.test(files.controller));
+check("key input smoke verifies terminal top chrome removal and pane control tooltips", /terminal top path bar was still visible or pane header controls lacked shortcut hover tooltips/.test(files.keyInputSmokeSource) && /terminalTopPathBarIsRemovedForSmokeTest/.test(files.controller) && /terminalPaneHeaderControlsHaveShortcutTooltipsForSmokeTest/.test(files.controller));
+check("key input smoke verifies split pane keeps tab count", /split terminal pane changed tab count/.test(files.keyInputSmokeSource));
+check("key input smoke verifies pane-only shortcut events", /Cmd\+T created tab UI\/new tab instead of splitting a terminal pane/.test(files.keyInputSmokeSource) && /Cmd\+Tab event created tab UI\/new tab instead of splitting a terminal pane/.test(files.keyInputSmokeSource) && /newTerminalTab created a tab instead of a split pane/.test(files.keyInputSmokeSource));
+check("key input smoke verifies split pane shortcut event", /Cmd\+D did not split terminal pane/.test(files.keyInputSmokeSource));
+check("key input smoke verifies split pane adds pane", /split terminal pane did not add a pane/.test(files.keyInputSmokeSource));
+check("key input smoke verifies split pane PTY starts at pane width", /Cmd\+D spawned split pane with full-window terminal columns/.test(files.keyInputSmokeSource) && /direct split spawned pane with full-window terminal columns/.test(files.keyInputSmokeSource) && /latestTerminalPaneStartedAtViewportSizeForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies split pane PTY tracks viewport", /terminal pane PTY columns do not match split viewport after Cmd\+D/.test(files.keyInputSmokeSource) && /terminal pane PTY columns do not match viewport after window resize/.test(files.keyInputSmokeSource) && /terminal right prompt timestamp wrapped or clipped after narrow window resize/.test(files.keyInputSmokeSource) && /terminalRightPromptFitsAfterResizeForSmokeTest/.test(files.controller) && /terminalVisiblePaneSizesMatchViewportForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies repeated Cmd+D keeps splitting beyond two", /terminal pane split limit still stops at two panes/.test(files.keyInputSmokeSource) && /Cmd\+D navigated between existing panes instead of adding a third pane/.test(files.keyInputSmokeSource) && /repeated Cmd\+D pushed existing terminal right-prompt timestamps out of their pane layout/.test(files.keyInputSmokeSource) && /seedTerminalRightPromptsForRepeatedSplitSmokeTest/.test(files.controller) && /seedTerminalStaleWidthRightPromptsForSplitSmokeTest/.test(files.keyInputSmokeSource) && /terminalRightPromptsStayInsidePanesAfterRepeatedSplitForSmokeTest/.test(files.controller) && /maximum terminal pane notice was not compact/.test(files.keyInputSmokeSource) && /terminal panes allow horizontal scrolling/.test(files.keyInputSmokeSource) && /terminal split panes are not centered/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Cmd+Shift+D focused below split", /Cmd\+Shift\+D rotated all terminal panes instead of splitting only the focused pane below/.test(files.keyInputSmokeSource) && /Cmd\+D after Cmd\+Shift\+D did not split only the focused below pane side-by-side/.test(files.keyInputSmokeSource) && /terminalFocusedPaneSplitBelowOnlyForSmokeTest/.test(files.controller) && /terminalFocusedPaneSplitBelowDiagnosticsForSmokeTest/.test(files.controller) && /terminalBelowPaneSideSplitForSmokeTest/.test(files.controller) && /terminalPaneSplitIsSideBySideForSmokeTest/.test(files.controller));
+check("key input smoke verifies Cmd+W closes split terminal pane", /Cmd\+W in a split terminal did not terminate the active pane session without closing the tab/.test(files.keyInputSmokeSource) && /terminalSessionCountForSmokeTest/.test(files.controller));
+check("key input smoke verifies Cmd+W keeps last workspace pane", /Cmd\+W closed or terminated the last terminal pane inside a workspace/.test(files.keyInputSmokeSource) && /workspaceSinglePaneTerminateRequested/.test(files.keyInputSmokeSource));
+check("key input smoke verifies terminal pane focus dimming", /terminal split panes do not dim inactive panes after Cmd\+D/.test(files.keyInputSmokeSource) && /Cmd\+Option\+\[ did not move terminal focus with inactive pane dimming/.test(files.keyInputSmokeSource) && /Cmd\+Option\+\] did not restore terminal focus with inactive pane dimming/.test(files.keyInputSmokeSource));
+check("key input smoke verifies last home terminal Cmd+W quit", /Cmd\+W did not terminate when no workspace and the last terminal tab remained/.test(files.keyInputSmokeSource) && /prepareLastHomeTerminalForSmokeTest/.test(files.keyInputSmokeSource) && /setTerminateApplicationHandlerForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo first responder", /prompt memo is not first responder/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo editable viewport", /prompt memo editable document does not fill viewport/.test(files.keyInputSmokeSource) && /memoDocumentFillsViewportForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo right side panel", /prompt memo side panel is not docked on the right at 40% width/.test(files.keyInputSmokeSource) && /memoSidePanelOccupiesRightSideForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo shadow, slide, and Escape close", /prompt memo side panel does not have sliding presentation and shadow/.test(files.keyInputSmokeSource) && /memoSidePanelHasShadowForSmokeTest/.test(files.controller) && /memoSidePanelUsesSlidingAnimationForSmokeTest/.test(files.controller) && /Esc did not close prompt memo while memo text view was focused/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo text input", /prompt memo did not accept ordinary text, Hangul, and Backspace/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo keeps brackets before Space", /memo plain brackets converted before space/.test(files.keyInputSmokeSource) && /prompt memo converted \[\] before Space/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo checkbox rendering after Space", /memo checkbox renderer output after space/.test(files.keyInputSmokeSource) && /prompt memo did not render \[\] plus Space as checkbox while preserving typed text/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo markdown divider quote and list continuation", /memo horizontal rule renderer output/.test(files.keyInputSmokeSource) && /memo blockquote renderer output/.test(files.keyInputSmokeSource) && /prompt memo did not continue markdown list on Enter/.test(files.keyInputSmokeSource));
+check("key input smoke verifies settings content", /settings overlay did not match compact preferences design/.test(files.keyInputSmokeSource) && /Momenterm 환경설정/.test(files.keyInputSmokeSource) && /프롬프트 합본/.test(files.keyInputSmokeSource) && /settings sidebar still exposes removed Prompt Memo settings category/.test(files.keyInputSmokeSource) && /settings overlay still exposes removed Prompt Memo setting/.test(files.keyInputSmokeSource));
+check("key input smoke verifies merge prompt settings editing", /settings overlay did not expose all merge prompt editors/.test(files.keyInputSmokeSource) && /settings merge prompt editor did not show the Monacori default/.test(files.keyInputSmokeSource) && /CUSTOM QUESTION CONTRACT/.test(files.keyInputSmokeSource) && /settings merge prompt reset did not restore the visible Monacori default/.test(files.keyInputSmokeSource));
+check("key input smoke verifies settings switches from diff", /settings overlay did not switch to native settings content/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Cmd+N workspace creation", /Cmd\+N did not create and attach the current terminal workspace/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Cmd+P workspace rail picker", /Cmd\+P did not expand and focus the left workspace rail picker with saved workspaces/.test(files.keyInputSmokeSource) && /Second Cmd\+P did not collapse the animated workspace rail picker/.test(files.keyInputSmokeSource) && /Third Cmd\+P did not reopen the animated workspace rail picker/.test(files.keyInputSmokeSource) && /Cmd\+P workspace rail picker did not move selection to the previous workspace/.test(files.keyInputSmokeSource) && /Cmd\+P workspace rail picker did not switch to the selected workspace's isolated terminal/.test(files.keyInputSmokeSource) && !/Cmd\+P workspace picker opened as an oversized overlay/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace rail labels and tooltips", /Cmd\+P expanded rail did not show action labels, shortcuts, and hover tooltips/.test(files.keyInputSmokeSource) && /Cmd\+P expanded rail overlapped sidebar icons with action labels/.test(files.keyInputSmokeSource) && /workspace rail did not hide expanded action labels after selecting a workspace/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace rail picker rows and cwd", /workspace rail picker Down arrow duplicated workspace rows/.test(files.keyInputSmokeSource) && /did not switch to the selected workspace's isolated terminal/.test(files.keyInputSmokeSource) && /did not restore its isolated terminal/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace rail picker selected deletion", /Backspace in workspace rail picker did not delete the selected workspace/.test(files.keyInputSmokeSource) && /relaunch after deleting every workspace resurrected an implicit momenterm workspace/.test(files.keyInputSmokeSource) && /workspacePathExistsForSmokeTest/.test(files.controller));
+check("key input smoke verifies persisted active workspace restores terminal cwd", /restored active workspace opened terminal at home instead of workspace path/.test(files.keyInputSmokeSource) && /verifyWorkspaceRestoreUsesWorkspaceCwd/.test(files.keyInputSmokeSource));
+check("key input smoke verifies initial, plain, and saved workspace process cwd", /plain app launch created or activated a workspace instead of behaving like a normal terminal/.test(files.keyInputSmokeSource) && /initial app root auto-created or activated a workspace instead of only setting the plain terminal cwd/.test(files.keyInputSmokeSource) && /saved active workspace with only a home tab reopened terminal at home/.test(files.keyInputSmokeSource) && /activeTerminalProcessCwdForSmokeTest/.test(files.controller));
+check("key input smoke verifies workspace feedback", /workspace creation did not show visible feedback/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace pane cwd", /new terminal pane inside workspace did not start at workspace path/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace-scoped terminal pane groups", /workspace switch did not isolate terminal pane groups/.test(files.keyInputSmokeSource) && /new pane in second workspace created a tab or leaked across workspaces/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace terminal transcript isolation", /workspace-one-terminal-marker/.test(files.keyInputSmokeSource) && /workspace-two-terminal-marker/.test(files.keyInputSmokeSource) && /did not switch to the selected workspace's isolated terminal/.test(files.keyInputSmokeSource) && /did not restore its isolated terminal/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace-scoped prompt state", /workspace-one memo/.test(files.keyInputSmokeSource) && /WORKSPACE ONE PLAN/.test(files.keyInputSmokeSource) && /second workspace reused first workspace prompt state/.test(files.keyInputSmokeSource) && /mouse-clicking first workspace did not restore first workspace prompt state/.test(files.keyInputSmokeSource));
+check("key input smoke verifies workspace agent completion badge and notification", /workspace agent completion bell did not raise an OS notification payload and red rail badge/.test(files.keyInputSmokeSource) && /workspace agent completion red rail badge did not clear after reopening the workspace/.test(files.keyInputSmokeSource) && /workspaceAgentAlertVisibleForSmokeTest/.test(files.controller) && /setTerminalBellNotificationObserverForSmokeTest/.test(files.controller));
+check("key input smoke verifies workspace forget shortcut", /Cmd\+Option\+Backspace did not forget mouse-clicked workspace/.test(files.keyInputSmokeSource) && /routeThroughWindow: false/.test(files.keyInputSmokeSource) && /workspaceRailButtonCountForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies F7 non-git guidance", /F7 non-git path did not show git directory guidance/.test(files.keyInputSmokeSource) && /F7 non-git changes view blocked while deciding whether the folder is a Git repository/.test(files.keyInputSmokeSource));
+check("key input smoke verifies F7 git root workspace", /F7 did not create a workspace at git root/.test(files.keyInputSmokeSource));
+check("key input smoke verifies non-git file view", /non-git file view did not stay at top-level before lazy folder expansion/.test(files.keyInputSmokeSource));
+check("key input smoke verifies file view opens nonblocking", /file view did not open immediately as a nonblocking scoped overlay/.test(files.keyInputSmokeSource) && /No folder selected/.test(files.keyInputSmokeSource) && /codeScrollsVerticallyOnlyForSmokeTest/.test(files.keyInputSmokeSource));
+check("key input smoke verifies compact file tree hierarchy and git status colors", /file tree sidebar did not render hierarchy, icons, and file type colors/.test(files.keyInputSmokeSource) && /file tree sidebar spacing, icon size, or indentation was too loose for the compact Files view/.test(files.keyInputSmokeSource) && /file tree sidebar did not use muted IntelliJ-style git status colors/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Cmd+0/Cmd+1 panel toggles, cache, sidebar focus, file-tree arrows, and Enter focus", /Second Cmd\+0 did not toggle the Changes overlay closed/.test(files.keyInputSmokeSource) && /Second Cmd\+1 did not toggle the Files overlay closed/.test(files.keyInputSmokeSource) && /Third Cmd\+1 did not reopen cached Files overlay without another load/.test(files.keyInputSmokeSource) && /repeated Cmd\+1 started another file listing load/.test(files.keyInputSmokeSource) && /Cmd\+1 did not focus the file tree sidebar/.test(files.keyInputSmokeSource) && /file tree Down arrow did not move selection and refresh preview/.test(files.keyInputSmokeSource) && /file tree did not select the multi-line source fixture before Enter focus/.test(files.keyInputSmokeSource) && /file tree Enter did not move focus to the file view/.test(files.keyInputSmokeSource) && /file view Down arrow changed the file tree selection instead of moving the file-view cursor/.test(files.keyInputSmokeSource) && /15 percent scroll margin/.test(files.keyInputSmokeSource) && /rapid Down arrow navigation dropped or lagged key events/.test(files.keyInputSmokeSource) && /Option\+F12 did not toggle the open review panel back to terminal focus/.test(files.keyInputSmokeSource));
+check("key input smoke verifies IntelliJ HTTP client execution", /api\/request\.http/.test(files.keyInputSmokeSource) && /http-client\.private\.env\.json/.test(files.keyInputSmokeSource) && /httpRunButtonCountForSmokeTest/.test(files.keyInputSmokeSource) && /sendShortcut\("\\r", keyCode: 36, modifiers: \[\.option\]\)/.test(files.keyInputSmokeSource) && /HTTP\/1\.1 201/.test(files.keyInputSmokeSource));
+check("key input smoke verifies file view Enter shows review cursor", /file tree Enter focused the file view but did not show a visible review cursor for comments/.test(files.keyInputSmokeSource) && /fileOverlayPreviewHasVisibleReviewCursorForSmokeTest/.test(files.controller) && /private final class NativeCodeTextView: NSTextView/.test(files.controller) && /reviewCursorIsVisibleForSmokeTest/.test(files.controller));
+check("key input smoke verifies non-git shallow lazy file view", /non-git file view did not stay at top-level before lazy folder expansion/.test(files.keyInputSmokeSource) && /file view did not lazily load folder contents/.test(files.keyInputSmokeSource));
+check("key input smoke verifies enhanced compact diff UI and code cursors", /Changes sidebar did not render compact file rows with signed single-line \+added -deleted stats and no status badges or directory names/.test(files.keyInputSmokeSource) && /diffSidebarRowHeight: CGFloat = 22/.test(files.designSystem) && !/textStack\.addArrangedSubview\(parentLabel\)/.test(files.controller) && /Diff and file views did not keep a visible code cursor for review comments/.test(files.keyInputSmokeSource) && /reviewCodePanesShowCursorForSmokeTest/.test(files.controller) && /placeCodeCursor/.test(files.controller) && /Changes sidebar did not show VIEWED, question, and change-request badges/.test(files.keyInputSmokeSource) && /Changes diff view did not render IntelliJ-style editor chrome, focused hunk blocks, and inline changed-token highlights/.test(files.keyInputSmokeSource) && /Cmd\+0 did not focus the Changes change list/.test(files.keyInputSmokeSource) && /Changes Enter did not keep the diff open with a visible cursor in the code pane/.test(files.keyInputSmokeSource) && /Second F7 after the last-hunk hint did not advance to the next file and update the change-list highlight/.test(files.keyInputSmokeSource));
+check("key input smoke verifies Markdown, image, CSV, SVG, and ICNS previews", /markdown file preview did not render native Markdown/.test(files.keyInputSmokeSource) && /PNG file preview did not render a native image view/.test(files.keyInputSmokeSource) && /CSV file preview did not render a native table preview/.test(files.keyInputSmokeSource) && /SVG file preview did not render a native image view/.test(files.keyInputSmokeSource) && /ICNS file preview did not render a native image view/.test(files.keyInputSmokeSource));
+check("key input smoke sends modified shortcut events", /sendShortcut\([\s\S]*charactersIgnoringModifiers: String\? = nil,[\s\S]*routeThroughWindow: Bool = true/.test(files.keyInputSmokeSource));
+check("key input smoke verifies shortcut behavior results", /Cmd\+0 did not open Changes/.test(files.keyInputSmokeSource) && /Changes overlay did not show old\/new side-by-side panes/.test(files.keyInputSmokeSource) && /Changes overlay did not apply syntax highlighting/.test(files.keyInputSmokeSource) && /Changes sidebar text does not have readable themed foreground colors/.test(files.keyInputSmokeSource) && /F7 navigated by file or failed to expose the diff cursor/.test(files.keyInputSmokeSource) && /F7 at the last hunk did not pause with an inline next-file hint/.test(files.keyInputSmokeSource) && /Second F7 after the last-hunk hint did not advance to the next file/.test(files.keyInputSmokeSource) && /Cmd\+9 did not open native history/.test(files.keyInputSmokeSource) && /double Shift did not open Quick Open/.test(files.keyInputSmokeSource));
+check("key input smoke verifies padded overlay and compact controls", /overlay windows did not keep panel padding and compact controls/.test(files.keyInputSmokeSource) && /overlayLayoutHasPaddingAndCompactControlsForSmokeTest/.test(files.controller));
+check("key input smoke verifies Find in Files content preview, panel layout, and speed", /Find in Files did not show file results and a preview pane/.test(files.keyInputSmokeSource) && /Find in Files overlay did not match the floating search panel/.test(files.keyInputSmokeSource) && /Find in Files filter blocked the main thread budget/.test(files.keyInputSmokeSource) && /Find in Files did not search file contents and refresh preview/.test(files.keyInputSmokeSource) && /findInFilesPreviewHasSyntaxForSmokeTest/.test(files.controller) && /findInFilesOverlayMatchesSearchPanelForSmokeTest/.test(files.controller));
+check("key input smoke verifies Recent Files clean selection", /Cmd\+E Recent Files overlay had duplicate selection cursors or horizontal\/sidebar scroll issues/.test(files.keyInputSmokeSource) && /Recent Files Show edited only label was unreadable/.test(files.keyInputSmokeSource) && /Recent Files result rows were too tall or loosely spaced/.test(files.keyInputSmokeSource) && /Cmd\+E inside Recent Files did not toggle Show edited only/.test(files.keyInputSmokeSource) && /Recent Files Down arrow duplicated rows or left more than one selected cursor/.test(files.keyInputSmokeSource) && /Recent Files rapid Down arrow navigation lagged behind key repeat/.test(files.keyInputSmokeSource) && /Recent Files Prompt Memo category did not open the prompt memo side panel/.test(files.keyInputSmokeSource));
+check("key input smoke verifies minimized scrollbars", /native scrollbars are still too wide or opaque over content/.test(files.keyInputSmokeSource) && /scrollbarsMinimizedDiagnosticsForSmokeTest/.test(files.controller));
+check("key input smoke verifies terminal focus blocks review navigation", /Cmd\+\[ opened review navigation while terminal was focused/.test(files.keyInputSmokeSource) && /Cmd\+\] opened review navigation while terminal was focused/.test(files.keyInputSmokeSource) && /Navigate Back menu action opened review navigation while terminal was focused/.test(files.keyInputSmokeSource));
+check("key input smoke verifies terminal output memory cap", /terminal output burst was retained by AppKit hidden text storage or exceeded transcript cap/.test(files.keyInputSmokeSource) && /terminalOutputIsBoundedAfterBurstForSmokeTest/.test(files.controller));
+check("key input smoke commits terminal IME text through native insertText", /insertCommittedTerminalTextForSmokeTest\("한글"\)/.test(files.keyInputSmokeSource) && /func insertCommittedTerminalTextForSmokeTest\(_ text: String\)/.test(files.controller) && /insertText\(text, replacementRange: NSRange\(location: NSNotFound, length: 0\)\)/.test(files.controller));
+check("key input smoke verifies no-stutter input and file-open budgets", /rapid terminal typing blocked the main thread budget/.test(files.keyInputSmokeSource) && /large terminal paste blocked the main thread budget/.test(files.keyInputSmokeSource) && /rapid terminal cursor movement blocked the main thread budget/.test(files.keyInputSmokeSource) && /file view open blocked the main thread budget/.test(files.keyInputSmokeSource) && /terminalRapidKeyInputStaysResponsiveForSmokeTest/.test(files.controller) && /openFilesViewReturnsPromptlyForSmokeTest/.test(files.controller));
+check("key input smoke verifies review shortcut state", /charactersIgnoringModifiers: "\/"/.test(files.keyInputSmokeSource) && /charactersIgnoringModifiers: "\."/.test(files.keyInputSmokeSource) && /file-view inline question comment box/.test(files.keyInputSmokeSource) && /file-view inline change-request comment box/.test(files.keyInputSmokeSource) && /< did not toggle viewed state/.test(files.keyInputSmokeSource));
+check("key input smoke verifies prompt memo Cmd+Shift+N", /Cmd\+Shift\+N did not open prompt memo side panel/.test(files.keyInputSmokeSource));
+check("Option+F12 is the only terminal focus shortcut", /targetedItem\("Focus Terminal", #selector\(toggleTerminal\), functionKey\(0xF70F\), \[\.option\]\)/.test(files.appDelegate) && !/targetedItem\("Focus Terminal", #selector\(toggleTerminal\), "`", \[\.control\]\)/.test(files.appDelegate) && !/lowerKey == "`"[\s\S]*toggleTerminal\(\)/.test(files.controller) && /Option\+F12 did not toggle the open review panel back to terminal focus/.test(files.keyInputSmokeSource) && /Ctrl\+\` still focused terminal even though terminal shortcut must be Option\+F12 only/.test(files.keyInputSmokeSource) && /Option\+F12 did not remain the single terminal focus shortcut after Ctrl\+\` was ignored/.test(files.keyInputSmokeSource));
 
 if (failures.length) {
-  console.error(`\n${failures.length} parity smoke checks failed`);
+  console.error(`\n${failures.length} native parity checks failed`);
   process.exit(1);
 }
-console.log("\nparity smoke ok");
+console.log("\nnative parity smoke ok");

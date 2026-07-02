@@ -10,14 +10,16 @@ do {
     let review = try core.build(root: repo, ignoreWhitespace: ignoreWhitespace)
     let payload: JSONValue = .object([
         "root": .string(review.root ?? ""),
-        "html": .string(review.html),
+        "branch": .string(review.branch),
+        "isGitRepository": .bool(review.isGitRepository),
         "files": .number(Double(review.files)),
         "hunks": .number(Double(review.hunks)),
         "signature": .string(review.signature),
         "generatedAt": .string(review.generatedAt),
-        "lazyBodies": .array(review.lazyBodies.map { .string($0) }),
-        "lazySourceData": .string(review.lazySourceData),
-        "update": review.update ?? .null
+        "diffFiles": .array(review.diffFiles.map { $0.jsonValue() }),
+        "sourceFiles": .array(review.sourceFiles.map { $0.jsonValue(includeContent: true) }),
+        "fileStates": .array(review.fileStates),
+        "httpEnvironments": review.httpEnvironments
     ])
     print(payload.jsonString())
 } catch {
