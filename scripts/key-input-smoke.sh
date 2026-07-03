@@ -26,4 +26,20 @@ swiftc \
   -framework UserNotifications \
   "${MOMENTERM_LIBGHOSTTY_LINK_FLAGS[@]}"
 
-"$OUT/momenterm-key-input-smoke"
+# The smoke drives the real controller, which persists workspace/review/file-tree state through
+# UserDefaults.standard, keyed off the executable name. cfprefsd caches that domain in memory, so a
+# plain `defaults delete` before the run races with the daemon and stale state leaks between repeated
+# local runs (making persistence-sensitive assertions flaky). Run a uniquely-named copy instead so
+# every invocation gets a guaranteed-fresh, un-cached domain. (Other GUI smokes use UUID-suffixed
+# domains and are already isolated.)
+RUN="$(mktemp -t momenterm-key-input-smoke.XXXXXX)"
+cp "$OUT/momenterm-key-input-smoke" "$RUN"
+chmod +x "$RUN"
+set +e
+"$RUN"
+status=$?
+set -e
+rm -f "$RUN"
+defaults delete "$(basename "$RUN")" >/dev/null 2>&1 || true
+rm -f "$HOME/Library/Preferences/$(basename "$RUN").plist" 2>/dev/null || true
+exit "$status"

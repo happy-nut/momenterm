@@ -72,6 +72,16 @@ enum JSONValue: Codable {
         return nil
     }
 
+    var arrayValue: [JSONValue]? {
+        if case .array(let value) = self { return value }
+        return nil
+    }
+
+    var boolValue: Bool? {
+        if case .bool(let value) = self { return value }
+        return nil
+    }
+
     func jsonString() -> String {
         guard let data = try? JSONEncoder().encode(self) else {
             return "null"
