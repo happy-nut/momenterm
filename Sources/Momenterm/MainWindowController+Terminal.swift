@@ -1505,14 +1505,6 @@ extension MainWindowController {
             pane.cwd = standardized
         }
     }
-    private func refreshVisiblePaneStatuses() {
-        guard let tab = activeTab() else {
-            return
-        }
-        for pane in tab.panes {
-            refreshPaneStatus(for: pane)
-        }
-    }
     private func refreshPaneStatus(for pane: TerminalSession) {
         guard !Self.statePersistenceDisabled else {
             return
@@ -1817,15 +1809,6 @@ extension MainWindowController {
             }
         }
     }
-    @objc private func newTerminalTabAction() {
-        newTerminalTab()
-    }
-    @objc private func renameTerminalAction() {
-        renameTerminalPane()
-    }
-    @objc private func closeTerminalAction() {
-        closeTab()
-    }
     @objc private func splitTerminalFromPaneHeader(_ sender: NSButton) {
         activateTerminalPaneFromHeaderButton(sender, focus: false)
         splitTerminalPane()
@@ -1846,16 +1829,5 @@ extension MainWindowController {
             return
         }
         setActiveTerminal(id: paneId, focus: focus)
-    }
-    @objc private func selectTerminalTab(_ sender: NSButton) {
-        guard let value = sender.identifier?.rawValue, let id = Int(value) else {
-            return
-        }
-        guard let tab = terminalTabs.first(where: { $0.id == id }) else {
-            return
-        }
-        hideOverlay()
-        activeTerminalTabId = tab.id
-        setActiveTerminal(id: tab.activePaneId ?? tab.panes.first?.id, focus: true)
     }
 }

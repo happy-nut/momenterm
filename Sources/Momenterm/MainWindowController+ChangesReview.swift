@@ -884,24 +884,6 @@ extension MainWindowController {
     func rawPreviewLanguage(for language: String) -> String {
         language == "svg" ? "xml" : language
     }
-    private func sourcePreviewWithReviewNotes(_ content: NSAttributedString, path: String) -> NSAttributedString {
-        let output = NSMutableAttributedString(attributedString: content)
-        let notes = reviewNotes
-            .filter { $0.path == path }
-            .sorted {
-                let lhsLine = $0.line ?? 1
-                let rhsLine = $1.line ?? 1
-                if lhsLine != rhsLine {
-                    return lhsLine > rhsLine
-                }
-                return $0.kind > $1.kind
-            }
-        for note in notes {
-            let insertion = sourcePreviewInsertionLocation(in: output.string, line: note.line ?? 1)
-            output.insert(reviewInlineBlock(note), at: insertion)
-        }
-        return output
-    }
     private func sourcePreviewInsertionLocation(in text: String, line: Int) -> Int {
         let safeLine = max(line, 1)
         guard safeLine > 1 else {
@@ -1264,23 +1246,6 @@ extension MainWindowController {
     @objc func diffToolbarPrevHunkAction() { selectReviewTarget(delta: -1) }
     @objc func diffToolbarNextFileAction() { moveOverlaySelection(delta: 1) }
     @objc func diffToolbarPrevFileAction() { moveOverlaySelection(delta: -1) }
-    private func diffToolbarControl(_ title: String, tooltip: String) -> NSView {
-        let button = MomentermCompactButton(title: title, target: nil, action: nil)
-        let width: CGFloat = title == "Side-by-side viewer" ? 116 : 92
-        button.compactSize = NSSize(width: width, height: 18)
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        button.font = MomentermDesign.Fonts.codeSmall
-        button.toolTip = tooltip
-        button.attributedTitle = NSAttributedString(
-            string: title,
-            attributes: [
-                .font: MomentermDesign.Fonts.codeSmall,
-                .foregroundColor: theme.secondaryText
-            ]
-        )
-        return compactButtonContainer(button, size: width)
-    }
     func configureDiffScrollSync() {
         guard let newScroll = codePane.newPaneEnclosingScrollView else {
             return

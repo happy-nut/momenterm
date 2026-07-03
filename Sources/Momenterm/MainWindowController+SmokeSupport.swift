@@ -40,9 +40,6 @@ extension MainWindowController {
         return button.subviews.contains { $0.identifier?.rawValue == "workspaceAgentAlertDot" }
     }
 
-    func selectMergedPromptTerminalForSmokeTest(id: Int) -> Bool {
-        selectMergedPromptTerminal(id: id)
-    }
 
     func mergedPromptSidePanelIsVisibleForSmokeTest() -> Bool {
         !mergedPromptSidePanel.isHidden
@@ -84,17 +81,11 @@ extension MainWindowController {
         return "hidden=\(mergedPromptSidePanel.isHidden) kind=\(mergedPromptSidePanelKind ?? "nil") firstResponder=\(responder) visibleConstraint=\(mergedPromptPanelVisibleTrailingConstraint?.isActive == true) hiddenConstraint=\(mergedPromptPanelHiddenLeadingConstraint?.isActive == true)"
     }
 
-    func mergedPromptTerminalTargetCountForSmokeTest() -> Int {
-        mergedPromptTerminalCandidates().count
-    }
 
     func mergedPromptTerminalIdsForSmokeTest() -> [Int] {
         mergedPromptTerminalCandidates().map { $0.session.id }
     }
 
-    func mergedPromptSelectedTerminalIdForSmokeTest() -> Int? {
-        ensureMergedPromptTerminalTarget()
-    }
 
     func isMergedPromptPaneSelectionActiveForSmokeTest() -> Bool {
         mergedPromptPaneSelectionActive
@@ -130,12 +121,6 @@ extension MainWindowController {
             && mergedPromptFloatingButtonVisibleConstraint?.isActive == true
     }
 
-    // The pill slides in/out via constraint swap + the shared panel animation duration.
-    func mergedPromptFloatingButtonUsesSlidingAnimationForSmokeTest() -> Bool {
-        memoPanelAnimationDuration > 0
-            && mergedPromptFloatingButtonVisibleConstraint != nil
-            && mergedPromptFloatingButtonHiddenConstraint != nil
-    }
 
     // US-08 goal 4: which terminal currently shows the faint centered "Enter" hint (nil = none).
     func mergedPromptEnterOverlayTerminalIdForSmokeTest() -> Int? {
@@ -1129,16 +1114,6 @@ extension MainWindowController {
         ].joined(separator: " ")
     }
 
-    func memoListContinuationForSmokeTest() -> Bool {
-        showMemoPanel()
-        guard let memoTextView = memoTextView else {
-            return false
-        }
-        memoTextView.replaceTextForSmokeTest("- first")
-        memoTextView.setSelectedRange(NSRange(location: (memoTextView.string as NSString).length, length: 0))
-        memoTextView.insertNewline(nil)
-        return memoTextView.string == "• first\n• "
-    }
 
     func memoWindowForSmokeTest() -> NSWindow? {
         memoSidePanel.isHidden ? nil : window
@@ -1208,9 +1183,6 @@ extension MainWindowController {
         return selectedSettingsCategory == category
     }
 
-    func settingsSelectedCategoryForSmokeTest() -> String {
-        selectedSettingsCategory.rawValue
-    }
 
     func settingsSidebarSelectionWorksForSmokeTest() -> Bool {
         let previousCategory = selectedSettingsCategory
@@ -1889,23 +1861,6 @@ extension MainWindowController {
         activeFilesDocument()?.sourceFiles.count ?? 0
     }
 
-    func selectSourceIndexForSmokeTest(_ index: Int) -> Bool {
-        guard let document = activeFilesDocument(),
-              document.sourceFiles.indices.contains(index) else {
-            return false
-        }
-        let path = document.sourceFiles[index].path
-        revealFileTreeAncestorsForSmokeTest(ofPath: path)
-        // Ancestor loads may re-index a lazy listing, so re-find the path before selecting.
-        guard let resolved = activeFilesDocument()?.sourceFiles.firstIndex(where: { $0.path == path }) else {
-            return false
-        }
-        selectedSourceIndex = resolved
-        fileTreeModel.selectedIdentifier = "source:\(resolved)"
-        populateFilesOverlay()
-        focusFileSidebar()
-        return true
-    }
 
     // Selects a rendered row by its position in the visible tree (files and folders alike).
     func selectFileTreeRowIndexForSmokeTest(_ index: Int) -> Bool {
@@ -2021,28 +1976,6 @@ extension MainWindowController {
         return lineNumber(in: codePane.oldPaneString, location: codePane.oldPaneSelectionLocation)
     }
 
-    func selectedSourcePreviewIsVisibleForSmokeTest() -> Bool {
-        guard let path = selectedSourcePathForSmokeTest() else {
-            return false
-        }
-        let text = codePane.oldPaneString
-        guard !text.contains("Select a file to preview.") else {
-            return false
-        }
-        if path.hasSuffix("build.sh") {
-            return text.contains("echo build")
-        }
-        if path.hasSuffix("new-tool.sh") {
-            return text.contains("echo new")
-        }
-        if path.hasSuffix("app.swift") {
-            return text.contains("print")
-        }
-        if path.hasSuffix("guide.md") {
-            return text.contains("Guide")
-        }
-        return !text.isEmpty || !sourcePreviewScrollView.isHidden
-    }
 
     func setHttpClientTransportForSmokeTest(_ transport: NativeHttpClient.Transport?) {
         httpRunner.setTransportForSmokeTest(transport)
@@ -2754,13 +2687,6 @@ extension MainWindowController {
             .joined(separator: "\n")
     }
 
-    func activeWorkspaceBranchForSmokeTest() -> String? {
-        guard let activeWorkspacePath = activeWorkspacePath,
-              let workspace = workspaces.first(where: { normalizedWorkspacePath($0.path) == activeWorkspacePath }) else {
-            return nil
-        }
-        return workspaceBranchName(for: workspace)
-    }
 
     func workspaceRailShowsBranchForSmokeTest(path: String, branch: String) -> Bool {
         let wasExpanded = workspaceRailExpanded
@@ -2945,10 +2871,6 @@ extension MainWindowController {
         activeWorkspaceId
     }
 
-    @discardableResult
-    func renameWorkspaceForSmokeTest(id: String, to name: String) -> Bool {
-        renameWorkspace(id: id, to: name)
-    }
 
     func workspaceNameForSmokeTest(id: String) -> String? {
         workspaces.first(where: { $0.id == id })?.name

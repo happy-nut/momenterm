@@ -2741,50 +2741,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
 
 
-    private func sourceMarkerMatches(document: ReviewDocument, markers: [String]) -> (matches: [(String, Int, String)], scannedFiles: Int, capped: Bool) {
-        guard let documentRoot = document.root else {
-            return ([], 0, false)
-        }
-        let rootURL = root ?? URL(fileURLWithPath: documentRoot).standardizedFileURL
-        var matches: [(String, Int, String)] = []
-        var scannedFiles = 0
-        var scannedBytes = 0
-        let maxFiles = 1_200
-        let maxBytes = 8_000_000
-        let maxMatches = 300
-
-        for file in document.sourceFiles {
-            if scannedFiles >= maxFiles || scannedBytes >= maxBytes || matches.count >= maxMatches {
-                return (matches, scannedFiles, true)
-            }
-
-            let renderedFile: SourceFile
-            if file.embedded {
-                renderedFile = file
-            } else if file.skippedReason == "Select a file to preview.",
-                      let preview = service.filePreview(root: rootURL, path: file.path, changed: file.changed, changedLines: file.changedLines, vcs: file.vcs) {
-                renderedFile = preview
-            } else {
-                continue
-            }
-            guard renderedFile.embedded else {
-                continue
-            }
-
-            scannedFiles += 1
-            scannedBytes += renderedFile.size
-            for (lineIndex, line) in renderedFile.content.components(separatedBy: .newlines).enumerated() {
-                let hit = markers.contains { line.range(of: $0, options: .caseInsensitive) != nil }
-                if hit {
-                    matches.append((renderedFile.path, lineIndex + 1, line))
-                    if matches.count >= maxMatches {
-                        return (matches, scannedFiles, true)
-                    }
-                }
-            }
-        }
-        return (matches, scannedFiles, false)
-    }
 
 
 
@@ -3764,15 +3720,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return formatter
     }()
 
-    private func updateAllStatusClocks() {
-        guard let tab = activeTab() else {
-            return
-        }
-        let now = Self.statusClockFormatter.string(from: Date())
-        for pane in tab.panes {
-            pane.statusClockLabel?.stringValue = now
-        }
-    }
 
     func updateStatusClock(for pane: TerminalSession) {
         pane.statusClockLabel?.stringValue = Self.statusClockFormatter.string(from: Date())
