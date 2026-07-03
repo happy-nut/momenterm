@@ -21,7 +21,7 @@ swiftc \
   -o "$OUT/momenterm-key-input-smoke" \
   "${MOMENTERM_LIBGHOSTTY_SWIFTC_FLAGS[@]}" \
   "${sources[@]}" \
-  "$ROOT/Sources/KeyInputSmoke/main.swift" \
+  "$ROOT"/Sources/KeyInputSmoke/*.swift \
   -framework AppKit \
   -framework UserNotifications \
   "${MOMENTERM_LIBGHOSTTY_LINK_FLAGS[@]}"

@@ -40,7 +40,7 @@ const files = {
   syntax: read("Sources/Momenterm/NativeSyntaxHighlighting.swift"),
   libGhosttyView: read("Sources/Momenterm/LibGhosttyTerminalView.swift"),
   designSystem: read("Sources/Momenterm/NativeDesignSystem.swift"),
-  keyInputSmokeSource: read("Sources/KeyInputSmoke/main.swift"),
+  keyInputSmokeSource: fs.readdirSync(path.join(root, "Sources/KeyInputSmoke")).filter((f) => f.endsWith(".swift")).sort().map((f) => read(path.join("Sources/KeyInputSmoke", f))).join("\n"),
   gitClient: read("Sources/Momenterm/NativeGitClient.swift"),
   reviewCore: read("Sources/Momenterm/NativeReviewCore.swift"),
   reviewTypes: read("Sources/Momenterm/NativeReviewTypes.swift"),
@@ -386,7 +386,7 @@ check("package dmg creates installer image", /hdiutil create/.test(files.package
 check("launch smoke checks bundled icon", /cmp -s "\$ROOT\/assets\/icon\.icns"/.test(files.launchSmoke) && /check_app_icon/.test(files.launchSmoke) && /NSWorkspace\.shared\.icon\(forFile: appPath\)/.test(files.launchSmoke) && /CFBundleIconFile"\) as\? String == "Momenterm\.icns"/.test(files.launchSmoke));
 check("launch smoke checks dmg contents", /package-dmg\.sh/.test(files.launchSmoke) && /hdiutil attach/.test(files.launchSmoke) && /Momenterm\.app/.test(files.launchSmoke) && /Applications/.test(files.launchSmoke));
 check("launch smoke runs key input smoke", /key-input-smoke\.sh/.test(files.launchSmoke));
-check("key input smoke compiles native app sources", /Sources\/KeyInputSmoke\/main\.swift/.test(files.keyInputSmoke));
+check("key input smoke compiles native app sources", /Sources\/Momenterm\/\*\.swift/.test(files.keyInputSmoke) && /Sources\/KeyInputSmoke\/\*\.swift/.test(files.keyInputSmoke));
 check("key input smoke sends AppKit key events", /NSEvent\.keyEvent/.test(files.keyInputSmokeSource) && /window\.sendEvent\(event\)/.test(files.keyInputSmokeSource));
 check("key input smoke verifies Korean PTY read output", /momenterm-key:abc한글/.test(files.keyInputSmokeSource) && /momenterm-keyabc한글/.test(files.keyInputSmokeSource) && /momenterm-key:abc한 글/.test(files.keyInputSmokeSource));
 check("key input smoke fails if terminal lacks first responder", /terminal is not first responder before key input/.test(files.keyInputSmokeSource));
