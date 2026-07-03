@@ -67,7 +67,17 @@ final class NativeTerminalCore {
             )
             guard !sanitized.panes.isEmpty else { return nil }
             let active = item.objectValue?["active"]?.boolValue ?? false
-            return PaneLayoutCodec.encode(sanitized, tabActive: active)
+            let encoded = PaneLayoutCodec.encode(sanitized, tabActive: active)
+            // US-15: preserve the owning workspace id, which persistTerminalState merges onto the
+            // codec's tab object. Re-normalizing on save/restore would otherwise drop it, so a
+            // restarted ~/ workspace tab would re-attach by path to the first same-path instance,
+            // breaking terminal isolation across same-path workspaces on relaunch.
+            guard let workspaceId = item.objectValue?["workspaceId"]?.stringValue, !workspaceId.isEmpty,
+                  case .object(var tabObject) = encoded else {
+                return encoded
+            }
+            tabObject["workspaceId"] = .string(workspaceId)
+            return .object(tabObject)
         }.prefix(maxTerminalTabs))
     }
 
@@ -83,6 +93,13 @@ final class NativeTerminalCore {
                 "color": .string(cleanText(object["color"]?.stringValue, fallback: "#4F8A8B")),
                 "icon": .string(cleanIdentifier(object["icon"]?.stringValue, fallback: "ws-diamond"))
             ]
+            // US-15: preserve the stable workspace id across save/restore. Dropping it here made
+            // every workspace fall back to its path as id on relaunch, collapsing same-path (~/)
+            // instances into one scope and losing UUID-keyed prompt memo / review notes. The id is
+            // a UUID or a migrated path, so keep it verbatim (only skip an empty value).
+            if let id = object["id"]?.stringValue, !id.isEmpty {
+                normalized["id"] = .string(id)
+            }
             let branch = cleanText(object["branch"]?.stringValue, fallback: "")
             if !branch.isEmpty {
                 normalized["branch"] = .string(branch)

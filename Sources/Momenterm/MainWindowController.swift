@@ -146,6 +146,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private static let fileTreeRenderedRowLimit = 900
     private static let quickOpenRenderedRowLimit = 120
     private static let activeWorkspacePathKey = "momenterm.native.active-workspace-path"
+    // US-15: the active workspace is now persisted by id (multiple ~/ workspaces share a path).
+    // The legacy path key is still read on launch as a migration fallback.
+    private static let activeWorkspaceIdKey = "momenterm.native.active-workspace-id"
     private static let disableStatePersistenceEnv = "MOMENTERM_DISABLE_STATE_PERSISTENCE"
     private static var statePersistenceDisabled: Bool {
         ProcessInfo.processInfo.environment[disableStatePersistenceEnv] == "1"
@@ -336,7 +339,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let id: Int
         var name: String
         var cwd: URL
+        // `workspacePath` remains the tab's workspace directory (cwd anchor). `workspaceId` is
+        // the stable identity of the owning workspace (US-15): with multiple ~/ workspaces the
+        // path no longer disambiguates, so tab-to-workspace membership is keyed by id. nil id ==
+        // a home (no-workspace) terminal.
         var workspacePath: String?
+        var workspaceId: String?
         var panes: [TerminalSession]
         var activePaneId: Int?
         var tabButton: NSButton?
@@ -344,11 +352,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         var belowSplitGroups: [[Int]]
         var belowSideSplitGroups: [[Int]]
 
-        init(id: Int, name: String, cwd: URL, workspacePath: String?, pane: TerminalSession, panesSplitVertically: Bool = true) {
+        init(id: Int, name: String, cwd: URL, workspacePath: String?, workspaceId: String? = nil, pane: TerminalSession, panesSplitVertically: Bool = true) {
             self.id = id
             self.name = name
             self.cwd = cwd
             self.workspacePath = workspacePath
+            self.workspaceId = workspaceId
             self.panes = [pane]
             self.activePaneId = pane.id
             self.panesSplitVertically = panesSplitVertically
@@ -431,8 +440,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private struct Workspace {
+        // Stable per-instance identity (US-15). Multiple workspaces may share the same
+        // filesystem path (all new workspaces start at ~/), so `path` can no longer identify
+        // a workspace — `id` does. Migration: workspaces persisted before US-15 have no stored
+        // id and adopt their normalized path as id, which keeps their US-05 workspace-scoped
+        // memo/review-note data (keyed by that same path) intact.
+        let id: String
         let path: String
-        let name: String
+        var name: String
         let color: NSColor
         let iconName: String
         let branchName: String?
@@ -445,6 +460,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         var lastNotification: String?
 
         init(
+            id: String,
             path: String,
             name: String,
             color: NSColor,
@@ -455,6 +471,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             listeningPorts: [Int] = [],
             lastNotification: String? = nil
         ) {
+            self.id = id
             self.path = path
             self.name = name
             self.color = color
@@ -471,6 +488,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             // transient runtime state and are deliberately excluded so a restart never
             // resurrects a stale PR badge or port list.
             var value: [String: JSONValue] = [
+                "id": .string(id),
                 "path": .string(path),
                 "name": .string(name),
                 "color": .string(color.hexString(fallback: "#4F8A8B")),
@@ -586,6 +604,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // the blue "unread" ring around a pane and the Cmd+Shift+U jump target.
     private var agentAlertSessionIds = Set<Int>()
     private var activeWorkspacePath: String?
+    // Identity (US-15) of the active workspace. Kept in lockstep with `activeWorkspacePath`
+    // (path = cwd, id = which workspace instance). The workspace-scoped state key (US-05 memo /
+    // review notes) and terminal-tab membership are driven by this id so that multiple ~/
+    // workspaces stay isolated. nil == home / no active workspace.
+    private var activeWorkspaceId: String?
     private var overlayMode: OverlayMode = .hidden
     private var overlayMaximized = false
     private var selectedDiffIndex = 0
@@ -922,7 +945,44 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     func workspaceShortcut() {
-        createWorkspaceFromActiveTerminal(revealReview: false)
+        createNamedWorkspaceAtHome()
+    }
+
+    // US-15 goal #1: new workspaces are created at ~/ (no per-workspace fixed path), named via a
+    // dialog pre-filled with a random name. Each gets a fresh UUID id so multiple ~/ workspaces
+    // stay distinct (isolated terminals + memo/notes).
+    private func createNamedWorkspaceAtHome() {
+        guard let name = promptWorkspaceName(
+            title: "New Workspace",
+            message: "Name this workspace. It starts in your home folder (~/).",
+            confirm: "Create",
+            prefill: randomWorkspaceName()
+        ) else {
+            return
+        }
+        createHomeWorkspace(named: name)
+    }
+
+    // Core (dialog-free) home-workspace creation, shared by the New Workspace action and the
+    // smoke hook. Always creates at ~/ with a fresh UUID id, then activates it by id.
+    @discardableResult
+    private func createHomeWorkspace(named name: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        let workspaceId = UUID().uuidString
+        let colors = [theme.workspaceBlue, theme.workspaceGreen, theme.workspaceYellow, theme.workspacePink, theme.workspacePurple]
+        let icons = ["diamond.fill", "circle.hexagongrid.fill", "seal.fill", "bolt.fill", "square.grid.2x2.fill", "triangle.fill"]
+        let hash = abs(workspaceId.hashValue)
+        workspaces.append(Workspace(
+            id: workspaceId,
+            path: home.path,
+            name: name,
+            color: colors[hash % colors.count],
+            iconName: icons[hash % icons.count],
+            branchName: service.branchName(from: home)
+        ))
+        rebuildWorkspaceButtons()
+        openWorkspace(home, revealReview: false, attachActiveTab: false, announce: true, workspaceId: workspaceId)
+        return workspaceId
     }
 
     func openWorkspacePicker() {
@@ -931,8 +991,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             restoreTerminalFocusAfterPanelClose()
             return
         }
-        if let activeWorkspacePath = activeWorkspacePath,
-           let index = workspaces.firstIndex(where: { normalizedWorkspacePath($0.path) == normalizedWorkspacePath(activeWorkspacePath) }) {
+        if let activeWorkspaceId = activeWorkspaceId,
+           let index = workspaces.firstIndex(where: { $0.id == activeWorkspaceId }) {
             selectedWorkspacePickerIndex = index
         } else {
             selectedWorkspacePickerIndex = min(selectedWorkspacePickerIndex, max(workspaces.count - 1, 0))
@@ -952,40 +1012,40 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
 
-        guard let workspacePath = activeWorkspacePath else {
+        guard let workspaceId = activeWorkspaceId else {
             activateHomeTerminal()
             showWorkspaceToast("No active workspace")
             return
         }
 
-        _ = forgetWorkspace(path: workspacePath, keepWorkspacePickerOpen: false)
+        _ = forgetWorkspace(id: workspaceId, keepWorkspacePickerOpen: false)
     }
 
     @discardableResult
-    private func forgetWorkspace(path workspacePath: String, keepWorkspacePickerOpen: Bool) -> Bool {
-        guard let normalizedPath = normalizedWorkspacePath(workspacePath) else {
-            return false
-        }
-        let workspaceName = workspaces.first(where: { normalizedWorkspacePath($0.path) == normalizedPath })?.name
-            ?? URL(fileURLWithPath: workspacePath).lastPathComponent
+    private func forgetWorkspace(id workspaceId: String, keepWorkspacePickerOpen: Bool) -> Bool {
+        // US-15: forget a specific workspace *instance* by id — same-path siblings are removed
+        // independently, along with only that instance's terminal tabs (matched by id).
+        let workspaceName = workspaces.first(where: { $0.id == workspaceId })?.name
+            ?? workspaces.first(where: { $0.id == workspaceId }).map { URL(fileURLWithPath: $0.path).lastPathComponent }
+            ?? "workspace"
         let removedWorkspaceCount = workspaces.count
-        workspaces.removeAll { normalizedWorkspacePath($0.path) == normalizedPath }
+        workspaces.removeAll { $0.id == workspaceId }
 
-        let removedTabs = terminalTabs.filter { $0.workspacePath == normalizedPath }
+        let removedTabs = terminalTabs.filter { $0.workspaceId == workspaceId }
         for tab in removedTabs {
             for pane in tab.panes {
                 disposeTerminalSession(pane)
             }
         }
-        terminalTabs.removeAll { $0.workspacePath == normalizedPath }
+        terminalTabs.removeAll { $0.workspaceId == workspaceId }
 
         guard removedWorkspaceCount != workspaces.count || !removedTabs.isEmpty else {
             return false
         }
 
-        let removedActiveWorkspace = normalizedWorkspacePath(activeWorkspacePath) == normalizedPath
+        let removedActiveWorkspace = activeWorkspaceId == workspaceId
         if removedActiveWorkspace {
-            activeWorkspacePath = nil
+            setActiveWorkspace(id: nil)
             root = nil
             currentDocument = nil
             fileListingDocument = nil
@@ -1021,7 +1081,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         else {
             return false
         }
-        return forgetWorkspace(path: workspaces[selectedWorkspacePickerIndex].path, keepWorkspacePickerOpen: true)
+        return forgetWorkspace(id: workspaces[selectedWorkspacePickerIndex].id, keepWorkspacePickerOpen: true)
     }
 
     func openChangesView() {
@@ -1401,7 +1461,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private func closeTerminalTab(_ tab: TerminalTab) {
-        let scopedTabs = terminalTabs(in: activeWorkspacePath)
+        let scopedTabs = terminalTabs(inWorkspaceId: tab.workspaceId)
         if scopedTabs.count <= 1 {
             if shouldTerminateWhenClosingLastHomeTerminal() {
                 terminateApplicationHandler()
@@ -1409,12 +1469,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
 
-        let closingWorkspacePath = tab.workspacePath
+        let closingWorkspaceId = tab.workspaceId
         for pane in tab.panes {
             disposeTerminalSession(pane)
         }
         terminalTabs.removeAll { $0.id == tab.id }
-        let nextTab = terminalTabs(in: closingWorkspacePath).last
+        let nextTab = terminalTabs(inWorkspaceId: closingWorkspaceId).last
         activeTerminalTabId = nextTab?.id
         activeTerminalId = nextTab?.activePaneId ?? nextTab?.panes.first?.id
         rebuildTerminalTabs()
@@ -1458,6 +1518,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             name: displayName(for: cwd),
             cwd: cwd,
             workspacePath: activeWorkspacePath,
+            workspaceId: activeWorkspaceId,
             sessionKey: terminalCore.makeSessionKey(),
             makeActive: true
         )
@@ -1536,7 +1597,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // Cycle terminal tabs within the active workspace. When the Opt+Enter send-target picker is
     // open, keep it up and refresh its candidate rows so you can switch tabs and still arrow-pick.
     func focusTerminalTab(delta: Int) {
-        let scopeTabs = terminalTabs(in: activeWorkspacePath)
+        let scopeTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
         guard scopeTabs.count > 1 else {
             return
         }
@@ -2354,12 +2415,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             workspaces = workspaceValues.compactMap(workspace(from:))
             rebuildWorkspaceButtons()
         }
-        if let savedWorkspacePath = normalizedWorkspacePath(UserDefaults.standard.string(forKey: Self.activeWorkspacePathKey)),
-           workspaces.contains(where: { normalizedWorkspacePath($0.path) == savedWorkspacePath }) {
-            activeWorkspacePath = savedWorkspacePath
-            root = URL(fileURLWithPath: savedWorkspacePath).standardizedFileURL
+        // US-15: prefer the persisted active workspace *id*; fall back to the legacy path key
+        // (pre-US-15 data, where a workspace's migrated id == its path).
+        let savedId = UserDefaults.standard.string(forKey: Self.activeWorkspaceIdKey)
+        let savedPath = normalizedWorkspacePath(UserDefaults.standard.string(forKey: Self.activeWorkspacePathKey))
+        let restoredWorkspace = workspaces.first(where: { $0.id == savedId })
+            ?? savedPath.flatMap { path in workspaces.first(where: { normalizedWorkspacePath($0.path) == path }) }
+        if let restoredWorkspace = restoredWorkspace {
+            setActiveWorkspace(id: restoredWorkspace.id)
+            root = URL(fileURLWithPath: restoredWorkspace.path).standardizedFileURL
         } else {
-            activeWorkspacePath = nil
+            setActiveWorkspace(id: nil)
             root = nil
             persistActiveWorkspacePath()
         }
@@ -2370,7 +2436,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func restoreOrCreateInitialTerminal() {
         var restored = false
         let requestedActiveWorkspacePath = activeWorkspacePath
+        let requestedActiveWorkspaceId = activeWorkspaceId
         let savedWorkspacePaths = Set(workspaces.compactMap { normalizedWorkspacePath($0.path) })
+        let savedWorkspaceIds = Set(workspaces.map { $0.id })
         if !Self.statePersistenceDisabled,
            case .object(let state) = terminalCore.restoreState(legacySettings: persistedSettings),
            case .array(let tabValues)? = state["tabs"] {
@@ -2388,22 +2456,30 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                     : URL(fileURLWithPath: primary.cwd)
                 let name = primary.name.isEmpty ? displayName(for: cwd) : primary.name
                 let workspacePath = normalizedWorkspacePath(item.objectValue?["workspacePath"]?.stringValue)
+                // US-15: prefer the persisted per-tab workspace id; migrate pre-US-15 tabs (no id)
+                // by mapping their path to the workspace whose migrated id == that path.
+                let workspaceId = item.objectValue?["workspaceId"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? workspacePath.flatMap { path in workspaces.first(where: { normalizedWorkspacePath($0.path) == path })?.id }
                 if let workspacePath = workspacePath {
-                    guard requestedActiveWorkspacePath != nil,
-                          savedWorkspacePaths.contains(workspacePath)
+                    // Accept the restored workspace tab only if its instance still exists: by id
+                    // (US-15) when known, else by path for migrated pre-US-15 records.
+                    let stillRegistered = workspaceId.map(savedWorkspaceIds.contains) ?? savedWorkspacePaths.contains(workspacePath)
+                    guard requestedActiveWorkspaceId != nil || requestedActiveWorkspacePath != nil,
+                          stillRegistered
                     else {
                         continue
                     }
                 }
                 let shouldRestoreActive = item.objectValue?["active"]?.boolValue ?? !restored
-                let canRestoreActiveWithoutWorkspace = requestedActiveWorkspacePath == nil && workspacePath == nil
+                let canRestoreActiveWithoutWorkspace = requestedActiveWorkspaceId == nil && workspacePath == nil
                 spawnTerminal(
                     name: name,
                     cwd: cwd,
                     workspacePath: workspacePath,
+                    workspaceId: workspaceId,
                     sessionKey: sessionKey,
                     makeActive: shouldRestoreActive && canRestoreActiveWithoutWorkspace,
-                    allowImplicitActivation: requestedActiveWorkspacePath == nil && workspacePath == nil
+                    allowImplicitActivation: requestedActiveWorkspaceId == nil && workspacePath == nil
                 )
                 if layout.panes.count > 1,
                    let restoredTab = terminalTabs.last(where: { tab in
@@ -2414,7 +2490,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 restored = true
             }
         }
-        if let requestedActiveWorkspacePath = requestedActiveWorkspacePath {
+        if let requestedActiveWorkspaceId = requestedActiveWorkspaceId {
+            setActiveWorkspace(id: requestedActiveWorkspaceId)
+            root = activeWorkspacePath.map { URL(fileURLWithPath: $0).standardizedFileURL }
+            persistActiveWorkspacePath()
+        } else if let requestedActiveWorkspacePath = requestedActiveWorkspacePath {
             activeWorkspacePath = requestedActiveWorkspacePath
             root = URL(fileURLWithPath: requestedActiveWorkspacePath).standardizedFileURL
             persistActiveWorkspacePath()
@@ -2425,6 +2505,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                     name: displayName(for: workspaceURL),
                     cwd: workspaceURL,
                     workspacePath: workspaceURL.path,
+                    workspaceId: activeWorkspaceId,
                     sessionKey: terminalCore.makeSessionKey(),
                     makeActive: true
                 )
@@ -2470,14 +2551,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private func activateHomeTerminal() {
-        activeWorkspacePath = nil
+        setActiveWorkspace(id: nil)
         root = nil
         persistActiveWorkspacePath()
         currentDocument = nil
         fileListingDocument = nil
         fileListingRoot = nil
 
-        if let homeTab = terminalTabs(in: nil).first {
+        if let homeTab = terminalTabs(inWorkspaceId: nil).first {
             activeTerminalTabId = homeTab.id
             activeTerminalId = homeTab.activePaneId ?? homeTab.panes.first?.id
             homeTab.activePaneId = activeTerminalId
@@ -2499,30 +2580,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         rebuildWorkspaceButtons()
     }
 
-    private func activateOrCreateWorkspaceTerminal(for workspaceURL: URL, focus: Bool) -> Bool {
+    // US-15: `workspaceId` selects WHICH workspace instance to activate. With several ~/
+    // workspaces the URL alone is ambiguous, so tab reuse is scoped by id when an id is given;
+    // a nil id (legacy folder open) falls back to the registered workspace at that path.
+    private func activateOrCreateWorkspaceTerminal(for workspaceURL: URL, workspaceId: String? = nil, focus: Bool) -> Bool {
         let standardized = workspaceURL.standardizedFileURL
         let workspacePath = standardized.path
-        activeWorkspacePath = workspacePath
+        let resolvedId = registeredWorkspaceId(workspaceId)
+            ?? workspaces.first(where: { normalizedWorkspacePath($0.path) == normalizedWorkspacePath(workspacePath) })?.id
+        setActiveWorkspace(id: resolvedId)
         root = standardized
-        if let tab = terminalTabs(in: workspacePath).first,
+        let scopedTabs = resolvedId != nil ? terminalTabs(inWorkspaceId: resolvedId) : terminalTabs(in: workspacePath)
+        if let tab = scopedTabs.first,
            let paneId = tab.activePaneId ?? tab.panes.first?.id {
             let reusedPaneWasElsewhere = tab.panes.first(where: { $0.id == paneId })?
                 .cwd.standardizedFileURL.path != workspacePath
-            alignTab(tab, to: standardized)
+            alignTab(tab, to: standardized, workspaceId: resolvedId)
             setActiveTerminal(id: paneId, focus: focus)
             if reusedPaneWasElsewhere {
                 changeShellDirectory(paneId: paneId, to: workspacePath)
             }
-            return activeTab()?.workspacePath == workspacePath
+            return activeTab()?.workspaceId == resolvedId
         }
         spawnTerminal(
             name: displayName(for: standardized),
             cwd: standardized,
             workspacePath: workspacePath,
+            workspaceId: resolvedId,
             sessionKey: terminalCore.makeSessionKey(),
             makeActive: true
         )
-        guard let tab = terminalTabs(in: workspacePath).first,
+        let spawnedTabs = resolvedId != nil ? terminalTabs(inWorkspaceId: resolvedId) : terminalTabs(in: workspacePath)
+        guard let tab = spawnedTabs.first,
               let paneId = tab.activePaneId ?? tab.panes.first?.id else {
             lastTerminalSpawnError = lastTerminalSpawnError
                 ?? "workspace terminal tab missing after spawn workspace=\(workspacePath) tabs=\(terminalTabs.map { $0.workspacePath ?? "home" }.joined(separator: ","))"
@@ -2534,13 +2623,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return false
         }
         setActiveTerminal(id: paneId, focus: focus)
-        return activeTab()?.workspacePath == workspacePath
+        return activeTab()?.workspaceId == resolvedId
     }
 
     private func spawnTerminal(
         name: String,
         cwd: URL,
         workspacePath: String?,
+        workspaceId: String? = nil,
         sessionKey: String,
         makeActive: Bool,
         allowImplicitActivation: Bool = true
@@ -2563,6 +2653,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             name: name,
             cwd: spawnCwd,
             workspacePath: normalizedWorkspacePath,
+            workspaceId: registeredWorkspaceId(workspaceId),
             pane: pane
         )
         terminalTabs.append(tab)
@@ -2841,18 +2932,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     private func setActiveTerminal(id: Int?, focus: Bool) {
         let previousTabId = activeTerminalTabId
-        let nextWorkspacePath = id.flatMap { targetId in
-            terminalTabs.first(where: { tab in tab.panes.contains(where: { $0.id == targetId }) })?.workspacePath
-        }.flatMap(registeredWorkspacePath) ?? registeredWorkspacePath(activeWorkspacePath)
-        let workspaceScopeChanged = prepareWorkspaceScopedStateForChange(to: nextWorkspacePath)
+        // US-15: the workspace scope follows the target pane's owning workspace *id* (not path),
+        // so switching between two ~/ workspaces still swaps their isolated memo/notes/tabs.
+        let nextWorkspaceId = id.flatMap { targetId in
+            terminalTabs.first(where: { tab in tab.panes.contains(where: { $0.id == targetId }) })?.workspaceId
+        }.flatMap(registeredWorkspaceId) ?? registeredWorkspaceId(activeWorkspaceId)
+        let workspaceScopeChanged = prepareWorkspaceScopedStateForChange(toWorkspaceId: nextWorkspaceId)
         activeTerminalId = id
         if let id = id, let tab = terminalTabs.first(where: { tab in tab.panes.contains(where: { $0.id == id }) }) {
-            let workspacePath = registeredWorkspacePath(tab.workspacePath)
+            let workspaceId = registeredWorkspaceId(tab.workspaceId)
             activeTerminalTabId = tab.id
             tab.activePaneId = id
-            tab.workspacePath = workspacePath
-            activeWorkspacePath = workspacePath
-            root = workspacePath.map { URL(fileURLWithPath: $0).standardizedFileURL }
+            tab.workspaceId = workspaceId
+            tab.workspacePath = workspacePath(forId: workspaceId)
+            setActiveWorkspace(id: workspaceId)
+            root = activeWorkspacePath.map { URL(fileURLWithPath: $0).standardizedFileURL }
             // Looking at a pane clears its unread agent-alert ring (cmux axis 1c).
             clearAgentAlert(for: id)
         }
@@ -2872,7 +2966,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     private func activeTab() -> TerminalTab? {
+        // Scope by workspace *id* (US-15): with multiple ~/ workspaces the path-scoped set can
+        // contain several instances' tabs, so narrow to the active instance. Home (nil id) still
+        // scopes by the path set (all home tabs share nil id + nil path).
         let scopedTabs = terminalTabs(in: activeWorkspacePath)
+            .filter { activeWorkspaceId == nil || $0.workspaceId == activeWorkspaceId }
         if let active = scopedTabs.first(where: { $0.id == activeTerminalTabId }) {
             return active
         }
@@ -2894,7 +2992,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private func activeTerminalTab() -> TerminalTab? {
         if let activeTerminalId = activeTerminalId,
            let tab = terminalTabs.first(where: { tab in
-               tab.workspacePath == activeWorkspacePath && tab.panes.contains(where: { $0.id == activeTerminalId })
+               tab.workspaceId == activeWorkspaceId && tab.panes.contains(where: { $0.id == activeTerminalId })
            }) {
             return tab
         }
@@ -2906,6 +3004,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return terminalTabs.filter { $0.workspacePath == normalized }
     }
 
+    // US-15: tab-to-workspace membership scoped by stable id (the disambiguator when several
+    // workspaces share a ~/ path). Home terminals (id == nil) group together.
+    private func terminalTabs(inWorkspaceId workspaceId: String?) -> [TerminalTab] {
+        terminalTabs.filter { $0.workspaceId == workspaceId }
+    }
+
+    private func workspace(forId id: String?) -> Workspace? {
+        guard let id = id else {
+            return nil
+        }
+        return workspaces.first { $0.id == id }
+    }
+
+    // The cwd/path for a workspace id (the registered workspace's path), or nil if the id is
+    // unknown/home.
+    private func workspacePath(forId id: String?) -> String? {
+        workspace(forId: id).flatMap { normalizedWorkspacePath($0.path) }
+    }
+
+    // Single source of truth for changing the active workspace. Keeps `activeWorkspaceId`
+    // (identity, drives scope key + tab membership) and `activeWorkspacePath` (cwd) consistent.
+    // Passing nil clears both (home).
+    private func setActiveWorkspace(id: String?) {
+        if let workspace = workspace(forId: id) {
+            activeWorkspaceId = workspace.id
+            activeWorkspacePath = normalizedWorkspacePath(workspace.path) ?? workspace.path
+        } else {
+            activeWorkspaceId = nil
+            activeWorkspacePath = nil
+        }
+    }
+
     private func registeredWorkspacePath(_ path: String?) -> String? {
         guard let normalized = normalizedWorkspacePath(path),
               workspaces.contains(where: { normalizedWorkspacePath($0.path) == normalized })
@@ -2913,6 +3043,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return nil
         }
         return normalized
+    }
+
+    // Returns the id only if it still maps to a live workspace (a forgotten workspace's id
+    // resolves to nil == home), mirroring registeredWorkspacePath for the id axis.
+    private func registeredWorkspaceId(_ id: String?) -> String? {
+        guard let id = id, workspaces.contains(where: { $0.id == id }) else {
+            return nil
+        }
+        return id
     }
 
     private func activeWorkspaceURL() -> URL? {
@@ -3669,11 +3808,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     func workspaceAgentAlertVisibleForSmokeTest(_ path: String) -> Bool {
+        // US-15: rail button identifiers are workspace ids, not paths. Resolve the path to the
+        // ids of the workspaces sharing it and match the button by id — re-parsing a UUID id as a
+        // path (the pre-US-15 lookup) never matches, which silently hid the alert dot.
         guard let normalizedPath = normalizedWorkspacePath(path),
-              workspaceAgentAlertPaths.contains(normalizedPath),
-              let button = workspaceStack.arrangedSubviews
-                  .compactMap({ $0 as? NSButton })
-                  .first(where: { normalizedWorkspacePath($0.identifier?.rawValue) == normalizedPath })
+              workspaceAgentAlertPaths.contains(normalizedPath) else {
+            return false
+        }
+        let alertIds = Set(workspaces.filter { normalizedWorkspacePath($0.path) == normalizedPath }.map { $0.id })
+        guard let button = workspaceStack.arrangedSubviews
+            .compactMap({ $0 as? NSButton })
+            .first(where: { $0.identifier.map { alertIds.contains($0.rawValue) } ?? false })
         else {
             return false
         }
@@ -6468,7 +6613,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         workspaceStack.arrangedSubviews
             .compactMap { $0 as? NSButton }
             .map { button in
-                ([button.title, button.identifier?.rawValue ?? ""] + collectVisibleText(in: button))
+                // US-15: the button identifier is the workspace id, so resolve it back to the
+                // owning workspace path — rail-content smoke checks address workspaces by path.
+                let workspacePath = button.identifier
+                    .flatMap { identifier in workspaces.first { $0.id == identifier.rawValue }?.path } ?? ""
+                return ([button.title, button.identifier?.rawValue ?? "", workspacePath] + collectVisibleText(in: button))
                     .filter { !$0.isEmpty }
                     .joined(separator: " ")
             }
@@ -6675,6 +6824,65 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     func openWorkspaceForSmokeTest(_ url: URL) {
         openWorkspace(url.standardizedFileURL, revealReview: false)
     }
+
+    // US-15 smoke hooks (dialog-free so the headless smoke can exercise the real flows).
+    func createHomeWorkspaceForSmokeTest(named name: String) -> String {
+        createHomeWorkspace(named: name)
+    }
+
+    func activeWorkspaceIdForSmokeTest() -> String? {
+        activeWorkspaceId
+    }
+
+    @discardableResult
+    func renameWorkspaceForSmokeTest(id: String, to name: String) -> Bool {
+        renameWorkspace(id: id, to: name)
+    }
+
+    func workspaceNameForSmokeTest(id: String) -> String? {
+        workspaces.first(where: { $0.id == id })?.name
+    }
+
+    func activateWorkspaceForSmokeTest(id: String) {
+        guard let workspace = workspace(forId: id) else {
+            return
+        }
+        openWorkspace(URL(fileURLWithPath: workspace.path).standardizedFileURL, revealReview: false, attachActiveTab: false, announce: false, workspaceId: id)
+    }
+
+    // Count of distinct registered workspaces sharing a given (normalized) path — proves several
+    // ~/ workspaces coexist as separate instances.
+    func workspaceCountAtPathForSmokeTest(_ path: String) -> Int {
+        let normalized = normalizedWorkspacePath(path)
+        return workspaces.filter { normalizedWorkspacePath($0.path) == normalized }.count
+    }
+
+    func selectWorkspacePickerIndexForSmokeTest(_ index: Int) {
+        guard workspaces.indices.contains(index) else {
+            return
+        }
+        selectedWorkspacePickerIndex = index
+    }
+
+    func workspacePickerIndexForSmokeTest(id: String) -> Int? {
+        workspaces.firstIndex(where: { $0.id == id })
+    }
+
+    // Renames whichever workspace is highlighted in the picker (exercises the same core the 'r'
+    // key uses), so the smoke can drive rename after an arrow selection.
+    @discardableResult
+    func renameSelectedWorkspacePickerItemForSmokeTest(to name: String) -> Bool {
+        guard workspaces.indices.contains(selectedWorkspacePickerIndex) else {
+            return false
+        }
+        return renameWorkspace(id: workspaces[selectedWorkspacePickerIndex].id, to: name)
+    }
+
+    // The prompt-memo text stored for a specific workspace id — proves US-05 memo is isolated
+    // per instance even when two workspaces share the ~/ path.
+    func storedMemoForWorkspaceIdForSmokeTest(_ id: String?) -> String {
+        workspaceScopedSettings(rootKey: Self.promptMemoSettingsKey)[workspaceScopeKey(forWorkspaceId: id)]?.stringValue ?? ""
+    }
 #endif
 
     // MARK: - Control socket (cmux axis 4)
@@ -6707,10 +6915,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
 #if DEBUG
     func clickWorkspaceButtonForSmokeTest(path: String) -> Bool {
+        // Rail button identifiers are workspace ids (US-15); resolve the path to the matching
+        // workspace id(s) so path-addressed smoke clicks still land.
         let normalizedPath = normalizedWorkspacePath(path)
+        let ids = Set(workspaces.filter { normalizedWorkspacePath($0.path) == normalizedPath }.map { $0.id })
         guard let button = workspaceStack.arrangedSubviews
             .compactMap({ $0 as? NSButton })
-            .first(where: { normalizedWorkspacePath($0.identifier?.rawValue) == normalizedPath })
+            .first(where: { $0.identifier.map { ids.contains($0.rawValue) } ?? false })
         else {
             return false
         }
@@ -6799,7 +7010,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         activeTerminalTabId = nil
         activeTerminalId = nil
         workspaces.removeAll()
-        activeWorkspacePath = nil
+        setActiveWorkspace(id: nil)
         root = nil
         currentDocument = nil
         fileListingDocument = nil
@@ -6821,12 +7032,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     func resetWorkspaceSelectionForSmokeTest() {
-        activeWorkspacePath = nil
+        setActiveWorkspace(id: nil)
         root = nil
         currentDocument = nil
         fileListingDocument = nil
         fileListingRoot = nil
-        if let tab = terminalTabs.first(where: { $0.workspacePath == nil }) {
+        if let tab = terminalTabs.first(where: { $0.workspaceId == nil }) {
             activeTerminalTabId = tab.id
             activeTerminalId = tab.activePaneId ?? tab.panes.first?.id
         }
@@ -6838,8 +7049,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     func loadWorkspaceSynchronouslyForSmokeTest(_ url: URL) {
         let workspace = service.gitRoot(from: url) ?? url.standardizedFileURL
         root = workspace
-        activeWorkspacePath = workspace.path
         addWorkspaceIfNeeded(workspace)
+        setActiveWorkspace(id: workspaces.first(where: { normalizedWorkspacePath($0.path) == normalizedWorkspacePath(workspace.path) })?.id)
         currentDocument = try? service.build(root: workspace, ignoreWhitespace: ignoreWhitespace)
         fileListingDocument = nil
         fileListingRoot = nil
@@ -7524,12 +7735,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
         workspaceStack.alignment = workspaceRailExpanded ? .leading : .centerX
         for (index, workspace) in workspaces.enumerated() {
-            let active = normalizedWorkspacePath(workspace.path) == activeWorkspacePath
+            let active = workspace.id == activeWorkspaceId
             let pickerSelected = workspaceRailExpanded && index == selectedWorkspacePickerIndex
             let branch = workspaceBranchDisplayName(for: workspace)
             let tooltip = branch.map { "\(workspace.name)\nBranch: \($0)" } ?? workspace.name
             let button = NSButton(title: "", target: self, action: #selector(selectWorkspaceButton(_:)))
-            button.identifier = NSUserInterfaceItemIdentifier(workspace.path)
+            // Identity: the button identifier is the workspace id (US-15), not the path, so two
+            // ~/ workspaces get distinct, individually-clickable rows.
+            button.identifier = NSUserInterfaceItemIdentifier(workspace.id)
             button.bezelStyle = .texturedRounded
             button.isBordered = false
             button.wantsLayer = true
@@ -7823,12 +8036,53 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         case 126:
             moveWorkspacePickerSelection(delta: -1)
             return true
+        case 15:
+            // US-15 goal #3: 'r' renames the highlighted workspace (Cmd+P → arrows → r).
+            renameSelectedWorkspacePickerItem()
+            return true
         case 36, 76:
             openSelectedWorkspacePickerItem()
             return true
         default:
             return false
         }
+    }
+
+    private func renameSelectedWorkspacePickerItem() {
+        guard workspaces.indices.contains(selectedWorkspacePickerIndex) else {
+            return
+        }
+        let workspaceId = workspaces[selectedWorkspacePickerIndex].id
+        guard let newName = promptWorkspaceName(
+            title: "Rename Workspace",
+            message: "Set a new name for this workspace.",
+            confirm: "Rename",
+            prefill: workspaces[selectedWorkspacePickerIndex].name
+        ) else {
+            focusWorkspaceRailPicker()
+            return
+        }
+        guard renameWorkspace(id: workspaceId, to: newName) else {
+            return
+        }
+        if overlayMode == .workspacePicker {
+            populateWorkspacePickerOverlay()
+        }
+        showWorkspaceToast("Workspace renamed: \(newName)")
+        focusWorkspaceRailPicker()
+    }
+
+    // Core (dialog-free) rename, shared by the picker 'r' action and the smoke hook.
+    @discardableResult
+    private func renameWorkspace(id workspaceId: String, to newName: String) -> Bool {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let index = workspaces.firstIndex(where: { $0.id == workspaceId }) else {
+            return false
+        }
+        workspaces[index].name = String(trimmed.prefix(40))
+        rebuildWorkspaceButtons()
+        persistWorkspaceState()
+        return true
     }
 
     private func updateTerminalStatus() {
@@ -10101,7 +10355,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlaySidebarStack.addArrangedSubview(sidebarButton(title: "Open Other Folder...", identifier: "workspace-picker-open", selected: false))
 
         let selected = workspaces[selectedWorkspacePickerIndex]
-        let active = normalizedWorkspacePath(selected.path) == activeWorkspacePath ? "Active workspace" : "Saved workspace"
+        let active = selected.id == activeWorkspaceId ? "Active workspace" : "Saved workspace"
         codePane.setOldContent(styledText("\(selected.name)\n\(selected.path)\n\n\(active)", color: theme.primaryText))
         codePane.setNewString("")
         ensureSelectedSidebarRowVisible(identifier: "workspace-picker:\(selectedWorkspacePickerIndex)")
@@ -10127,7 +10381,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let workspace = workspaces[selectedWorkspacePickerIndex]
         hideOverlay()
         setWorkspaceRailPickerVisible(false, animated: true)
-        openWorkspace(URL(fileURLWithPath: workspace.path).standardizedFileURL, revealReview: false)
+        // Pass the id so the right ~/ instance activates (US-15).
+        openWorkspace(URL(fileURLWithPath: workspace.path).standardizedFileURL, revealReview: false, attachActiveTab: false, announce: false, workspaceId: workspace.id)
     }
 
     private func populateGoToLineOverlay() {
@@ -12444,25 +12699,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         openWorkspace(url, revealReview: revealReview, attachActiveTab: false, announce: false)
     }
 
-    private func openWorkspace(_ url: URL, revealReview: Bool, attachActiveTab: Bool, announce: Bool) {
+    // `workspaceId` (US-15) selects an existing workspace instance to activate — required when
+    // several ~/ workspaces share a path. When nil, the workspace is resolved/created by path
+    // (git roots, folder open), which is unambiguous for non-home folders.
+    private func openWorkspace(_ url: URL, revealReview: Bool, attachActiveTab: Bool, announce: Bool, workspaceId: String? = nil) {
         let standardized = url.standardizedFileURL
-        let workspaceScopeChanged = prepareWorkspaceScopedStateForChange(to: standardized.path)
+        let targetWorkspaceId = registeredWorkspaceId(workspaceId)
+        let workspaceScopeChanged = prepareWorkspaceScopedStateForChange(
+            toWorkspaceId: targetWorkspaceId
+                ?? workspaces.first(where: { normalizedWorkspacePath($0.path) == normalizedWorkspacePath(standardized.path) })?.id
+        )
         let previousCount = workspaces.count
         let tabToAttach = attachActiveTab ? activeTerminalTab() : nil
         let activeDirectory = attachActiveTab ? currentTerminalDirectory() : nil
         root = standardized
-        activeWorkspacePath = standardized.path
         rememberRecent(standardized)
-        addWorkspaceIfNeeded(standardized)
-        clearWorkspaceAgentAlert(for: standardized.path)
+        // Only auto-create when opening by path (no explicit instance). An explicit id means the
+        // workspace already exists in the list.
+        if targetWorkspaceId == nil {
+            addWorkspaceIfNeeded(standardized)
+        }
+        let resolvedId = targetWorkspaceId
+            ?? workspaces.first(where: { normalizedWorkspacePath($0.path) == normalizedWorkspacePath(standardized.path) })?.id
+        setActiveWorkspace(id: resolvedId)
+        clearWorkspaceAgentAlert(for: workspacePath(forId: resolvedId) ?? standardized.path)
         if let tabToAttach = tabToAttach {
-            attachTab(tabToAttach, to: standardized, activeDirectory: activeDirectory)
+            attachTab(tabToAttach, to: standardized, workspaceId: resolvedId, activeDirectory: activeDirectory)
         }
         loadDocument(forceReload: true)
-        _ = activateOrCreateWorkspaceTerminal(for: standardized, focus: true)
+        _ = activateOrCreateWorkspaceTerminal(for: standardized, workspaceId: resolvedId, focus: true)
         rebuildWorkspaceButtons()
         if announce {
-            showWorkspaceFeedback(for: standardized, created: workspaces.count > previousCount)
+            showWorkspaceFeedback(forId: resolvedId, created: workspaces.count > previousCount)
         }
         if revealReview {
             showOverlay(.changes)
@@ -12472,10 +12740,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         finishWorkspaceScopedStateChange(changed: workspaceScopeChanged)
     }
 
-    private func attachTab(_ tab: TerminalTab, to workspaceURL: URL, activeDirectory: URL?) {
+    private func attachTab(_ tab: TerminalTab, to workspaceURL: URL, workspaceId: String?, activeDirectory: URL?) {
         let standardized = workspaceURL.standardizedFileURL
         let activeDirectoryPath = activeDirectory?.standardizedFileURL.path
         tab.workspacePath = standardized.path
+        // Re-home the tab to the destination workspace instance (US-15): both cwd and identity
+        // move together, else the tab would render under the new folder but scope/persist under
+        // the old workspace id.
+        tab.workspaceId = registeredWorkspaceId(workspaceId)
         tab.cwd = standardized
         for pane in tab.panes where activeDirectoryPath == nil || pane.cwd.standardizedFileURL.path == activeDirectoryPath {
             let wasElsewhere = pane.cwd.standardizedFileURL.path != standardized.path
@@ -12484,12 +12756,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 changeShellDirectory(paneId: pane.id, to: standardized.path)
             }
         }
-        activeWorkspacePath = standardized.path
+        setActiveWorkspace(id: tab.workspaceId)
     }
 
-    private func alignTab(_ tab: TerminalTab, to workspaceURL: URL) {
+    private func alignTab(_ tab: TerminalTab, to workspaceURL: URL, workspaceId: String? = nil) {
         let standardized = workspaceURL.standardizedFileURL
         tab.workspacePath = standardized.path
+        if let workspaceId = registeredWorkspaceId(workspaceId) {
+            tab.workspaceId = workspaceId
+        }
         tab.cwd = standardized
         for pane in tab.panes {
             pane.cwd = standardized
@@ -12505,6 +12780,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let icons = ["diamond.fill", "circle.hexagongrid.fill", "seal.fill", "bolt.fill", "square.grid.2x2.fill", "triangle.fill"]
         let hash = abs(path.hashValue)
         workspaces.append(Workspace(
+            id: UUID().uuidString,
             path: path,
             name: displayName(for: url),
             color: colors[hash % colors.count],
@@ -12515,16 +12791,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         persistWorkspaceState()
     }
 
-    private func showWorkspaceFeedback(for url: URL, created: Bool) {
-        guard let workspace = workspaces.first(where: { $0.path == url.standardizedFileURL.path }) else {
+    private func showWorkspaceFeedback(forId id: String?, created: Bool) {
+        guard let workspace = workspace(forId: id) else {
             return
         }
-        pulseWorkspaceButton(path: workspace.path)
+        pulseWorkspaceButton(workspaceId: workspace.id)
         showWorkspaceToast("\(created ? "Workspace created" : "Workspace joined"): \(workspace.name)")
     }
 
-    private func pulseWorkspaceButton(path: String) {
-        guard let button = workspaceStack.arrangedSubviews.compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue == path }) else {
+    private func pulseWorkspaceButton(workspaceId: String) {
+        guard let button = workspaceStack.arrangedSubviews.compactMap({ $0 as? NSButton }).first(where: { $0.identifier?.rawValue == workspaceId }) else {
             return
         }
         button.wantsLayer = true
@@ -13091,7 +13367,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             guard let layout = paneLayout(for: tab) else {
                 return nil
             }
-            return PaneLayoutCodec.encode(layout, tabActive: tab.id == activeTerminalTabId)
+            let encoded = PaneLayoutCodec.encode(layout, tabActive: tab.id == activeTerminalTabId)
+            // US-15: persist the owning workspace id alongside the (PaneLayoutCodec-owned) tab
+            // object so restore can re-attach the tab to the right ~/ instance. Additive to the
+            // codec's shape — kept here to leave PaneLayoutCodec free of workspace identity.
+            guard let workspaceId = tab.workspaceId, case .object(var object) = encoded else {
+                return encoded
+            }
+            object["workspaceId"] = .string(workspaceId)
+            return .object(object)
         }))
     }
 
@@ -13184,6 +13468,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         guard !Self.statePersistenceDisabled else {
             return
         }
+        // Persist both id (US-15 identity) and path (legacy/compat). Path stays populated so a
+        // downgrade still restores a sensible workspace.
+        if let activeWorkspaceId = activeWorkspaceId {
+            UserDefaults.standard.set(activeWorkspaceId, forKey: Self.activeWorkspaceIdKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.activeWorkspaceIdKey)
+        }
         if let activeWorkspacePath = normalizedWorkspacePath(activeWorkspacePath) {
             UserDefaults.standard.set(activeWorkspacePath, forKey: Self.activeWorkspacePathKey)
         } else {
@@ -13208,12 +13499,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         UserDefaults.standard.set(data, forKey: MainWindowController.recentProjectsKey)
     }
 
-    private func workspaceScopeKey(for path: String?) -> String {
-        normalizedWorkspacePath(path) ?? "__home__"
+    // US-05 + US-15: workspace-scoped state (prompt memo, review notes) is keyed by workspace
+    // *id* so that multiple ~/ workspaces do not share a scope. Pre-US-15 workspaces migrate
+    // their id to their normalized path (see workspace(from:)), so their existing memo/notes —
+    // originally stored under the path key — keep resolving unchanged.
+    private func workspaceScopeKey(forWorkspaceId id: String?) -> String {
+        id ?? "__home__"
     }
 
     private func currentWorkspaceScopeKey() -> String {
-        workspaceScopeKey(for: activeWorkspacePath)
+        workspaceScopeKey(forWorkspaceId: activeWorkspaceId)
     }
 
     private func workspaceScopedSettings(rootKey: String) -> [String: JSONValue] {
@@ -13242,9 +13537,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         savePersistedSettings()
     }
 
-    private func prepareWorkspaceScopedStateForChange(to nextWorkspacePath: String?) -> Bool {
+    private func prepareWorkspaceScopedStateForChange(toWorkspaceId nextWorkspaceId: String?) -> Bool {
         let current = currentWorkspaceScopeKey()
-        let next = workspaceScopeKey(for: nextWorkspacePath)
+        let next = workspaceScopeKey(forWorkspaceId: nextWorkspaceId)
         guard current != next else {
             return false
         }
@@ -14055,6 +14350,56 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return standardized.lastPathComponent.isEmpty ? standardized.path : standardized.lastPathComponent
     }
 
+    // US-15: new workspaces are created at ~/ with a memorable random name (adjective-noun)
+    // that pre-fills the create dialog. Kept deterministic-shape (two words) so the picker
+    // rows stay readable and unique enough at a glance.
+    private static let workspaceNameAdjectives = [
+        "amber", "brisk", "calm", "clever", "cosmic", "crimson", "dapper", "eager",
+        "fuzzy", "gentle", "golden", "hidden", "jolly", "keen", "lucky", "mellow",
+        "nimble", "polar", "quiet", "rapid", "silver", "sunny", "swift", "tidy",
+        "vivid", "witty", "zesty"
+    ]
+    private static let workspaceNameNouns = [
+        "otter", "falcon", "harbor", "meadow", "comet", "willow", "cedar", "ember",
+        "canyon", "lagoon", "summit", "orchard", "beacon", "delta", "grove", "pixel",
+        "quartz", "ripple", "tundra", "voyage", "cobalt", "maple", "nebula", "prairie"
+    ]
+
+    private func randomWorkspaceName() -> String {
+        let adjective = Self.workspaceNameAdjectives.randomElement() ?? "swift"
+        let noun = Self.workspaceNameNouns.randomElement() ?? "otter"
+        return "\(adjective)-\(noun)"
+    }
+
+    // Shared name-entry dialog for creating (prefilled with a random name) and renaming
+    // (prefilled with the current name) a workspace. Mirrors renameTerminalPane()'s
+    // NSAlert + accessory NSTextField style. Returns the trimmed, length-capped value, or
+    // nil when cancelled/empty.
+    private func promptWorkspaceName(title: String, message: String, confirm: String, prefill: String) -> String? {
+        #if DEBUG
+        // A modal would block the headless key-input smoke build (-D DEBUG), so accept the
+        // prefilled name (random for create, current for rename) without showing the dialog.
+        // Release builds (build.sh, no -D DEBUG) keep the real NSAlert prompt below.
+        let auto = prefill.trimmingCharacters(in: .whitespacesAndNewlines)
+        return auto.isEmpty ? nil : String(auto.prefix(40))
+        #else
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: confirm)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(string: prefill)
+        field.frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        alert.accessoryView = field
+        field.selectText(nil)
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return nil
+        }
+        let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : String(value.prefix(40))
+        #endif
+    }
+
     private func formatBytes(_ value: Int) -> String {
         if value >= 1_000_000 {
             return String(format: "%.1f MB", Double(value) / 1_000_000.0)
@@ -14076,7 +14421,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         else {
             return nil
         }
+        // US-15 migration: pre-US-15 records have no "id". Adopt the normalized path as the id
+        // so their US-05 workspace-scoped memo/review-note data (keyed by the same path) keeps
+        // resolving after the switch to id-based scope keys.
+        let id = object["id"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+            ?? normalizedWorkspacePath(path)
+            ?? path
         return Workspace(
+            id: id,
             path: path,
             name: object["name"]?.stringValue ?? URL(fileURLWithPath: path).lastPathComponent,
             color: NSColor(hex: object["color"]?.stringValue) ?? theme.workspaceBlue,
@@ -14280,14 +14632,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
     @objc private func selectWorkspaceButton(_ sender: NSButton) {
-        guard let path = sender.identifier?.rawValue else {
+        // The rail button identifier is the workspace id (US-15) so same-path instances stay
+        // distinct.
+        guard let id = sender.identifier?.rawValue,
+              let workspace = workspace(forId: id) else {
             return
         }
-        if let index = workspaces.firstIndex(where: { normalizedWorkspacePath($0.path) == normalizedWorkspacePath(path) }) {
+        if let index = workspaces.firstIndex(where: { $0.id == id }) {
             selectedWorkspacePickerIndex = index
         }
         setWorkspaceRailPickerVisible(false, animated: true)
-        openWorkspace(URL(fileURLWithPath: path).standardizedFileURL, revealReview: false)
+        openWorkspace(URL(fileURLWithPath: workspace.path).standardizedFileURL, revealReview: false, attachActiveTab: false, announce: false, workspaceId: id)
     }
 
     @objc private func selectOverlayItem(_ sender: NSButton) {
@@ -14336,8 +14691,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             selectedWorkspacePickerIndex = index
             populateWorkspacePickerOverlay()
         } else if value == "workspace-picker-new" {
+            // "+ New from Terminal" keeps the terminal-directory / linked-worktree creation flow;
+            // the primary New Workspace action (Cmd+N) is the ~/-fixed named creation (US-15).
             hideOverlay()
-            workspaceShortcut()
+            createWorkspaceFromActiveTerminal(revealReview: false)
         } else if value == "workspace-picker-open" {
             hideOverlay()
             openWorkspaceFolderPicker()

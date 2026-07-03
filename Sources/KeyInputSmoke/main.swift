@@ -261,8 +261,6 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         clearPersistedState()
         verifyWorkspaceSwitchReplacesRenderedTerminalPanes()
         clearPersistedState()
-        verifyDuplicateWorkspaceCreatesLinkedWorktree()
-        clearPersistedState()
 
         let command = "printf 'momenterm-ready\\n'; IFS= read -r line; printf 'momenterm-key:%s\\n' \"$line\"; exit"
         mainTerminalStartedAt = Date()
@@ -581,84 +579,6 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func verifyDuplicateWorkspaceCreatesLinkedWorktree() {
-        let repo = makeTempDirectory(name: "momenterm-linked-worktree-source")
-        let readme = repo.appendingPathComponent("README.md")
-        do {
-            try "# linked worktree smoke\n".write(to: readme, atomically: true, encoding: .utf8)
-        } catch {
-            fail("linked worktree smoke could not write fixture: \(error)")
-            return
-        }
-        guard run(["git", "init", "-q"], cwd: repo),
-              run(["git", "config", "user.email", "momenterm@example.com"], cwd: repo),
-              run(["git", "config", "user.name", "Momenterm Smoke"], cwd: repo),
-              run(["git", "add", "README.md"], cwd: repo),
-              run(["git", "commit", "-q", "-m", "base"], cwd: repo) else {
-            fail("linked worktree smoke could not initialize git repository")
-            return
-        }
-
-        let previousController = controller
-        let linkedController = registerSmokeController(MainWindowController(initialRoot: nil))
-        controller = linkedController
-        defer {
-            controller = previousController
-            linkedController.disposeForSmokeTest()
-            linkedController.close()
-        }
-        linkedController.showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        linkedController.openWorkspaceForSmokeTest(repo)
-        let repoPath = repo.standardizedFileURL.path
-        guard waitUntil("linked worktree source workspace", timeout: 2, condition: {
-            linkedController.activeWorkspacePathForSmokeTest() == repoPath
-                && linkedController.activeTerminalCwdForSmokeTest() == repoPath
-        }) else {
-            fail("linked worktree smoke could not activate source workspace; active=\(linkedController.activeWorkspacePathForSmokeTest() ?? "nil") cwd=\(linkedController.activeTerminalCwdForSmokeTest() ?? "nil")")
-            return
-        }
-
-        let workspaceCountBefore = linkedController.workspaceCountForSmokeTest()
-        sendShortcut("n", keyCode: 45, modifiers: [.command], settle: 0.2)
-        guard waitUntil("duplicate workspace creates linked worktree", timeout: 4, condition: {
-            if let path = linkedController.activeWorkspacePathForSmokeTest() {
-                return path != repoPath && linkedController.workspaceCountForSmokeTest() == workspaceCountBefore + 1
-            }
-            return false
-        }) else {
-            fail("Cmd+N on an existing git workspace did not create a separate linked worktree; active=\(linkedController.activeWorkspacePathForSmokeTest() ?? "nil") count=\(linkedController.workspaceCountForSmokeTest()) before=\(workspaceCountBefore)")
-            return
-        }
-
-        guard let linkedPath = linkedController.activeWorkspacePathForSmokeTest(),
-              linkedPath != repoPath else {
-            fail("linked worktree path was not distinct from source repo; active=\(linkedController.activeWorkspacePathForSmokeTest() ?? "nil") source=\(repoPath)")
-            return
-        }
-        let linkedURL = URL(fileURLWithPath: linkedPath).standardizedFileURL
-        guard FileManager.default.fileExists(atPath: linkedURL.appendingPathComponent(".git").path),
-              linkedURL.deletingLastPathComponent().path == repo.deletingLastPathComponent().path,
-              linkedURL.lastPathComponent.contains("-linked-") else {
-            fail("linked worktree was not created as a sibling git worktree; linked=\(linkedPath) source=\(repoPath)")
-            return
-        }
-        guard linkedController.activeTerminalCwdForSmokeTest() == linkedPath,
-              linkedController.activeTerminalWorkspacePathForSmokeTest() == linkedPath,
-              linkedController.activeTerminalProcessCwdForSmokeTest() == linkedPath else {
-            fail("linked worktree workspace did not open terminal at the linked worktree root; active=\(linkedPath) cwd=\(linkedController.activeTerminalCwdForSmokeTest() ?? "nil") process=\(linkedController.activeTerminalProcessCwdForSmokeTest() ?? "nil") terminalWorkspace=\(linkedController.activeTerminalWorkspacePathForSmokeTest() ?? "nil")")
-            return
-        }
-        guard let branch = linkedController.activeWorkspaceBranchForSmokeTest(),
-              branch.hasPrefix("momenterm/linked-") else {
-            fail("linked worktree workspace did not expose its branch; branch=\(linkedController.activeWorkspaceBranchForSmokeTest() ?? "nil")")
-            return
-        }
-        guard linkedController.workspaceRailShowsBranchForSmokeTest(path: linkedPath, branch: branch) else {
-            fail("expanded workspace rail did not show linked worktree branch \(branch); rail=\(linkedController.workspaceRailTextForSmokeTest())")
-            return
-        }
-    }
 
     private func writePersistedArray(_ values: [JSONValue], forKey key: String) {
         guard let data = try? JSONEncoder().encode(values) else {
@@ -701,6 +621,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             verifyPromptMemo(controller)
             verifySettingsOverlay(controller)
             verifyWorkspaceAndReviewShortcuts(controller)
+            verifyHomeWorkspaceCreationRenameAndIsolation(controller)
             verifyNativeShortcutEvents(controller)
             verifyCloseLastHomeTerminalShortcut(controller)
             verifyWorkspaceScopedReviewNotesPersist()
@@ -2030,6 +1951,86 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("Cmd+W did not terminate when no workspace and the last terminal tab remained")
             return
         }
+    }
+
+    // US-15: new workspaces are created at ~/ (no fixed per-workspace path). Two of them must
+    // coexist as distinct instances — isolated terminals + isolated US-05 memo — even though
+    // they share the identical home path. Rename via the picker must persist. This is the
+    // regression guard for the path→id identity migration.
+    private func verifyHomeWorkspaceCreationRenameAndIsolation(_ controller: MainWindowController) {
+        controller.resetWorkspaceSelectionForSmokeTest()
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let baseCount = controller.workspaceCountForSmokeTest()
+
+        let idA = controller.createHomeWorkspaceForSmokeTest(named: "home-alpha")
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.activeWorkspaceIdForSmokeTest() == idA,
+              controller.activeWorkspacePathForSmokeTest() == home,
+              controller.workspaceCountForSmokeTest() == baseCount + 1 else {
+            fail("home workspace A was not created at ~/ and activated by id; activeId=\(controller.activeWorkspaceIdForSmokeTest() ?? "nil") activePath=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") count=\(controller.workspaceCountForSmokeTest())")
+            return
+        }
+        guard controller.setMemoTextForSmokeTest("home-alpha memo"),
+              controller.memoTextForSmokeTest().contains("home-alpha memo") else {
+            fail("home workspace A did not accept its scoped memo")
+            return
+        }
+
+        let idB = controller.createHomeWorkspaceForSmokeTest(named: "home-beta")
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard idB != idA,
+              controller.activeWorkspaceIdForSmokeTest() == idB,
+              controller.activeWorkspacePathForSmokeTest() == home,
+              controller.workspaceCountAtPathForSmokeTest(home) >= 2 else {
+            fail("second ~/ workspace did not become a distinct instance sharing the home path; idA=\(idA) idB=\(idB) atHome=\(controller.workspaceCountAtPathForSmokeTest(home))")
+            return
+        }
+        // B must NOT inherit A's memo despite the identical path.
+        guard !controller.memoTextForSmokeTest().contains("home-alpha memo") else {
+            fail("second ~/ workspace leaked the first workspace's memo (path-keyed scope not isolated by id): memo=\(controller.memoTextForSmokeTest())")
+            return
+        }
+        guard controller.setMemoTextForSmokeTest("home-beta memo"),
+              controller.memoTextForSmokeTest().contains("home-beta memo") else {
+            fail("home workspace B did not accept its scoped memo")
+            return
+        }
+
+        // Re-activate A by id; its memo must still be its own.
+        controller.activateWorkspaceForSmokeTest(id: idA)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.activeWorkspaceIdForSmokeTest() == idA,
+              controller.memoTextForSmokeTest().contains("home-alpha memo"),
+              !controller.memoTextForSmokeTest().contains("home-beta memo") else {
+            fail("switching back to home workspace A did not restore its isolated memo; activeId=\(controller.activeWorkspaceIdForSmokeTest() ?? "nil") memo=\(controller.memoTextForSmokeTest())")
+            return
+        }
+        // Persisted scope stores differ per id.
+        guard controller.storedMemoForWorkspaceIdForSmokeTest(idA).contains("home-alpha memo"),
+              controller.storedMemoForWorkspaceIdForSmokeTest(idB).contains("home-beta memo"),
+              !controller.storedMemoForWorkspaceIdForSmokeTest(idA).contains("home-beta memo") else {
+            fail("per-id memo persistence mixed between two ~/ workspaces; A=\(controller.storedMemoForWorkspaceIdForSmokeTest(idA)) B=\(controller.storedMemoForWorkspaceIdForSmokeTest(idB))")
+            return
+        }
+
+        // Rename via the picker path (arrow-select highlights a workspace, then 'r' renames it).
+        // renameSelectedWorkspacePickerItemForSmokeTest invokes the same core the 'r' key uses.
+        // Select workspace B by its index and rename it; A must keep its name.
+        guard let indexB = controller.workspacePickerIndexForSmokeTest(id: idB) else {
+            fail("could not locate workspace B in the picker for rename")
+            return
+        }
+        controller.selectWorkspacePickerIndexForSmokeTest(indexB)
+        guard controller.renameSelectedWorkspacePickerItemForSmokeTest(to: "home-beta-renamed") else {
+            fail("rename of the selected picker workspace failed")
+            return
+        }
+        guard controller.workspaceNameForSmokeTest(id: idB) == "home-beta-renamed",
+              controller.workspaceNameForSmokeTest(id: idA) == "home-alpha" else {
+            fail("workspace rename did not target the selected instance; A=\(controller.workspaceNameForSmokeTest(id: idA) ?? "nil") B=\(controller.workspaceNameForSmokeTest(id: idB) ?? "nil")")
+            return
+        }
+        controller.closeMemoAndFocusTerminalForSmokeTest()
     }
 
     private func verifyNativeShortcutEvents(_ controller: MainWindowController) {
