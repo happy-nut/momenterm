@@ -126,7 +126,7 @@ private func verifyTerminalRenderer() {
     }
 
     let memoRule = MainWindowController.renderMemoMarkdownForSmokeTest("---")
-    guard memoRule == "────────────" else {
+    guard memoRule == NativeMarkdownMemoTextView.horizontalRuleGlyphs, memoRule.count >= 40 else {
         fputs("key input smoke failed: memo horizontal rule renderer output=\(memoRule)\n", stderr)
         exit(1)
     }
@@ -1123,6 +1123,24 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo did not continue markdown list on Enter: \(listText.debugDescription)")
             return
         }
+        // Checkbox lines continue as a fresh unchecked box on Enter (Notion behaviour).
+        guard controller.setMemoTextForSmokeTest("[x] done") else {
+            fail("prompt memo could not be reset for checkbox continuation smoke")
+            return
+        }
+        sendKey("\r", keyCode: 36, window: memoWindow)
+        let checkboxListText = controller.memoTextForSmokeTest()
+        guard checkboxListText == "☑ done\n☐ " else {
+            fail("prompt memo did not continue a checkbox list on Enter: \(checkboxListText.debugDescription)")
+            return
+        }
+        // Enter on the now-empty item exits the list, clearing the marker on that line.
+        sendKey("\r", keyCode: 36, window: memoWindow)
+        let exitListText = controller.memoTextForSmokeTest()
+        guard exitListText == "☑ done\n" else {
+            fail("prompt memo did not exit the list on Enter at an empty item: \(exitListText.debugDescription)")
+            return
+        }
         sendKey("\u{1b}", keyCode: 53, window: memoWindow)
         guard waitUntil("prompt memo Esc close", timeout: 1, condition: {
             !controller.memoSidePanelIsVisibleForSmokeTest()
@@ -1541,10 +1559,21 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
         controller.openFilesViewForSmokeTest(from: gitRoot)
+        guard waitUntil("git file listing loaded", condition: {
+            controller.sourceFileCountForSmokeTest() > 0
+                && controller.overlaySubtitleForSmokeTest() != "Loading"
+        }) else {
+            fail("git file view did not finish listing: \(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
+        // The tree starts collapsed, so expand the folders holding the status-colored fixtures
+        // before asserting their rows render.
+        _ = controller.expandFileTreeFolderForSmokeTest("scripts")
+        _ = controller.expandFileTreeFolderForSmokeTest("src")
         guard waitUntil("git file tree status colors", condition: {
             controller.reviewOverlayTextForSmokeTest().contains("new-tool.sh")
         }) else {
-            fail("git file view did not list new shell file: \(controller.reviewOverlayTextForSmokeTest())")
+            fail("git file view did not list new shell file after expanding scripts: \(controller.reviewOverlayTextForSmokeTest())")
             return
         }
         guard controller.fileTreeSidebarHasGitStatusColorsForSmokeTest() else {
@@ -2030,6 +2059,31 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("workspace rename did not target the selected instance; A=\(controller.workspaceNameForSmokeTest(id: idA) ?? "nil") B=\(controller.workspaceNameForSmokeTest(id: idB) ?? "nil")")
             return
         }
+        // Reported ask: rename happens inline in the rail (no modal dialog). Entering rename mode drops
+        // a focused editable field into the row; committing applies the name and exits edit mode.
+        controller.beginWorkspaceInlineRenameForSmokeTest(id: idA)
+        guard controller.isRenamingWorkspaceForSmokeTest(),
+              controller.workspaceRenameFieldIsPresentForSmokeTest() else {
+            fail("beginning a workspace rename did not enter inline-edit mode with a rename field present")
+            return
+        }
+        guard controller.commitWorkspaceInlineRenameForSmokeTest("home-alpha-inline"),
+              !controller.isRenamingWorkspaceForSmokeTest(),
+              controller.workspaceNameForSmokeTest(id: idA) == "home-alpha-inline" else {
+            fail("committing the inline workspace rename did not apply the name or exit edit mode; name=\(controller.workspaceNameForSmokeTest(id: idA) ?? "nil") renaming=\(controller.isRenamingWorkspaceForSmokeTest())")
+            return
+        }
+        // Terminal pane rename is inline in the header (no modal): begin → editable field → commit →
+        // the header shows the custom name instead of the positional "Terminal N". Runs when the
+        // active pane has a rendered header.
+        controller.beginTerminalPaneRenameForSmokeTest()
+        if controller.terminalPaneRenameFieldIsPresentForSmokeTest() {
+            guard controller.commitTerminalPaneRenameForSmokeTest("build-pane"),
+                  controller.activePaneHeaderTitleForSmokeTest() == "build-pane" else {
+                fail("committing the inline terminal pane rename did not show the custom header title; title=\(controller.activePaneHeaderTitleForSmokeTest())")
+                return
+            }
+        }
         controller.closeMemoAndFocusTerminalForSmokeTest()
     }
 
@@ -2103,6 +2157,28 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
               controller.changesSidebarIsFirstResponderForSmokeTest() else {
             fail("Third Cmd+0 did not reopen Changes overlay with focus in the change list; title=\(controller.overlayTitleForSmokeTest())")
             return
+        }
+        // Reported bug: while the change list holds focus, Down/Up must move the file selection and
+        // STAY in the list — the arrow keys must never leak focus into the diff cursor. Only Enter
+        // (below) or F7 moves focus into the diff.
+        if controller.changesDiffFileCountForSmokeTest() > 1 {
+            let diffPathBeforeArrows = controller.selectedDiffPathForSmokeTest()
+            sendShortcut("", keyCode: 125, modifiers: [])
+            guard controller.changesSidebarIsFirstResponderForSmokeTest(),
+                  !controller.changesDiffCodePaneHasVisibleCursorForSmokeTest(),
+                  controller.selectedDiffPathForSmokeTest() != diffPathBeforeArrows else {
+                fail("Down arrow in the change list leaked focus into the diff or did not move the file selection; sidebar=\(controller.changesSidebarIsFirstResponderForSmokeTest()) cursor=\(controller.changesDiffCodePaneHasVisibleCursorForSmokeTest()) before=\(diffPathBeforeArrows ?? "nil") after=\(controller.selectedDiffPathForSmokeTest() ?? "nil")")
+                return
+            }
+            sendShortcut("", keyCode: 125, modifiers: [])
+            guard controller.changesSidebarIsFirstResponderForSmokeTest(),
+                  !controller.changesDiffCodePaneHasVisibleCursorForSmokeTest() else {
+                fail("second Down arrow in the change list leaked focus into the diff cursor; sidebar=\(controller.changesSidebarIsFirstResponderForSmokeTest()) cursor=\(controller.changesDiffCodePaneHasVisibleCursorForSmokeTest())")
+                return
+            }
+            // Restore the original selection so the Enter-based checks below stay deterministic.
+            sendShortcut("", keyCode: 126, modifiers: [])
+            sendShortcut("", keyCode: 126, modifiers: [])
         }
         sendShortcut("\r", keyCode: 36, modifiers: [])
         guard controller.changesDiffCodePaneHasVisibleCursorForSmokeTest() else {
@@ -2239,15 +2315,21 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
 
-        guard let selectedBeforeArrow = controller.selectedSourcePathForSmokeTest() else {
-            fail("file overlay did not expose a selected source before arrow navigation")
+        // Down arrow walks the rendered rows (files *and* folders); selection must move to a
+        // different row and keep sidebar focus. Regression: navigation used to iterate the flat
+        // sourceFiles list, so it skipped directory rows entirely.
+        guard controller.selectSourcePathForSmokeTest("api/request.http") else {
+            fail("could not select the http fixture before arrow navigation")
+            return
+        }
+        guard let rowBeforeArrow = controller.selectedFileTreeRowPathForSmokeTest() else {
+            fail("file overlay did not expose a selected row before arrow navigation")
             return
         }
         sendShortcut("", keyCode: 125, modifiers: [])
-        guard let selectedAfterArrow = controller.selectedSourcePathForSmokeTest(),
-              selectedAfterArrow != selectedBeforeArrow,
-              controller.selectedSourcePreviewIsVisibleForSmokeTest() else {
-            fail("file tree Down arrow did not move selection and refresh preview; before=\(selectedBeforeArrow) after=\(controller.selectedSourcePathForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest())")
+        guard let rowAfterArrow = controller.selectedFileTreeRowPathForSmokeTest(),
+              rowAfterArrow != rowBeforeArrow else {
+            fail("file tree Down arrow did not move the row selection; before=\(rowBeforeArrow) after=\(controller.selectedFileTreeRowPathForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest())")
             return
         }
         guard controller.fileOverlaySidebarIsFirstResponderForSmokeTest() else {
@@ -2330,28 +2412,95 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
         let sourceCount = controller.sourceFileCountForSmokeTest()
         if sourceCount > 40 {
-            let rapidStartIndex = min(max(0, sourceCount / 2), max(0, sourceCount - 30))
-            guard controller.selectSourceIndexForSmokeTest(rapidStartIndex),
+            // Expand the whole tree so there is a long run of rows to race the Down arrow through,
+            // then navigate by rendered-row position (files and folders) rather than flat file index.
+            controller.expandAllFileTreeFoldersForSmokeTest()
+            let rowCount = controller.fileTreeVisibleRowCountForSmokeTest()
+            let rapidStartRow = min(max(0, rowCount / 2), max(0, rowCount - 30))
+            guard controller.selectFileTreeRowIndexForSmokeTest(rapidStartRow),
                   controller.fileOverlaySelectedSourceHasScrollMarginForSmokeTest() else {
-                fail("file tree selection did not keep a 15 percent scroll margin before rapid navigation; index=\(rapidStartIndex) count=\(sourceCount)")
+                fail("file tree selection did not keep a 15 percent scroll margin before rapid navigation; row=\(rapidStartRow) rows=\(rowCount)")
                 return
             }
-            let rapidSteps = min(24, sourceCount - 1 - rapidStartIndex)
+            let rapidSteps = min(24, rowCount - 1 - rapidStartRow)
             let rapidStart = Date()
             for _ in 0..<rapidSteps {
                 sendShortcut("", keyCode: 125, modifiers: [], settle: 0)
             }
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
             let rapidDuration = Date().timeIntervalSince(rapidStart)
-            guard controller.selectedSourceIndexForSmokeTest() == rapidStartIndex + rapidSteps,
+            guard controller.selectedFileTreeRowIndexForSmokeTest() == rapidStartRow + rapidSteps,
                   rapidDuration < 0.45 else {
-                fail("file tree rapid Down arrow navigation dropped or lagged key events; start=\(rapidStartIndex) steps=\(rapidSteps) selected=\(controller.selectedSourceIndexForSmokeTest()) duration=\(rapidDuration)")
+                fail("file tree rapid Down arrow navigation dropped or lagged key events; start=\(rapidStartRow) steps=\(rapidSteps) selectedRow=\(controller.selectedFileTreeRowIndexForSmokeTest()) duration=\(rapidDuration)")
                 return
             }
             guard controller.fileOverlaySelectedSourceHasScrollMarginForSmokeTest() else {
-                fail("file tree rapid navigation did not keep the selected row inside the 15 percent scroll margin; selected=\(controller.selectedSourceIndexForSmokeTest()) count=\(sourceCount)")
+                fail("file tree rapid navigation did not keep the selected row inside the 15 percent scroll margin; selectedRow=\(controller.selectedFileTreeRowIndexForSmokeTest()) rows=\(rowCount)")
                 return
             }
+        }
+
+        // --- Reported-bug regression: the tree must start collapsed, the arrow keys must be able to
+        // select directory rows, Enter must expand/collapse them, and the expanded set must survive a
+        // relaunch. Exercised on the git fixture, where directories are synthesized from a flat file
+        // list — the exact case the old flat-index navigation could never select. ---
+        guard let regressionRoot = shortcutFixtureRoot else {
+            fail("shortcut fixture root missing before file tree regression checks")
+            return
+        }
+        controller.resetFileTreeExpansionForSmokeTest()
+        guard controller.fileTreeExpandedFolderCountForSmokeTest() == 0,
+              controller.fileTreeMaxVisibleDepthForSmokeTest() == 0 else {
+            fail("file tree did not start collapsed to top-level rows; expanded=\(controller.fileTreeExpandedFolderCountForSmokeTest()) maxDepth=\(controller.fileTreeMaxVisibleDepthForSmokeTest())")
+            return
+        }
+        guard controller.selectFirstFolderRowByArrowForSmokeTest(),
+              controller.selectedFileTreeRowIsFolderForSmokeTest() else {
+            fail("Down arrow could not land on a directory row in the file tree (reported bug); selectedFolder=\(controller.selectedFileTreeRowIsFolderForSmokeTest())")
+            return
+        }
+        guard controller.fileOverlaySidebarIsFirstResponderForSmokeTest() else {
+            fail("selecting a directory row with the arrow keys did not keep sidebar focus")
+            return
+        }
+        let expandedFolderPath = controller.selectedFileTreeRowPathForSmokeTest() ?? ""
+        controller.activateSelectedFileTreeRowForSmokeTest()
+        guard controller.fileTreeExpandedFolderCountForSmokeTest() >= 1,
+              controller.fileTreeMaxVisibleDepthForSmokeTest() >= 1 else {
+            fail("Enter on a directory row did not expand it; folder=\(expandedFolderPath) expanded=\(controller.fileTreeExpandedFolderCountForSmokeTest()) maxDepth=\(controller.fileTreeMaxVisibleDepthForSmokeTest())")
+            return
+        }
+        guard controller.storedFileTreeExpandedFolderCountForCurrentRootForSmokeTest() >= 1 else {
+            fail("expanding a directory did not persist the expansion for restore; folder=\(expandedFolderPath)")
+            return
+        }
+        // Enter again collapses the still-selected folder back to the top-level view.
+        controller.activateSelectedFileTreeRowForSmokeTest()
+        guard controller.fileTreeExpandedFolderCountForSmokeTest() == 0,
+              controller.fileTreeMaxVisibleDepthForSmokeTest() == 0 else {
+            fail("Enter on an expanded directory did not collapse it back; expanded=\(controller.fileTreeExpandedFolderCountForSmokeTest()) maxDepth=\(controller.fileTreeMaxVisibleDepthForSmokeTest())")
+            return
+        }
+        // Re-expand, then re-read the listing from disk: the previously open folders must reappear.
+        guard controller.selectFirstFolderRowByArrowForSmokeTest() else {
+            fail("could not reselect a directory row before the restore check")
+            return
+        }
+        controller.activateSelectedFileTreeRowForSmokeTest()
+        let expandedBeforeReload = controller.fileTreeExpandedFolderCountForSmokeTest()
+        guard expandedBeforeReload >= 1 else {
+            fail("could not re-expand a directory before the restore check")
+            return
+        }
+        controller.reloadFileListingFromDiskForSmokeTest()
+        controller.openFilesViewForSmokeTest(from: regressionRoot)
+        guard waitUntil("file tree expansion restore", timeout: 5, condition: {
+            controller.sourceFileCountForSmokeTest() > 0
+                && controller.overlaySubtitleForSmokeTest() != "Loading"
+                && controller.fileTreeExpandedFolderCountForSmokeTest() >= 1
+        }) else {
+            fail("file tree did not restore previously expanded folders after a disk reload; expanded=\(controller.fileTreeExpandedFolderCountForSmokeTest()) before=\(expandedBeforeReload)")
+            return
         }
 
         sendShortcut("9", keyCode: 25, modifiers: [.command])
@@ -2649,6 +2798,11 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         let fileChangeText = "Please update this file line."
         controller.replaceInlineReviewEditorTextForSmokeTest(fileChangeText)
         sendShortcut("\r", keyCode: 36, modifiers: [.command])
+        // Cmd+Enter saves the comment and restores the review cursor to the preview via
+        // focusReviewCodeView's sync+async re-assert; wait a beat for that next-runloop hand-back.
+        _ = waitUntil("change-request save restores the review cursor", timeout: 2, condition: {
+            controller.fileOverlayPreviewHasVisibleReviewCursorForSmokeTest()
+        })
         guard controller.overlayTitleForSmokeTest() == "Files",
               controller.reviewNoteCountForSmokeTest() == fileChangeCountBefore + 1,
               controller.latestReviewNoteKindForSmokeTest() == "change",
@@ -2658,7 +2812,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
               controller.selectedInlineReviewCommentTextForSmokeTest().contains(fileChangeText),
               controller.fileOverlayPreviewHasVisibleReviewCursorForSmokeTest(),
               !controller.reviewOverlayTextForSmokeTest().contains("(no file)") else {
-            fail("Cmd+Enter did not save the file-view inline change-request comment box at the file cursor; title=\(controller.overlayTitleForSmokeTest()) note=\(controller.latestReviewNoteLocationForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest().prefix(300)) selected=\(controller.selectedInlineReviewCommentTextForSmokeTest())")
+            fail("Cmd+Enter did not save the file-view inline change-request comment box at the file cursor; title=\(controller.overlayTitleForSmokeTest()) count=\(controller.reviewNoteCountForSmokeTest())vs\(fileChangeCountBefore + 1) kind=\(controller.latestReviewNoteKindForSmokeTest()) loc=\(controller.latestReviewNoteLocationForSmokeTest()) textIn=\(controller.reviewNoteTextContainsForSmokeTest(fileChangeText)) savedVisible=\(controller.inlineReviewSavedCommentIsVisibleForSmokeTest(containing: fileChangeText)) selHas=\(controller.selectedInlineReviewCommentTextForSmokeTest().contains(fileChangeText)) cursor=\(controller.fileOverlayPreviewHasVisibleReviewCursorForSmokeTest()) noFile=\(controller.reviewOverlayTextForSmokeTest().contains("(no file)"))")
             return
         }
         sendShortcut("0", keyCode: 29, modifiers: [.command])
@@ -2754,76 +2908,68 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
         let mergedPromptTargetIds = controller.mergedPromptTerminalIdsForSmokeTest()
-        let activeMergedPromptTerminalId = controller.activeTerminalSessionIdForSmokeTest()
-        guard mergedPromptTargetIds.count >= 2,
-              let mergedPromptTargetId = mergedPromptTargetIds.first(where: { $0 != activeMergedPromptTerminalId }) ?? mergedPromptTargetIds.first,
-              controller.selectMergedPromptTerminalForSmokeTest(id: mergedPromptTargetId),
-              controller.mergedPromptSelectedTerminalIdForSmokeTest() == mergedPromptTargetId else {
-            fail("merged prompt panel did not expose selectable terminal session targets; targets=\(mergedPromptTargetIds) active=\(activeMergedPromptTerminalId.map(String.init) ?? "nil") selected=\(controller.mergedPromptSelectedTerminalIdForSmokeTest().map(String.init) ?? "nil")")
+        guard mergedPromptTargetIds.count >= 2 else {
+            fail("merged prompt needs >= 2 terminal panes to exercise pane selection; ids=\(mergedPromptTargetIds)")
             return
         }
+
+        // Collapse/expand the panel to the floating pill still works (independent of the send flow).
+        controller.collapseMergedPromptToFloatingForSmokeTest()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.35))
+        guard controller.mergedPromptIsCollapsedToFloatingForSmokeTest(),
+              controller.mergedPromptFloatingButtonIsVisibleForSmokeTest(),
+              !controller.mergedPromptSidePanelIsVisibleForSmokeTest() else {
+            fail("merged prompt did not collapse to the floating icon button; collapsed=\(controller.mergedPromptIsCollapsedToFloatingForSmokeTest()) floating=\(controller.mergedPromptFloatingButtonIsVisibleForSmokeTest()) panelVisible=\(controller.mergedPromptSidePanelIsVisibleForSmokeTest())")
+            return
+        }
+        controller.expandMergedPromptFromFloatingForSmokeTest()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.35))
+        guard controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
+              controller.mergedPromptSidePanelTitleForSmokeTest() == "Change Requests",
+              !controller.mergedPromptIsCollapsedToFloatingForSmokeTest() else {
+            fail("merged prompt did not re-expand from the floating icon button; panelVisible=\(controller.mergedPromptSidePanelIsVisibleForSmokeTest()) collapsed=\(controller.mergedPromptIsCollapsedToFloatingForSmokeTest())")
+            return
+        }
+
+        // New two-phase send (reported ask): Option+Enter closes the panel and enters pane-selection
+        // mode WITHOUT writing to or focusing any terminal — the panes are highlighted (ring + "Enter"
+        // hint) for arrow-key selection.
         var mergedPromptWrites: [(Int, String)] = []
         controller.setTerminalWriteObserverForSmokeTest { id, data in
             mergedPromptWrites.append((id, data))
         }
         sendShortcut("\r", keyCode: 36, modifiers: [.option])
+        guard controller.isMergedPromptPaneSelectionActiveForSmokeTest(),
+              !controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
+              mergedPromptWrites.isEmpty,
+              controller.mergedPromptSendTargetUIRemovedForSmokeTest(),
+              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() != nil,
+              controller.mergedPromptEnterOverlayLabelIsVisibleForSmokeTest() else {
+            fail("Option+Enter did not enter pane-selection mode without sending; paneSelect=\(controller.isMergedPromptPaneSelectionActiveForSmokeTest()) visible=\(controller.mergedPromptSidePanelIsVisibleForSmokeTest()) writes=\(mergedPromptWrites.count) ring=\(controller.mergedPromptSelectionRingTerminalIdForSmokeTest().map(String.init) ?? "nil")")
+            return
+        }
+        // A plain arrow key moves the target (ring + Enter hint follow); still no terminal write.
+        let ringBeforeArrow = controller.mergedPromptSelectionRingTerminalIdForSmokeTest()
+        sendShortcut("", keyCode: 124, modifiers: [])
+        guard let movedTargetId = controller.mergedPromptSelectionRingTerminalIdForSmokeTest(),
+              movedTargetId != ringBeforeArrow,
+              controller.mergedPromptEnterOverlayTerminalIdForSmokeTest() == movedTargetId,
+              mergedPromptWrites.isEmpty else {
+            fail("arrow did not move the pane-selection target or leaked a terminal write; before=\(ringBeforeArrow.map(String.init) ?? "nil") after=\(controller.mergedPromptSelectionRingTerminalIdForSmokeTest().map(String.init) ?? "nil") writes=\(mergedPromptWrites.count)")
+            return
+        }
+        // Enter inserts the merged prompt into the chosen pane and exits selection mode.
+        sendShortcut("\r", keyCode: 36, modifiers: [])
         controller.setTerminalWriteObserverForSmokeTest(nil)
         guard let mergedPromptWrite = mergedPromptWrites.last,
-              mergedPromptWrite.0 == mergedPromptTargetId,
+              mergedPromptWrite.0 == movedTargetId,
               mergedPromptWrite.1.contains("The following are change requests"),
               mergedPromptWrite.1.contains("Before changing any code"),
               mergedPromptWrite.1.contains(diffChangeText),
-              mergedPromptWrite.1.hasSuffix("\r") else {
-            fail("Option+Enter did not send the merged prompt text to the selected terminal session; writes=\(mergedPromptWrites.map { "\($0.0):\($0.1.prefix(80))" }) target=\(mergedPromptTargetId)")
-            return
-        }
-
-        // US-08: the panel dropped the "Send target" header + terminal list; the selected send
-        // target instead wears an accent ring and a faint centered "Enter" hint on its pane.
-        guard controller.mergedPromptSendTargetUIRemovedForSmokeTest(),
-              controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
-              !controller.mergedPromptIsCollapsedToFloatingForSmokeTest(),
-              controller.mergedPromptEnterOverlayTerminalIdForSmokeTest() == mergedPromptTargetId,
-              controller.mergedPromptEnterOverlayLabelIsVisibleForSmokeTest(),
-              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() == mergedPromptTargetId else {
-            fail("US-08 merged prompt did not remove the send-target UI or mark the selected terminal; removed=\(controller.mergedPromptSendTargetUIRemovedForSmokeTest()) overlay=\(controller.mergedPromptEnterOverlayTerminalIdForSmokeTest().map(String.init) ?? "nil") ring=\(controller.mergedPromptSelectionRingTerminalIdForSmokeTest().map(String.init) ?? "nil") target=\(mergedPromptTargetId)")
-            return
-        }
-
-        // US-08 goal 2: collapse the panel into the floating icon button (animated). While
-        // collapsed the panel is off-screen but the send target + "Enter" hint stay live.
-        controller.collapseMergedPromptToFloatingForSmokeTest()
-        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.35))
-        guard controller.mergedPromptIsCollapsedToFloatingForSmokeTest(),
-              controller.mergedPromptFloatingButtonIsVisibleForSmokeTest(),
-              controller.mergedPromptFloatingButtonUsesSlidingAnimationForSmokeTest(),
-              !controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
-              controller.mergedPromptEnterOverlayTerminalIdForSmokeTest() == mergedPromptTargetId,
-              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() == mergedPromptTargetId else {
-            fail("US-08 merged prompt did not collapse to a floating icon button; collapsed=\(controller.mergedPromptIsCollapsedToFloatingForSmokeTest()) floating=\(controller.mergedPromptFloatingButtonIsVisibleForSmokeTest()) panelVisible=\(controller.mergedPromptSidePanelIsVisibleForSmokeTest()) overlay=\(controller.mergedPromptEnterOverlayTerminalIdForSmokeTest().map(String.init) ?? "nil")")
-            return
-        }
-
-        // US-08 goal 3: arrow keys move the send target across the workspace terminals while
-        // collapsed, and the "Enter" hint + selection ring follow to the newly selected pane.
-        sendShortcut(String(UnicodeScalar(0xF703)!), keyCode: 124, modifiers: [.option])
-        let movedTargetId = controller.mergedPromptSelectedTerminalIdForSmokeTest()
-        guard let movedTargetId = movedTargetId,
-              movedTargetId != mergedPromptTargetId,
-              controller.mergedPromptEnterOverlayTerminalIdForSmokeTest() == movedTargetId,
-              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() == movedTargetId else {
-            fail("US-08 Option+Right did not move the collapsed send target + Enter hint; moved=\(movedTargetId.map(String.init) ?? "nil") overlay=\(controller.mergedPromptEnterOverlayTerminalIdForSmokeTest().map(String.init) ?? "nil") ring=\(controller.mergedPromptSelectionRingTerminalIdForSmokeTest().map(String.init) ?? "nil")")
-            return
-        }
-
-        // US-08 goal 2: tapping the floating pill re-expands the panel to the same kind.
-        controller.expandMergedPromptFromFloatingForSmokeTest()
-        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.35))
-        guard controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
-              controller.mergedPromptSidePanelTitleForSmokeTest() == "Change Requests",
-              !controller.mergedPromptIsCollapsedToFloatingForSmokeTest(),
-              !controller.mergedPromptFloatingButtonIsVisibleForSmokeTest() else {
-            fail("US-08 merged prompt did not re-expand from the floating icon button; panelVisible=\(controller.mergedPromptSidePanelIsVisibleForSmokeTest()) collapsed=\(controller.mergedPromptIsCollapsedToFloatingForSmokeTest()) floating=\(controller.mergedPromptFloatingButtonIsVisibleForSmokeTest())")
+              mergedPromptWrite.1.hasSuffix("\r"),
+              !controller.isMergedPromptPaneSelectionActiveForSmokeTest(),
+              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() == nil else {
+            fail("Enter did not insert the merged prompt into the chosen pane or exit selection mode; writes=\(mergedPromptWrites.map { "\($0.0):\($0.1.prefix(60))" }) target=\(movedTargetId) paneSelect=\(controller.isMergedPromptPaneSelectionActiveForSmokeTest())")
             return
         }
 
@@ -2835,7 +2981,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         let viewedBefore = controller.viewedFileCountForSmokeTest()
         sendShortcut("<", keyCode: 43, modifiers: [])
         guard controller.viewedFileCountForSmokeTest() == viewedBefore + 1 else {
-            fail("< did not toggle viewed state")
+            fail("< did not toggle viewed state; diffFiles=\(controller.changesDiffFileCountForSmokeTest()) selectedDiff=\(controller.selectedDiffPathForSmokeTest() ?? "nil") \(controller.viewedShortcutDiagnosticsForSmokeTest())")
             return
         }
         guard controller.changesSidebarShowsReviewStateBadgesForSmokeTest() else {

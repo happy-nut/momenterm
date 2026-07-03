@@ -902,6 +902,10 @@ final class NativeMarkdownMemoTextView: NSTextView {
         return normalized.joined(separator: "\n")
     }
 
+    // A run long enough to overflow the memo side panel at any reasonable window width; the rule
+    // paragraph clips the overflow (see applyStyles) so it reads as a single full-width line.
+    static let horizontalRuleGlyphs = String(repeating: "─", count: 80)
+
     private static func normalizeHorizontalRuleLine(_ line: String) -> String? {
         guard let regex = try? NSRegularExpression(pattern: #"^([ \t]*)(---|\*\*\*|___)[ \t]*$"#),
               let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)),
@@ -910,7 +914,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
             return nil
         }
         let nsLine = line as NSString
-        return "\(nsLine.substring(with: match.range(at: 1)))────────────"
+        return "\(nsLine.substring(with: match.range(at: 1)))\(horizontalRuleGlyphs)"
     }
 
     private static func normalizeBlockquoteLine(_ line: String) -> String? {
@@ -966,16 +970,26 @@ final class NativeMarkdownMemoTextView: NSTextView {
         let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
         let prefixLength = max(selection.location - lineRange.location, 0)
         let linePrefix = nsText.substring(with: NSRange(location: lineRange.location, length: prefixLength))
-        guard let regex = try? NSRegularExpression(pattern: #"^([ \t]*)([-•])\s+(.+)$"#),
+        // Markers are the rendered forms (bullet, checkbox) plus the raw "-" the user may type before
+        // normalization runs. Group 4 is the text typed after the marker on this line.
+        guard let regex = try? NSRegularExpression(pattern: #"^([ \t]*)([-•]|☐|☑)([ \t]+)(.*)$"#),
               let match = regex.firstMatch(in: linePrefix, range: NSRange(location: 0, length: (linePrefix as NSString).length)),
-              match.numberOfRanges == 4
+              match.numberOfRanges == 5
         else {
             return false
         }
         let nsPrefix = linePrefix as NSString
         let indent = nsPrefix.substring(with: match.range(at: 1))
         let marker = nsPrefix.substring(with: match.range(at: 2))
-        insertText("\n\(indent)\(marker) ", replacementRange: selection)
+        let content = nsPrefix.substring(with: match.range(at: 4))
+        // Enter on an empty item exits the list (Notion behaviour): clear the marker, stay on the line.
+        if content.trimmingCharacters(in: .whitespaces).isEmpty {
+            insertText("", replacementRange: NSRange(location: lineRange.location, length: prefixLength))
+            return true
+        }
+        // Continue the list. A checkbox always continues as a fresh unchecked box.
+        let continuationMarker = (marker == "☐" || marker == "☑") ? "☐" : marker
+        insertText("\n\(indent)\(continuationMarker) ", replacementRange: selection)
         return true
     }
 
@@ -996,7 +1010,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
         applyLineStyle(pattern: #"^#\s+.*$"#, font: NSFont.systemFont(ofSize: 20, weight: .semibold), color: theme.primaryText)
         applyLineStyle(pattern: #"^##\s+.*$"#, font: NSFont.systemFont(ofSize: 17, weight: .semibold), color: theme.primaryText)
         applyLineStyle(pattern: #"^###\s+.*$"#, font: NSFont.systemFont(ofSize: 15, weight: .semibold), color: theme.primaryText)
-        applyLineStyle(pattern: #"^[ \t]*────────────$"#, font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), color: theme.secondaryText)
+        applyHorizontalRuleStyle()
         applyLineStyle(pattern: #"^[ \t]*▌ .*$"#, font: NSFont.systemFont(ofSize: 13, weight: .regular), color: theme.secondaryText)
         applyInlineStyle(pattern: #"☐|☑"#, font: NSFont.systemFont(ofSize: 15, weight: .semibold), color: theme.accent)
         applyInlineStyle(pattern: #"•"#, font: NSFont.systemFont(ofSize: 15, weight: .semibold), color: theme.accent)
@@ -1014,6 +1028,28 @@ final class NativeMarkdownMemoTextView: NSTextView {
         regex.enumerateMatches(in: string, range: NSRange(location: 0, length: storage.length)) { match, _, _ in
             guard let match = match else { return }
             storage.addAttributes([.font: font, .foregroundColor: color], range: match.range)
+        }
+    }
+
+    // Renders `---` rules faint and full-width: a long glyph run clipped to the panel edge, in a
+    // low-alpha tone so the divider recedes instead of competing with the text.
+    private func applyHorizontalRuleStyle() {
+        guard let storage = textStorage,
+              let regex = try? NSRegularExpression(pattern: #"^[ \t]*─{12,}$"#, options: [.anchorsMatchLines])
+        else {
+            return
+        }
+        let ruleParagraph = NSMutableParagraphStyle()
+        ruleParagraph.lineSpacing = 4
+        ruleParagraph.paragraphSpacing = 4
+        ruleParagraph.lineBreakMode = .byClipping
+        regex.enumerateMatches(in: string, range: NSRange(location: 0, length: storage.length)) { match, _, _ in
+            guard let match = match else { return }
+            storage.addAttributes([
+                .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+                .foregroundColor: theme.secondaryText.withAlphaComponent(0.35),
+                .paragraphStyle: ruleParagraph
+            ], range: match.range)
         }
     }
 
@@ -1039,5 +1075,71 @@ final class NativeMarkdownMemoTextView: NSTextView {
             guard let match = match, match.numberOfRanges > 1 else { return }
             storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 13, weight: .semibold), range: match.range(at: 1))
         }
+    }
+}
+
+// Inline single-line rename field used in the workspace rail and terminal pane headers instead of a
+// modal NSAlert: Enter (or focus loss) commits, Esc cancels. `finished` makes commit/cancel fire at
+// most once even though the committing callback rebuilds the view tree (which triggers a blur).
+final class NativeInlineRenameField: NSTextField, NSTextFieldDelegate {
+    var onCommit: ((String) -> Void)?
+    var onCancel: (() -> Void)?
+    private var finished = false
+
+    func configureInline(text: String, font: NSFont, textColor: NSColor, backgroundColor: NSColor) {
+        stringValue = text
+        delegate = self
+        isEditable = true
+        isSelectable = true
+        isBezeled = true
+        bezelStyle = .roundedBezel
+        isBordered = true
+        focusRingType = .none
+        drawsBackground = true
+        self.font = font
+        self.textColor = textColor
+        self.backgroundColor = backgroundColor
+        lineBreakMode = .byTruncatingTail
+        usesSingleLineMode = true
+        cell?.wraps = false
+        cell?.isScrollable = true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            selectText(nil)
+        }
+        return accepted
+    }
+
+    private func finish(commit: Bool) {
+        guard !finished else {
+            return
+        }
+        finished = true
+        if commit {
+            onCommit?(stringValue)
+        } else {
+            onCancel?()
+        }
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        switch commandSelector {
+        case #selector(NSResponder.insertNewline(_:)):
+            finish(commit: true)
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            finish(commit: false)
+            return true
+        default:
+            return false
+        }
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        // Focus loss without Enter/Esc commits the current text. Idempotent via `finished`.
+        finish(commit: true)
     }
 }
