@@ -2,21 +2,6 @@ import AppKit
 
 // FileTree methods extracted from MainWindowController (refactor Phase 2 — move-only).
 extension MainWindowController {
-    func syntheticFolderSourceFile(path: String) -> SourceFile {
-        SourceFile(
-            path: path,
-            size: 0,
-            embedded: false,
-            content: "",
-            skippedReason: "Folder. Press Enter to expand.",
-            language: "folder",
-            changed: false,
-            changedLines: [],
-            signature: "folder:\(path.hashValue)",
-            image: "",
-            vcs: nil
-        )
-    }
     func fileTreeButton(containing text: String) -> NSButton? {
         collectButtons(in: overlaySidebarStack).first { button in
             collectVisibleText(in: button).contains(text)
@@ -66,14 +51,18 @@ extension MainWindowController {
         for row in fileTreeModel.visibleRows {
             overlaySidebarStack.addArrangedSubview(fileTreeRowButton(row))
         }
+        // The code pane reflects the last opened file (selectedSourceIndex), never the tree cursor, so
+        // rebuilding the sidebar can't yank it onto a folder or a merely-highlighted row. A folder or an
+        // out-of-range index clears the pane so stale content (e.g. "Loading file list...") doesn't linger.
+        // Initial load (selectedIdentifier == nil) falls through without touching the pane.
         if let selectedRow = rows.first(where: { $0.identifier == fileTreeModel.selectedIdentifier }) {
             if !selectedRow.isFolder,
-               let sourceIndex = selectedRow.sourceIndex,
-               document.sourceFiles.indices.contains(sourceIndex) {
-                selectedSourceIndex = sourceIndex
-                renderSourceFile(document.sourceFiles[sourceIndex])
+               document.sourceFiles.indices.contains(selectedSourceIndex),
+               document.sourceFiles[selectedSourceIndex].language != "folder" {
+                renderSourceFile(document.sourceFiles[selectedSourceIndex])
             } else {
-                renderSourceFile(syntheticFolderSourceFile(path: selectedRow.path))
+                codePane.setOldString("")
+                codePane.setNewString("")
             }
             ensureSelectedSidebarRowVisible(identifier: selectedRow.identifier)
         }
@@ -110,8 +99,9 @@ extension MainWindowController {
         fileTreeModel.expandedFolders.insert(folderPath)
         // Keep the just-expanded folder selected. A real folder entry (non-git shallow listing) gets a
         // "source:<idx>" identifier; a synthesized (git) folder keeps its path identifier.
+        // Keep the just-expanded folder as the tree cursor, but leave selectedSourceIndex alone — it
+        // tracks the opened *file* shown in the code pane, which expanding a folder must not disturb.
         if let folderIndex = document.sourceFiles.firstIndex(where: { $0.path == folderPath }) {
-            selectedSourceIndex = folderIndex
             fileTreeModel.selectedIdentifier = "source:\(folderIndex)"
         } else {
             fileTreeModel.selectedIdentifier = "source-folder:\(folderPath)"
@@ -141,12 +131,18 @@ extension MainWindowController {
             byPath[child.path] = child
         }
         let merged = byPath.values.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        // Preserve the opened file across the re-sort: capture its path before swapping the listing, then
+        // re-find its index in `merged` so the code pane keeps showing it (indices shift when merged grows).
+        let openedPath = document.sourceFiles.indices.contains(selectedSourceIndex)
+            ? document.sourceFiles[selectedSourceIndex].path : nil
         fileListingDocument = replacingSourceFiles(in: document, sourceFiles: merged)
         if normalizedWorkspacePath(fileListingRoot?.path) != normalizedWorkspacePath(document.root) {
             fileListingRoot = root
         }
+        if let openedPath = openedPath, let remapped = merged.firstIndex(where: { $0.path == openedPath }) {
+            selectedSourceIndex = remapped
+        }
         if let selectedIndex = merged.firstIndex(where: { $0.path == folderPath }) {
-            selectedSourceIndex = selectedIndex
             fileTreeModel.selectedIdentifier = "source:\(selectedIndex)"
         }
         populateFilesOverlay()
@@ -269,18 +265,14 @@ extension MainWindowController {
         return true
     }
     func renderSourceFile(_ file: SourceFile, preferredLine: Int? = nil, focus: Bool = false) {
-        httpRunner.clearRunButtons()
         if file.language == "folder" {
-            updateSourceRawToggle(canToggle: false)
-            overlaySubtitleLabel.stringValue = "\(file.path)  |  folder"
-            sourcePreviewScrollView.isHidden = true
-            overlayDiffSplitView.isHidden = false
-            setSingleCodePaneVisible(true)
-            codePane.setOldContent(styledText(fileTreeModel.expandedFolders.contains(file.path) ? "Folder expanded." : "Folder. Press Enter to expand.", color: theme.secondaryText))
-            codePane.setNewContent(styledText("", color: theme.primaryText))
-            refreshInlineReviewCommentBoxes()
+            // Folders never take over the code pane: it keeps showing the last opened file. Arrowing onto
+            // a folder must not blank it out or show a "Press Enter to expand" stub. This guard is now
+            // defensive — folder rows no longer render here — so a stray folder SourceFile can't fall
+            // through to the file-rendering path below.
             return
         }
+        httpRunner.clearRunButtons()
         let renderedFile: SourceFile
         if !file.embedded,
            file.skippedReason == "Select a file to preview.",
@@ -290,8 +282,7 @@ extension MainWindowController {
         } else {
             renderedFile = file
         }
-        sourcePreviewScrollView.isHidden = true
-        overlayDiffSplitView.isHidden = false
+        showNativeSplitPane()
         setSingleCodePaneVisible(true)
         codePane.clearReviewCursors()
         // A file is "renderable" when it has a form distinct from its raw source:
@@ -304,16 +295,13 @@ extension MainWindowController {
         overlaySubtitleLabel.stringValue = "\(renderedFile.path)  |  \(formatBytes(renderedFile.size))\(modeSuffix)"
         if showRaw {
             let rawLanguage = rawPreviewLanguage(for: renderedFile.language)
-            codePane.setOldContent(NativeSyntaxHighlighter.highlight(renderedFile.content, language: rawLanguage, theme: theme))
-            codePane.setNewContent(styledText("", color: theme.primaryText))
-            let contentCursorLine = preferredLine ?? renderedFile.changedLines.first ?? 1
-            codePane.scrollOldToTop()
-            codePane.scrollNewToTop()
-            placeCodeCursor(in: codePane.oldPaneCodeView, preferredLine: contentCursorLine, focus: focus)
+            showHybridFilePane()
+            fileHybridView.postJSON(["type": "loadFile", "content": renderedFile.content, "language": rawLanguage, "isImage": false])
             refreshInlineReviewCommentBoxes()
             return
         }
         if !renderedFile.image.isEmpty, let image = nativeImage(fromDataURL: renderedFile.image) {
+            showNativeImagePane()
             renderImagePreview(image)
             codePane.setOldString("")
             codePane.setNewString("")
@@ -325,14 +313,15 @@ extension MainWindowController {
             return
         }
         if renderedFile.embedded {
-            let rendered: NSAttributedString
-            if renderedFile.language == "markdown" {
-                rendered = NativeMarkdownRenderer.render(renderedFile.content, theme: theme)
-            } else if renderedFile.language == "csv" || renderedFile.language == "tsv" {
-                rendered = NativeCsvRenderer.render(renderedFile.content, language: renderedFile.language, theme: theme)
-            } else {
-                rendered = NativeSyntaxHighlighter.highlight(renderedFile.content, language: renderedFile.language, theme: theme)
+            // Markdown and CSV/TSV rendered forms go to the JS hybrid web view;
+            // raw mode for these is handled above and returns early.
+            if renderedFile.language == "markdown" || renderedFile.language == "csv" || renderedFile.language == "tsv" {
+                showHybridFilePane()
+                fileHybridView.postJSON(["type": "loadFile", "content": renderedFile.content, "language": renderedFile.language, "isImage": false])
+                refreshInlineReviewCommentBoxes()
+                return
             }
+            let rendered = NativeSyntaxHighlighter.highlight(renderedFile.content, language: renderedFile.language, theme: theme)
             codePane.setOldContent(rendered)
         } else {
             codePane.setOldContent(styledText(renderedFile.skippedReason.isEmpty ? "File content is not embedded." : renderedFile.skippedReason, color: theme.secondaryText))
@@ -404,76 +393,116 @@ extension MainWindowController {
         let file = document.sourceFiles[selectedSourceIndex]
         return file.language == "http" ? file : nil
     }
-    private func fileTreeRowButton(_ row: FileTreeRow) -> NSButton {
+    // Shared IntelliJ-style sidebar file row used by BOTH the Cmd+1 file tree and the diff sidebar
+    // (Changes). Structural differences are parameterized: the tree indents by `depth`; the diff list
+    // stays flat (depth 0) and passes review `badges` + a trailing +add/-del stats view. All chrome,
+    // icon, name-label, font and selection styling is identical and lives here once.
+    func fileRowButton(
+        identifier: String,
+        iconSymbol: String,
+        iconFallback: String,
+        tint: NSColor,
+        name: String,
+        selected: Bool,
+        depth: Int = 0,
+        tooltip: String? = nil,
+        badges: [NSView] = [],
+        trailing: NSView? = nil
+    ) -> NSButton {
         let button = NSButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
-        button.identifier = NSUserInterfaceItemIdentifier(row.identifier)
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
         button.isBordered = false
         button.bezelStyle = .regularSquare
         button.alignment = .left
         button.wantsLayer = true
         button.layer?.cornerRadius = MomentermDesign.Metrics.controlRadius
-        button.layer?.backgroundColor = row.selected ? theme.selectionBackground.cgColor : NSColor.clear.cgColor
-        button.layer?.borderColor = row.selected ? theme.selectionBorder.cgColor : NSColor.clear.cgColor
-        button.layer?.borderWidth = row.selected ? 1 : 0
+        button.layer?.backgroundColor = selected ? theme.selectionBackground.cgColor : NSColor.clear.cgColor
+        button.layer?.borderColor = selected ? theme.selectionBorder.cgColor : NSColor.clear.cgColor
+        button.layer?.borderWidth = selected ? 1 : 0
+        if let tooltip { button.toolTip = tooltip }
         button.translatesAutoresizingMaskIntoConstraints = false
 
-        let tint = fileTreeTint(for: row)
-        let imageView = NSImageView()
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.image = NSImage(systemSymbolName: fileTreeIconName(for: row), accessibilityDescription: row.name)
-            ?? NSImage(systemSymbolName: row.isFolder ? "folder" : "doc", accessibilityDescription: row.name)
-        imageView.image?.isTemplate = true
-        imageView.contentTintColor = tint
-        imageView.imageScaling = .scaleProportionallyDown
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(systemSymbolName: iconSymbol, accessibilityDescription: name)
+            ?? NSImage(systemSymbolName: iconFallback, accessibilityDescription: name)
+        icon.image?.isTemplate = true
+        icon.contentTintColor = tint
+        icon.imageScaling = .scaleProportionallyDown
 
-        let label = NSTextField(labelWithString: row.name)
+        let label = NSTextField(labelWithString: name)
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = NSFont.monospacedSystemFont(ofSize: 12, weight: row.selected && !row.isFolder ? .semibold : .regular)
+        label.font = MomentermDesign.Fonts.codeSmall
         label.textColor = tint
         label.lineBreakMode = .byTruncatingMiddle
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        button.addSubview(imageView)
-        button.addSubview(label)
-        NSLayoutConstraint.activate([
+        // Name + optional inline review badges (VIEWED/Q/CR); the tree passes none.
+        let nameRow = NSStackView()
+        nameRow.orientation = .horizontal
+        nameRow.alignment = .centerY
+        nameRow.spacing = 5
+        nameRow.translatesAutoresizingMaskIntoConstraints = false
+        nameRow.addArrangedSubview(label)
+        for badge in badges { nameRow.addArrangedSubview(badge) }
+        nameRow.setHuggingPriority(.defaultLow, for: .horizontal)
+
+        button.addSubview(icon)
+        button.addSubview(nameRow)
+
+        let leadingInset = MomentermDesign.Metrics.fileTreeLeadingInset + CGFloat(depth) * MomentermDesign.Metrics.fileTreeIndentStep
+        var constraints: [NSLayoutConstraint] = [
             button.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.sidebarWidth),
             button.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.fileTreeRowHeight),
-            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: MomentermDesign.Metrics.fileTreeLeadingInset + CGFloat(row.depth) * MomentermDesign.Metrics.fileTreeIndentStep),
-            imageView.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            imageView.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.fileTreeIconSize),
-            imageView.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.fileTreeIconSize),
-            label.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: MomentermDesign.Metrics.fileTreeLabelGap),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: button.trailingAnchor, constant: -6),
-            label.centerYAnchor.constraint(equalTo: button.centerYAnchor)
-        ])
+            icon.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: leadingInset),
+            icon.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.fileTreeIconSize),
+            icon.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.fileTreeIconSize),
+            nameRow.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: MomentermDesign.Metrics.fileTreeLabelGap),
+            nameRow.centerYAnchor.constraint(equalTo: button.centerYAnchor)
+        ]
+        if let trailing {
+            trailing.translatesAutoresizingMaskIntoConstraints = false
+            trailing.setContentCompressionResistancePriority(.required, for: .horizontal)
+            trailing.setContentHuggingPriority(.required, for: .horizontal)
+            button.addSubview(trailing)
+            constraints.append(contentsOf: [
+                trailing.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -5),
+                trailing.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                nameRow.trailingAnchor.constraint(lessThanOrEqualTo: trailing.leadingAnchor, constant: -5)
+            ])
+        } else {
+            constraints.append(nameRow.trailingAnchor.constraint(lessThanOrEqualTo: button.trailingAnchor, constant: -6))
+        }
+        NSLayoutConstraint.activate(constraints)
         return button
     }
+    private func fileTreeRowButton(_ row: FileTreeRow) -> NSButton {
+        // File tree = the shared row indented by depth, with no badges/stats accessory.
+        fileRowButton(
+            identifier: row.identifier,
+            iconSymbol: fileTreeIconName(for: row),
+            iconFallback: row.isFolder ? "folder" : "doc",
+            tint: fileTreeTint(for: row),
+            name: row.name,
+            selected: row.selected,
+            depth: row.depth
+        )
+    }
     private func fileTreeTint(for row: FileTreeRow) -> NSColor {
-        if let vcs = row.vcs,
-           let statusColor = fileTreeVcsColor(vcs) {
-            return statusColor
+        if let vcs = row.vcs, !vcs.isEmpty {
+            // Use the diff sidebar's exact status→color mapping so a changed file reads identically in
+            // both the Changes list and the Cmd+1 file tree (added/renamed previously diverged).
+            return diffStatusColor(status: vcs, vcs: vcs)
         }
         if row.isFolder {
             return row.selected ? theme.primaryText : theme.secondaryText
         }
-        switch row.language {
-        case "markdown":
-            return theme.accent
-        case "csv", "tsv":
-            return theme.syntaxString
-        case "shell":
-            return theme.additionText
-        case "javascript", "typescript":
-            return theme.syntaxNumber
-        case "swift":
-            return theme.accent
-        case "json", "yaml", "toml":
-            return theme.syntaxString
-        case "markup", "svg":
-            return theme.syntaxKeyword
-        default:
-            return theme.primaryText
-        }
+        // IntelliJ Project-view convention: a file name uses the neutral foreground — the file TYPE is
+        // conveyed by the icon SHAPE, not by tinting the name per language. Only VCS status (handled
+        // above) recolors a row. This drops the old per-language coloring that made every .md/.json/…
+        // row read as amber/yellow.
+        return theme.primaryText
     }
     func fileTreeVcsColor(_ status: String) -> NSColor? {
         switch status.lowercased() {
@@ -493,26 +522,50 @@ extension MainWindowController {
     }
     private func fileTreeIconName(for row: FileTreeRow) -> String {
         if row.isFolder {
-            return "folder"
+            return fileTreeModel.expandedFolders.contains(row.path) ? "folder.fill" : "folder"
         }
         switch row.language {
         case "markdown":
             return "doc.richtext"
         case "csv", "tsv":
             return "tablecells"
-        case "shell", "javascript", "typescript", "swift", "python", "ruby", "go", "rust", "java":
+        case "swift":
             return "chevron.left.forwardslash.chevron.right"
-        case "json", "yaml", "toml":
+        case "javascript", "typescript":
+            return "chevron.left.forwardslash.chevron.right"
+        case "python":
+            return "chevron.left.forwardslash.chevron.right"
+        case "ruby":
+            return "chevron.left.forwardslash.chevron.right"
+        case "go", "rust", "java", "kotlin", "scala", "groovy", "objc", "c", "cpp", "csharp":
+            return "chevron.left.forwardslash.chevron.right"
+        case "json":
             return "curlybraces"
-        case "markup":
-            return "chevron.left.forwardslash.chevron.right"
+        case "yaml", "toml":
+            return "list.bullet.indent"
+        case "css", "scss", "sass":
+            return "paintbrush"
+        case "markup", "html", "xml":
+            return "globe"
         case "svg":
             return "photo"
+        case "shell":
+            return "terminal"
+        case "gitignore":
+            return "arrow.triangle.branch"
+        case "dotenv":
+            return "lock"
+        case "makefile":
+            return "hammer"
+        case "dockerfile":
+            return "archivebox"
+        case "graphql", "http":
+            return "network"
         default:
             if isNativeImagePreviewPath(row.path) {
                 return "photo"
             }
-            return "doc"
+            return "doc.text"
         }
     }
     func preferredFileListingDirectory() -> URL {

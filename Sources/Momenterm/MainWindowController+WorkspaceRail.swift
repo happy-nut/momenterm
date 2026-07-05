@@ -189,6 +189,7 @@ extension MainWindowController {
     func configureRail() {
         railView.translatesAutoresizingMaskIntoConstraints = false
         railView.wantsLayer = true
+        railView.layer?.masksToBounds = true
         railView.layer?.backgroundColor = theme.railBackground.cgColor
         rootView.addSubview(railView)
 
@@ -218,7 +219,6 @@ extension MainWindowController {
 
         railStack.addArrangedSubview(railButton(symbol: "terminal", fallback: "T", action: #selector(showTerminalAction), label: "Terminal", shortcut: "Opt+F12"))
         railStack.addArrangedSubview(railButton(symbol: "plus.rectangle.on.folder", fallback: "W", action: #selector(openWorkspaceAction), label: "New Workspace", shortcut: "Cmd+N"))
-        railStack.addArrangedSubview(railButton(symbol: "arrow.triangle.2.circlepath", fallback: "R", action: #selector(reloadAction), label: "Reload", shortcut: "Cmd+R"))
         railStack.addArrangedSubview(railButton(symbol: "doc.text.magnifyingglass", fallback: "D", action: #selector(showChangesAction), label: "Changes", shortcut: "Cmd+0"))
         railStack.addArrangedSubview(railButton(symbol: "folder", fallback: "F", action: #selector(showFilesAction), label: "Files", shortcut: "Cmd+1"))
         railStack.addArrangedSubview(railButton(symbol: "questionmark.bubble", fallback: "Q", action: #selector(showQuestionsAction), label: "Questions", shortcut: "Cmd+Shift+?"))
@@ -234,7 +234,7 @@ extension MainWindowController {
             railView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
             railWidthConstraint!,
 
-            railStack.topAnchor.constraint(equalTo: railView.topAnchor, constant: 10),
+            railStack.topAnchor.constraint(equalTo: railView.safeAreaLayoutGuide.topAnchor, constant: 10),
             railStack.leadingAnchor.constraint(equalTo: railView.leadingAnchor),
             railStackWidthConstraint!,
 
@@ -243,8 +243,8 @@ extension MainWindowController {
             railBottomStack.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -10),
 
             workspaceStack.topAnchor.constraint(equalTo: railStack.bottomAnchor, constant: 14),
-            workspaceStack.leadingAnchor.constraint(equalTo: railView.leadingAnchor, constant: 8),
-            workspaceStack.trailingAnchor.constraint(equalTo: railView.trailingAnchor, constant: -8),
+            workspaceStack.leadingAnchor.constraint(equalTo: railView.leadingAnchor, constant: 6),
+            workspaceStack.trailingAnchor.constraint(equalTo: railView.trailingAnchor, constant: -6),
             workspaceStack.bottomAnchor.constraint(lessThanOrEqualTo: railBottomStack.topAnchor, constant: -10)
         ])
         updateRailActionRowsForWorkspaceRailState()
@@ -356,12 +356,49 @@ extension MainWindowController {
             return "\(index):button=\(rounded(frame.size)):image=\(rounded(imageSize)):scaling=\(button.imageScaling.rawValue)"
         }
     }
+    // "WORKSPACE" section label shown above the workspace switcher when the rail is expanded.
+    // Built as a plain NSView container (NOT an NSButton) so the many `arrangedSubviews.compactMap
+    // { $0 as? NSButton }` rail scans skip it and workspace indexing stays correct.
+    private func makeWorkspaceSectionHeader() -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.identifier = NSUserInterfaceItemIdentifier("workspaceSectionHeader")
+        let label = NSTextField(labelWithString: "WORKSPACE")
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.isBezeled = false
+        label.drawsBackground = false
+        label.isEditable = false
+        label.isSelectable = false
+        // All-caps, tracked-out, tertiary — a quiet header dividing the fixed actions from the
+        // workspace switcher.
+        label.attributedStringValue = NSAttributedString(
+            string: "WORKSPACE",
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
+                .foregroundColor: theme.tertiaryText,
+                .kern: 1.6
+            ]
+        )
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            container.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.railExpandedWidth - 12),
+            container.heightAnchor.constraint(equalToConstant: 24),
+            // Left-align with the workspace dots (same (railButtonSize-8)/2 leading).
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: (MomentermDesign.Metrics.railButtonSize - 8) / 2),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -5)
+        ])
+        return container
+    }
     func rebuildWorkspaceButtons() {
         workspaceStack.arrangedSubviews.forEach { view in
             workspaceStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
         workspaceStack.alignment = workspaceRailExpanded ? .leading : .centerX
+        // Section label above the list — expanded only (no room in the 38pt collapsed rail).
+        if workspaceRailExpanded {
+            workspaceStack.addArrangedSubview(makeWorkspaceSectionHeader())
+        }
         for (index, workspace) in workspaces.enumerated() {
             let active = workspace.id == activeWorkspaceId
             let pickerSelected = workspaceRailExpanded && index == selectedWorkspacePickerIndex
@@ -398,8 +435,12 @@ extension MainWindowController {
             button.layer?.backgroundColor = railBackground
             button.layer?.borderColor = railBorder
             button.layer?.borderWidth = railBorderWidth
-            button.image = workspaceRailExpanded ? nil : fixedRailSymbolImage(symbol: workspace.iconName, label: workspace.name)
-                ?? fixedRailSymbolImage(symbol: "diamond.fill", label: workspace.name)
+            if !workspaceRailExpanded, let circleImg = fixedRailSymbolImage(symbol: "circle.fill", label: workspace.name) {
+                circleImg.size = NSSize(width: 8, height: 8)
+                button.image = circleImg
+            } else {
+                button.image = nil
+            }
             button.imageScaling = .scaleNone
             button.imagePosition = .imageOnly
             button.contentTintColor = workspace.color
@@ -410,7 +451,7 @@ extension MainWindowController {
             button.lineBreakMode = .byTruncatingMiddle
             button.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: workspaceRailExpanded ? MomentermDesign.Metrics.railExpandedWidth - 16 : MomentermDesign.Metrics.railButtonSize),
+                button.widthAnchor.constraint(equalToConstant: workspaceRailExpanded ? MomentermDesign.Metrics.railExpandedWidth - 12 : MomentermDesign.Metrics.railButtonSize),
                 button.heightAnchor.constraint(equalToConstant: workspaceRailExpanded ? 40 : MomentermDesign.Metrics.railButtonSize)
             ])
             if workspaceRailExpanded {
@@ -468,8 +509,12 @@ extension MainWindowController {
     private func configureExpandedWorkspaceButton(_ button: NSButton, workspace: Workspace, branch: String?) {
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.image = fixedRailSymbolImage(symbol: workspace.iconName, label: workspace.name)
-            ?? fixedRailSymbolImage(symbol: "diamond.fill", label: workspace.name)
+        let circleImg = fixedRailSymbolImage(symbol: "circle.fill", label: workspace.name)
+        // Same 8pt dot as the collapsed rail. Matching the size (and the +8 leading inset below,
+        // which lands the dot's center at the same x as the collapsed centered dot) keeps the
+        // workspace dot visually pinned as the rail expands — it must not jump or resize.
+        circleImg?.size = NSSize(width: 8, height: 8)
+        icon.image = circleImg
         icon.contentTintColor = workspace.color
         icon.imageScaling = .scaleNone
         button.addSubview(icon)
@@ -530,7 +575,7 @@ extension MainWindowController {
         branchLabel.isHidden = branch == nil && statusSummary == nil
         button.addSubview(branchLabel)
 
-        // Latest agent notification text (cmux axis 2) — third line, only present when a
+        // Latest agent notification text — third line, only present when a
         // notification has landed for this workspace. Rank 3: tertiary text so it reads
         // as ambient status beneath the name/branch, not competing with them.
         let notification = workspace.lastNotification?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -547,11 +592,16 @@ extension MainWindowController {
 
         let branchVisible = branch != nil || statusSummary != nil
         let rowInset = MomentermDesign.Spacing.space3   // 8: icon/edge gutter
+        // Pin the dot's center to the exact x it has in the collapsed rail (a centered 8pt dot in a
+        // railButtonSize-wide button). The button's leading edge equals the workspace stack's leading
+        // in BOTH states, so offsetting the 8pt dot by (railButtonSize - 8)/2 lands its center on the
+        // collapsed dot's center — the dot then stays perfectly still as the rail expands/collapses.
+        let dotLeading = (MomentermDesign.Metrics.railButtonSize - 8) / 2
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: rowInset),
+            icon.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: dotLeading),
             icon.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 16),
-            icon.heightAnchor.constraint(equalToConstant: 16),
+            icon.widthAnchor.constraint(equalToConstant: 8),
+            icon.heightAnchor.constraint(equalToConstant: 8),
 
             nameView.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: rowInset),
             nameView.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -rowInset),
@@ -620,13 +670,39 @@ extension MainWindowController {
         workspaceRailExpanded = visible
         rebuildWorkspaceButtons()
         workspaceRailLastAnimatedTransition = animated ? (fromWidth, toWidth, workspaceRailAnimationDuration) : nil
+        var fadeInTextTargets: [NSView] = []
         if animated {
+            if visible {
+                for label in railActionTitleLabels + railActionShortcutLabels {
+                    label.isHidden = false
+                    label.alphaValue = 0
+                }
+                // The dots are pinned to a fixed x and are already visible in the collapsed rail, so
+                // keep them opaque and fade in ONLY the text — the workspace names/branches and the
+                // WORKSPACE header ease in while the dots hold perfectly still. This reads as a smooth
+                // expand instead of an instant swap.
+                fadeInTextTargets = workspaceStack.arrangedSubviews.flatMap { view -> [NSView] in
+                    if view.identifier?.rawValue == "workspaceSectionHeader" { return [view] }
+                    return view.subviews.filter { $0 is NSTextField }
+                }
+                for target in fadeInTextTargets { target.alphaValue = 0 }
+            }
+            // Pin the rebuilt rows at the CURRENT rail width before animating so the width change is the
+            // only geometry that moves. Without this the freshly-added expanded rows snap to their final
+            // positions and the whole panel reads as an instant jump instead of a slide.
+            rootView.layoutSubtreeIfNeeded()
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = workspaceRailAnimationDuration
+                context.duration = self.workspaceRailAnimationDuration
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                // allowsImplicitAnimation + a plain layoutSubtreeIfNeeded animates EVERY constraint
+                // changed in this block together (rail width, stack width, action-row widths). The
+                // per-constraint animator() calls before this left the width change un-animated on some
+                // layout passes, which is what made the panel pop open instead of sliding.
+                context.allowsImplicitAnimation = true
                 self.updateRailActionRowsForWorkspaceRailState(animated: true)
                 self.railWidthConstraint?.constant = toWidth
-                self.rootView.animator().layoutSubtreeIfNeeded()
+                self.rootView.layoutSubtreeIfNeeded()
+                for target in fadeInTextTargets { target.animator().alphaValue = 1 }
             }
         } else {
             updateRailActionRowsForWorkspaceRailState(animated: false)
@@ -635,7 +711,7 @@ extension MainWindowController {
         }
     }
     private func updateRailActionRowsForWorkspaceRailState(animated: Bool = false) {
-        let expandedWidth = MomentermDesign.Metrics.railExpandedWidth - 16
+        let expandedWidth = MomentermDesign.Metrics.railExpandedWidth - 12
         let rowWidth = workspaceRailExpanded ? expandedWidth : MomentermDesign.Metrics.railButtonSize
         let stackWidth = workspaceRailExpanded
             ? MomentermDesign.Metrics.railExpandedWidth
@@ -644,8 +720,37 @@ extension MainWindowController {
         for constraint in railActionRowWidthConstraints {
             constraint.constant = rowWidth
         }
-        for label in railActionTitleLabels + railActionShortcutLabels {
-            label.isHidden = !workspaceRailExpanded
+        if animated {
+            let targetAlpha: CGFloat = workspaceRailExpanded ? 1 : 0
+            let duration = workspaceRailAnimationDuration
+            for label in railActionTitleLabels + railActionShortcutLabels {
+                guard let layer = label.layer else { continue }
+                let anim = CABasicAnimation(keyPath: "opacity")
+                anim.fromValue = layer.presentation()?.opacity ?? layer.opacity
+                anim.toValue = Float(targetAlpha)
+                anim.duration = duration
+                anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                anim.fillMode = .forwards
+                anim.isRemovedOnCompletion = false
+                layer.add(anim, forKey: "labelOpacity")
+                layer.opacity = Float(targetAlpha)
+            }
+            if !workspaceRailExpanded {
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                    guard let self = self, !self.workspaceRailExpanded else { return }
+                    for label in self.railActionTitleLabels + self.railActionShortcutLabels {
+                        label.layer?.removeAnimation(forKey: "labelOpacity")
+                        label.isHidden = true
+                        label.alphaValue = 1
+                        label.layer?.opacity = 1
+                    }
+                }
+            }
+        } else {
+            for label in railActionTitleLabels + railActionShortcutLabels {
+                label.isHidden = !workspaceRailExpanded
+                label.alphaValue = 1
+            }
         }
     }
     func focusWorkspaceRailPicker() {
@@ -1022,6 +1127,7 @@ extension MainWindowController {
 
         let titleLabel = NSTextField(labelWithString: label)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.wantsLayer = true
         titleLabel.font = MomentermDesign.Fonts.sidebarSelected
         titleLabel.textColor = theme.primaryText
         titleLabel.lineBreakMode = .byTruncatingTail
@@ -1030,6 +1136,7 @@ extension MainWindowController {
 
         let shortcutLabel = NSTextField(labelWithString: shortcut)
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
+        shortcutLabel.wantsLayer = true
         shortcutLabel.font = MomentermDesign.Fonts.sidebar
         shortcutLabel.textColor = theme.secondaryText
         shortcutLabel.alignment = .right

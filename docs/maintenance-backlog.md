@@ -93,7 +93,7 @@
 - [ ] **4-2** SPM ↔ `build.sh` 이중 빌드 정합성 — 스모크의 하드코딩 파일 목록 vs glob
       불일치. `xctest` 미가용 우회 사유 문서화.
 - [ ] **4-3** libghostty 하드코딩 경로 문서화/파라미터화(재현성).
-- [ ] **4-4** 문서 동기화 — "Monacori" 역사적 프레이밍 정리, `parity-gap.md`를 완료
+- [ ] **4-4** 문서 동기화 — `parity-gap.md`를 완료
       로그로 재분류, README에 미링크 문서 3종 연결.
 - [ ] **4-5** 핵심 파일 주석 밀도 개선(`MainWindowController` 2.1%) — Tier 2 분할과 함께.
 

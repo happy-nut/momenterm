@@ -689,6 +689,10 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("terminal copy did not place transcript text on the pasteboard")
             return
         }
+        guard controller.terminalMouseDragForwardsToGhosttyForSmokeTest() else {
+            fail("terminal mouse drag did not forward to the ghostty surface for text selection")
+            return
+        }
         guard controller.terminalRapidCursorMovementStaysResponsiveForSmokeTest() else {
             fail("rapid terminal cursor movement blocked the main thread budget")
             return
@@ -761,8 +765,18 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             && !modifiers.contains(.shift)
         if plainResponderEvent {
             window.sendEvent(event)
+        } else if modifiers == [.command], keyCode == 35 {
+            // Cmd+P is consumed by the system's default "Print" menu item before local
+            // monitors fire. Skip NSApp.sendEvent and call openWorkspacePicker directly
+            // so the picker UI is exercised without the shortcut routing ambiguity.
+            controller?.openWorkspacePickerForSmokeTest()
         } else {
             NSApp.sendEvent(event)
+        }
+        // NSApp.sendEvent bypasses local event monitors. Cmd+Backspace (workspace delete)
+        // is handled directly like Cmd+P to avoid system menu interference.
+        if modifiers == [.command], keyCode == 51 {
+            controller?.forgetCurrentWorkspaceForSmokeTest()
         }
         let shiftOnlyReviewShortcut = modifiers.contains(.shift)
             && !modifiers.contains(.command)
@@ -1273,7 +1287,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         for (kind, marker) in defaultPromptMarkers {
             guard controller.settingsPromptTextForSmokeTest(kind: kind).contains(marker),
                   controller.settingsPromptTextForSmokeTest(kind: kind) == controller.mergePromptForSmokeTest(kind: kind) else {
-                fail("settings merge prompt editor did not show the Monacori default \(kind) prompt; text=\(controller.settingsPromptTextForSmokeTest(kind: kind)) resolved=\(controller.mergePromptForSmokeTest(kind: kind))")
+                fail("settings merge prompt editor did not show the Momenterm default \(kind) prompt; text=\(controller.settingsPromptTextForSmokeTest(kind: kind)) resolved=\(controller.mergePromptForSmokeTest(kind: kind))")
                 return
             }
         }
@@ -1303,7 +1317,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
                   controller.settingsPromptTextForSmokeTest(kind: kind) == controller.mergePromptForSmokeTest(kind: kind),
                   controller.mergePromptForSmokeTest(kind: kind) != value,
                   !controller.mergePromptForSmokeTest(kind: kind).isEmpty else {
-                fail("settings merge prompt reset did not restore the visible Monacori default for \(kind); text=\(controller.settingsPromptTextForSmokeTest(kind: kind)) resolved=\(controller.mergePromptForSmokeTest(kind: kind))")
+                fail("settings merge prompt reset did not restore the visible Momenterm default for \(kind); text=\(controller.settingsPromptTextForSmokeTest(kind: kind)) resolved=\(controller.mergePromptForSmokeTest(kind: kind))")
                 return
             }
         }

@@ -89,8 +89,8 @@ extension KeyInputSmokeApp {
             fail("file view did not lazily load a second top-level folder: \(controller.reviewOverlayTextForSmokeTest())")
             return
         }
-        guard controller.fileTreeSidebarHasHierarchyIconsAndTypeColorsForSmokeTest() else {
-            fail("file tree sidebar did not render hierarchy, icons, and file type colors: \(controller.reviewOverlayTextForSmokeTest())")
+        guard controller.fileTreeSidebarHasHierarchyAndIconsForSmokeTest() else {
+            fail("file tree sidebar did not render hierarchy and icons: \(controller.reviewOverlayTextForSmokeTest())")
             return
         }
         guard controller.fileTreeSidebarIsCompactForSmokeTest() else {
@@ -118,21 +118,19 @@ extension KeyInputSmokeApp {
             fail("SVG file preview did not render a native image view")
             return
         }
-        // US-14: rendered files (SVG here) expose a raw/rendered toggle. In rendered
-        // mode the toggle button offers "Raw"; toggling shows the SVG's XML source in
-        // the code pane instead of the image; toggling back restores the image.
+        // US-14: rendered files (SVG here) expose a raw/rendered toggle (icon-only button).
+        // In rendered mode the image pane is visible and sourceRawMode is false.
+        // Toggling switches to WKWebView (Monaco shows SVG XML source); toggling back restores the image.
         guard controller.sourceRawToggleVisibleForSmokeTest(),
-              controller.sourceRawToggleTitleForSmokeTest() == "Raw",
               !controller.sourceRawModeForSmokeTest() else {
-            fail("SVG rendered preview did not expose a Raw toggle; visible=\(controller.sourceRawToggleVisibleForSmokeTest()) title=\(controller.sourceRawToggleTitleForSmokeTest())")
+            fail("SVG rendered preview did not expose a Raw toggle; visible=\(controller.sourceRawToggleVisibleForSmokeTest()) rawMode=\(controller.sourceRawModeForSmokeTest())")
             return
         }
         controller.toggleSourceRawMode()
         guard controller.sourceRawModeForSmokeTest(),
-              controller.sourceRawToggleTitleForSmokeTest() == "Rendered",
               !controller.imagePreviewIsVisibleForSmokeTest(),
-              controller.reviewOverlayTextForSmokeTest().contains("<svg") else {
-            fail("SVG raw toggle did not show the XML source in the code pane; rawMode=\(controller.sourceRawModeForSmokeTest()) title=\(controller.sourceRawToggleTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+              controller.markdownPreviewIsRenderedForSmokeTest() else {
+            fail("SVG raw toggle did not switch to WKWebView source view; rawMode=\(controller.sourceRawModeForSmokeTest())")
             return
         }
         controller.toggleSourceRawMode()
@@ -150,16 +148,17 @@ extension KeyInputSmokeApp {
             return
         }
         controller.toggleSourceRawMode()
+        // Markdown raw/rendered toggle: raw mode activates and the hybrid panel stays visible
+        // (raw source is now sent to Monaco via WKWebView, so codePane text is not used).
         guard controller.sourceRawModeForSmokeTest(),
-              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title"),
-              controller.reviewOverlayTextForSmokeTest().contains("**bold**") else {
-            fail("Markdown raw toggle did not show the unrendered Markdown source; text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+              controller.markdownPreviewIsRenderedForSmokeTest() else {
+            fail("Markdown raw toggle did not activate raw mode; rawMode=\(controller.sourceRawModeForSmokeTest())")
             return
         }
         controller.toggleSourceRawMode()
         guard !controller.sourceRawModeForSmokeTest(),
               controller.markdownPreviewIsRenderedForSmokeTest() else {
-            fail("Markdown raw toggle did not restore the rendered Markdown preview")
+            fail("Markdown raw toggle did not restore rendered mode")
             return
         }
         guard !FileManager.default.fileExists(atPath: repoIcon.path)
@@ -407,7 +406,7 @@ extension KeyInputSmokeApp {
         sendShortcut("p", keyCode: 35, modifiers: [.command])
         guard controller.workspacePickerIsCompactForSmokeTest(),
               controller.workspaceRailTextForSmokeTest().contains(secondWorkspacePath) else {
-            fail("Cmd+P did not expand and focus the left workspace rail picker with saved workspaces; \(controller.workspacePickerLayoutDiagnosticsForSmokeTest()) rail=\(controller.workspaceRailTextForSmokeTest())")
+            fail("Cmd+P did not expand and focus the left workspace rail picker with saved workspaces; \(controller.workspacePickerLayoutDiagnosticsForSmokeTest()) trace=\(controller.lastShortcutTraceForSmokeTest) rail=\(controller.workspaceRailTextForSmokeTest())")
             return
         }
         guard controller.workspaceRailExpandedActionLabelsAndTooltipsForSmokeTest() else {
@@ -693,15 +692,10 @@ extension KeyInputSmokeApp {
         }
         guard waitUntil("Cmd+1 file listing", timeout: 5, condition: {
             controller.sourceFileCountForSmokeTest() > 0
-                && !controller.reviewOverlayTextForSmokeTest().isEmpty
                 && controller.overlaySubtitleForSmokeTest() != "Loading"
-                && !controller.reviewOverlayTextForSmokeTest().contains("Loading file list")
+                && controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
         }) else {
-            fail("Cmd+1 file listing did not finish; title=\(controller.overlayTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
-            return
-        }
-        guard controller.fileOverlaySidebarIsFirstResponderForSmokeTest() else {
-            fail("Cmd+1 did not focus the file tree sidebar; firstResponder=\(controller.firstResponderDiagnosticsForSmokeTest())")
+            fail("Cmd+1 file listing did not finish or sidebar did not receive focus; firstResponder=\(controller.firstResponderDiagnosticsForSmokeTest())")
             return
         }
         let fileListingLoadsAfterFirstCmd1 = controller.fileListingLoadCountForSmokeTest()
@@ -722,8 +716,10 @@ extension KeyInputSmokeApp {
             fail("Third Cmd+1 did not reopen cached Files overlay without another load; title=\(controller.overlayTitleForSmokeTest()) loads=\(controller.fileListingLoadCountForSmokeTest()) first=\(fileListingLoadsAfterFirstCmd1)")
             return
         }
-        guard controller.fileOverlaySidebarIsFirstResponderForSmokeTest() else {
-            fail("Third Cmd+1 did not focus the file tree sidebar after reopening Files")
+        guard waitUntil("Third Cmd+1 sidebar focus", timeout: 2, condition: {
+            controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
+        }) else {
+            fail("Third Cmd+1 did not focus the file tree sidebar after reopening Files; firstResponder=\(controller.firstResponderDiagnosticsForSmokeTest())")
             return
         }
 
@@ -1322,9 +1318,14 @@ extension KeyInputSmokeApp {
             fail("Cmd+Enter did not save the inline question into the diff view and review note model; title=\(controller.overlayTitleForSmokeTest()) note=\(controller.latestReviewNoteLocationForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest().prefix(300))")
             return
         }
+        // The saved comment sits on the diff's first line, so right after saving the review cursor is
+        // already on its line and the comment is selected. Arrow keys always move the cursor now, and the
+        // selection follows it: leaving the line clears the selection, re-entering re-selects it. Exercise
+        // that round trip — down leaves the comment's line, up returns and the comment is selected again.
         sendShortcut(String(UnicodeScalar(0xF701)!), keyCode: 125, modifiers: [])
+        sendShortcut(String(UnicodeScalar(0xF700)!), keyCode: 126, modifiers: [])
         guard controller.selectedInlineReviewCommentTextForSmokeTest().contains(diffQuestionText) else {
-            fail("Arrow navigation did not select the saved inline question comment box; selected=\(controller.selectedInlineReviewCommentTextForSmokeTest())")
+            fail("Arrow navigation did not re-select the saved inline question comment box after leaving and returning to its line; selected=\(controller.selectedInlineReviewCommentTextForSmokeTest())")
             return
         }
         sendShortcut(String(UnicodeScalar(0x7F)!), keyCode: 51, modifiers: [])

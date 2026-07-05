@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body,#editor{height:100%;background:#1e1e1e;overflow:hidden}
+#loading{
+  display:flex;align-items:center;justify-content:center;
+  height:100%;color:#666;font-family:-apple-system,sans-serif;font-size:13px;
+}
+</style>
+</head>
+<body>
+<div id="loading">Loading diff…</div>
+<div id="editor" style="display:none"></div>
+
+<script>
+'use strict';
+var _diffEditor=null,_loaded=false,_pending=null;
+
+// Surface any hard failure on-screen instead of silently sitting on "Loading diff…".
+window.onerror=function(message,source,lineno,colno){
+  var el=document.getElementById('loading');
+  if(el){el.style.display='flex';el.style.color='#f57c7c';
+    el.textContent='JS error: '+message+' ('+lineno+':'+colno+')';}
+  return false;
+};
+// This bundle ships only vs/editor/*, not vs/base/worker/, so Monaco cannot spawn its default
+// language web worker. Route it to a tiny inline no-op worker — the side-by-side diff renders
+// without the worker (only worker-backed extras like JSON schema validation are skipped).
+window.MonacoEnvironment={getWorkerUrl:function(){
+  return 'data:text/javascript;charset=utf-8,'+encodeURIComponent('self.onmessage=function(){};');
+}};
+
+window.addEventListener('message',function(e){
+  var msg=e.data;
+  if(!msg||!msg.type)return;
+  if(msg.type==='loadDiff')loadDiff(msg);
+});
+
+function loadDiff(msg){
+  var original=msg.original||'';
+  var modified=msg.modified||'';
+  var lang=(msg.language||'').toLowerCase();
+  if(_loaded){updateDiff(original,modified,lang);return;}
+  _pending={original:original,modified:modified,lang:lang};
+  if(document.getElementById('_monacoLoader'))return;
+  var s=document.createElement('script');
+  s.id='_monacoLoader';
+  s.src='./vs/loader.js';
+  s.onerror=function(){
+    document.getElementById('loading').textContent='Failed to load diff renderer.';
+    document.getElementById('loading').style.color='#f57c7c';
+  };
+  s.onload=function(){
+    require.config({paths:{vs:'./vs'}});
+    require(['vs/editor/editor.main'],function(){
+      _loaded=true;
+      document.getElementById('loading').style.display='none';
+      document.getElementById('editor').style.display='block';
+      var p=_pending;_pending=null;
+      if(p){
+        _diffEditor=monaco.editor.createDiffEditor(document.getElementById('editor'),{
+          theme:'vs-dark',readOnly:true,
+          minimap:{enabled:false},scrollBeyondLastLine:false,
+          fontSize:11.5,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
+          renderSideBySide:true,automaticLayout:true,
+          contextmenu:false,
+          diffWordWrap:'off',
+          scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}
+        });
+        _diffEditor.setModel({
+          original:monaco.editor.createModel(p.original,mapLang(p.lang)),
+          modified:monaco.editor.createModel(p.modified,mapLang(p.lang))
+        });
+      }
+    },function(err){
+      var el=document.getElementById('loading');
+      el.style.display='flex';el.style.color='#f57c7c';
+      el.textContent='require failed: '+(err&&(err.message||String(err))||'unknown');
+    });
+  };
+  document.head.appendChild(s);
+}
+
+function updateDiff(original,modified,lang){
+  if(!_diffEditor){loadDiff({original:original,modified:modified,language:lang});return;}
+  var oldModel=_diffEditor.getModel();
+  var mLang=mapLang(lang);
+  var newOriginal=monaco.editor.createModel(original,mLang);
+  var newModified=monaco.editor.createModel(modified,mLang);
+  _diffEditor.setModel({original:newOriginal,modified:newModified});
+  if(oldModel){oldModel.original.dispose();oldModel.modified.dispose();}
+}
+
+var LANG={
+  swift:'swift',js:'javascript',javascript:'javascript',jsx:'javascript',
+  ts:'typescript',typescript:'typescript',tsx:'typescript',
+  py:'python',python:'python',rs:'rust',rust:'rust',
+  go:'go',java:'java',kt:'kotlin',kotlin:'kotlin',scala:'scala',
+  c:'c',cpp:'cpp',cc:'cpp',cxx:'cpp',h:'cpp',hpp:'cpp',
+  cs:'csharp',css:'css',scss:'scss',less:'less',
+  html:'html',xml:'xml',svg:'xml',json:'json',
+  yaml:'yaml',yml:'yaml',toml:'ini',ini:'ini',
+  sh:'shell',bash:'shell',zsh:'shell',
+  sql:'sql',rb:'ruby',ruby:'ruby',php:'php',
+  dart:'dart',lua:'lua',dockerfile:'dockerfile',makefile:'makefile',
+  txt:'plaintext',text:'plaintext',log:'plaintext'
+};
+function mapLang(l){return LANG[l]||'plaintext';}
+</script>
+</body>
+</html>

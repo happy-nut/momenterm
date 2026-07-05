@@ -1,7 +1,7 @@
 import Foundation
 
 // Parses agent-notification escape sequences out of terminal output so momenterm
-// can surface "agent is waiting / done" the way cmux does. Pure logic (bytes/text
+// can surface "agent is waiting / done" the way agent-aware terminals do. Pure logic (bytes/text
 // in, notifications out) so it can be regression-tested in isolation.
 //
 // Recognized sequences (terminator is BEL 0x07 or ST = ESC \):

@@ -1,16 +1,16 @@
-# Monacori Parity Gap (Closed)
+# Native Review Parity Gap (Closed)
 
-> Status: **closed**. The Monacori→native parity effort is complete — every item
+> Status: **closed**. The port-to-native effort is complete — every item
 > below is a shipped, verified capability, not an open gap. This file is kept as
 > the historical completion log and as the forbidden-runtime-marker scan contract
 > (see Verification). Current improvement work lives in
 > [maintenance-backlog.md](maintenance-backlog.md).
 
-Momenterm is a native macOS port experiment. The target was functional parity with Monacori's local review loop without Electron, Node, or Monacori runtime artifacts.
+Momenterm is a native macOS port experiment. The target was functional parity with the original Electron-based local review loop without any Electron, Node, or bundled JS runtime artifacts.
 
 ## Closed Action Items
 
-- Remove runtime dependency on Monacori: native Swift builds the review document, welcome page, Git history, commit diff, source metadata, and HTTP requests.
+- Remove runtime dependency on the bundled JS review engine: native Swift builds the review document, welcome page, Git history, commit diff, source metadata, and HTTP requests.
 - Preserve local review state: comments, viewed files, memo, recent files, UI restore, and theme are stored locally and mirrored through the native settings bridge.
 - Implement line review comments: questions and change requests can be attached from diff or source rows, edited, deleted, restored, and shown as per-file badges.
 - Implement merged AI handoff: comments roll up into a prompt with file, line, kind, code context, and text; the prompt can be sent into the integrated terminal.
@@ -24,10 +24,10 @@ Momenterm is a native macOS port experiment. The target was functional parity wi
 - Implement non-Git folder handling: the app still opens the terminal-first shell, Diff shows a Git guidance notice, Changes stays non-interactive, and Files is populated by a native filesystem scan.
 - Implement settings: Darcula/light theme, language, plan/question/change prompt templates, reset, and saved-state feedback are selectable in native-rendered settings and persist through the native settings bridge.
 - Implement HTTP client surface: native URLSession-backed request bridge is exposed through an in-app dock.
-- Match Monacori native-core review contracts: staged changes are included in normal review mode, rename detection is enabled, large or binary untracked files use binary-style diff markers, source metadata includes language/change/signature fields, file state signatures match the review payload shape, and HTTP client environments are collected natively.
-- Add direct A/B parity smoke: `scripts/ab-parity-smoke.sh` runs Monacori's `buildDiffReview` and Momenterm's native core against the same fixture Git repositories and compares review counts, review signatures, update keys, file states, source metadata, lazy source data, HTTP environments, lazy body counts, app shell markers, and Darcula markers across modified, staged, untracked, rename/delete/image, and private-env cases.
+- Match the original native-core review contracts: staged changes are included in normal review mode, rename detection is enabled, large or binary untracked files use binary-style diff markers, source metadata includes language/change/signature fields, file state signatures match the review payload shape, and HTTP client environments are collected natively.
+- Add direct A/B parity smoke: `scripts/ab-parity-smoke.sh` runs the reference `buildDiffReview` and Momenterm's native core against the same fixture Git repositories and compares review counts, review signatures, update keys, file states, source metadata, lazy source data, HTTP environments, lazy body counts, app shell markers, and Darcula markers across modified, staged, untracked, rename/delete/image, and private-env cases.
 - Implement watch-refresh safety: diff updates refresh panels in place, remap comments, reload source data through the native file bridge, and defer DOM replacement while a comment composer is open.
-- Verify app packaging boundary: launch smoke and package script confirm the app starts without copied Node, Electron, or Monacori resources.
+- Verify app packaging boundary: launch smoke and package script confirm the app starts without copied Node, Electron, or bundled JS runtime resources.
 
 ## Verification Contract
 
@@ -41,7 +41,7 @@ Run these from the repository root:
 ./scripts/pty-smoke.sh /path/to/repo
 ./scripts/package-app.sh
 ./scripts/launch-smoke.sh /path/to/repo
-rg -n "monacori/dist|monacori-bridge|MONACORI_DIST|NODE_BIN|libnode|buildDiffReview|renderWelcomeHtml|performHttpRequest|Support/" Sources/Momenterm scripts Package.swift README.md -g '!*.app' -g '!ab-parity-smoke.mjs'
+rg -n "NODE_BIN|libnode|buildDiffReview|renderWelcomeHtml|performHttpRequest|Support/" Sources/Momenterm scripts Package.swift README.md -g '!*.app' -g '!ab-parity-smoke.mjs'
 ```
 
-The core smoke test checks native parity markers in generated HTML. The parity smoke boots the embedded client script in a VM, calls the real syntax highlighter, and verifies each shortcut, settings surface, and Darcula visual token one by one. The A/B parity smoke compares current Monacori build output against Momenterm native output for representative Git states. The runtime scan rejects known Monacori runtime markers in the shipped native app sources and scripts. The PTY smoke test runs with polluted npm/Node locale environment variables and verifies the spawned shell receives a clean UTF-8 environment.
+The core smoke test checks native parity markers in generated HTML. The parity smoke boots the embedded client script in a VM, calls the real syntax highlighter, and verifies each shortcut, settings surface, and Darcula visual token one by one. The A/B parity smoke compares the reference build output against Momenterm native output for representative Git states. The runtime scan rejects known JS-runtime markers in the shipped native app sources and scripts. The PTY smoke test runs with polluted npm/Node locale environment variables and verifies the spawned shell receives a clean UTF-8 environment.

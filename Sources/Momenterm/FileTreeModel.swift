@@ -62,7 +62,20 @@ final class FileTreeModel {
         let selectedIdentifier = self.selectedIdentifier
         let expanded = expandedFolders
         let indexed = files.enumerated().sorted { lhs, rhs in
-            lhs.element.path.localizedStandardCompare(rhs.element.path) == .orderedAscending
+            // IntelliJ convention: directories before files at each tree level,
+            // both groups sorted alphabetically (case-insensitive).
+            let lParts = lhs.element.path.split(separator: "/").map(String.init)
+            let rParts = rhs.element.path.split(separator: "/").map(String.init)
+            let minLen = min(lParts.count, rParts.count)
+            for i in 0..<minLen {
+                let l = lParts[i], r = rParts[i]
+                if l == r { continue }
+                let lIsDir = i < lParts.count - 1 || (i == lParts.count - 1 && lhs.element.language == "folder")
+                let rIsDir = i < rParts.count - 1 || (i == rParts.count - 1 && rhs.element.language == "folder")
+                if lIsDir != rIsDir { return lIsDir }
+                return l.localizedStandardCompare(r) == .orderedAscending
+            }
+            return lParts.count < rParts.count
         }
         let folderVCS = aggregateFolderVCS(files: files)
         var emittedFolders = Set<String>()
@@ -177,7 +190,9 @@ final class FileTreeModel {
     }
 
     private func strongerVCSStatus(_ current: String?, _ next: String) -> String {
-        let rank: [String: Int] = ["edited": 1, "staged": 2, "new": 3]
+        // A folder inherits the strongest status beneath it: a new (untracked) file outranks an added
+        // one, which outranks a plain modification. "deleted" sits at the modification tier.
+        let rank: [String: Int] = ["deleted": 1, "edited": 1, "staged": 2, "added": 2, "new": 3]
         return (rank[next, default: 0] > rank[current ?? "", default: 0]) ? next : (current ?? next)
     }
 }

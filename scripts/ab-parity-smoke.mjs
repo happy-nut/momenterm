@@ -41,7 +41,7 @@ function initRepo(name) {
   run("git", ["config", "user.email", "native-model@example.com"], { cwd: dir });
   run("git", ["config", "user.name", "Native Model"], { cwd: dir });
   write(path.join(dir, "README.md"), "# fixture\n");
-  write(path.join(dir, ".gitignore"), ".monacori/\n");
+  write(path.join(dir, ".gitignore"), ".momenterm/\n");
   run("git", ["add", "."], { cwd: dir });
   run("git", ["commit", "-q", "-m", "base"], { cwd: dir });
   return dir;
@@ -84,7 +84,7 @@ function scenarioSourceAndEnv() {
   write(path.join(dir, "api/request.http"), "GET https://example.test\n");
   write(path.join(dir, "http-client.env.json"), JSON.stringify({ dev: { host: "example.test", port: 443, secure: true } }, null, 2));
   write(path.join(dir, "http-client.private.env.json"), JSON.stringify({ dev: { host: "private.example.test", token: "secret" } }, null, 2));
-  write(path.join(dir, ".monacori/plan.md"), "# Plan\n\nNative parity item.\n");
+  write(path.join(dir, ".momenterm/plan.md"), "# Plan\n\nNative source item.\n");
   run("git", ["add", "data/table.csv", "api/request.http", "http-client.env.json", "http-client.private.env.json"], { cwd: dir });
   run("git", ["commit", "-q", "-m", "add source env"], { cwd: dir });
   write(path.join(dir, "data/table.csv"), "name,count\nalpha,1\nbeta,3\n");
@@ -165,7 +165,7 @@ try {
   note("untracked text: native added file diff", hasPath(cases["untracked text"].diffFiles, "notes/new.md"));
   note("untracked text: source includes new file", hasPath(cases["untracked text"].sourceFiles, "notes/new.md"));
   note("untracked binary: large binary diff capped", cases["untracked binary"].diffFiles.some((file) => file.binary || JSON.stringify(file).includes("Binary files /dev/null")));
-  note("source env: source includes plan", hasPath(cases["source env"].sourceFiles, ".monacori/plan.md"));
+  note("source env: source includes plan", hasPath(cases["source env"].sourceFiles, ".momenterm/plan.md"));
   note("source env: HTTP environments parsed", JSON.stringify(cases["source env"].httpEnvironments).includes("example.test"));
   note("rename delete image: rename diff present", hasPath(cases["rename delete image"].diffFiles, "src/new-name.swift"));
   note("rename delete image: delete diff present", hasPath(cases["rename delete image"].diffFiles, "src/remove-me.txt"));

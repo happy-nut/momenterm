@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression smoke for the Momenterm control-socket wire protocol (cmux axis 4).
+# Regression smoke for the Momenterm control-socket wire protocol.
 # Compiles the pure MomentermCommand encode/decode in isolation (no AppKit, no
 # socket, no MainWindowController) and pins the command -> JSON-line -> command
 # round-trip plus graceful nil on malformed/unknown/partial input. Then confirms

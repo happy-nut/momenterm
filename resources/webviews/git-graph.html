@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:#1e1e1e;color:#d4d4d4;overflow:hidden}
+#graph{height:100%;overflow-y:auto;overflow-x:hidden}
+.row{
+  display:flex;align-items:center;padding:0 10px;
+  min-height:38px;cursor:pointer;border-bottom:1px solid #252525;
+  user-select:none;
+}
+.row:hover{background:#2a2a2a}
+.row.selected{background:#094771}
+.svg-col{flex-shrink:0;overflow:hidden}
+.meta{flex:1;min-width:0;padding-left:8px}
+.msg{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+.sub{font-size:11px;color:#777;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.hash{font-family:monospace;color:#4da1f5}
+.badges{display:inline-flex;gap:4px;margin-bottom:2px;flex-wrap:wrap}
+.badge{
+  display:inline-block;padding:0 5px;border-radius:3px;font-size:10px;
+  line-height:16px;white-space:nowrap;
+}
+.badge-branch{background:#2b4a1a;color:#4ec94e;border:1px solid #3d6b28}
+.badge-remote{background:#1a2f4a;color:#4da1f5;border:1px solid #284a6b}
+.badge-tag{background:#4a3a1a;color:#e8c060;border:1px solid #6b5428}
+.badge-head{background:#4a2a4a;color:#c97be6;border:1px solid #6b3d6b}
+#empty{
+  display:flex;align-items:center;justify-content:center;
+  height:100%;color:#555;font-family:-apple-system,sans-serif;font-size:13px;
+}
+</style>
+</head>
+<body>
+<div id="graph"><div id="empty">No commits</div></div>
+
+<script>
+'use strict';
+var COLORS=['#4da1f5','#e8c060','#4ec94e','#f57c7c','#c97be6','#4dd0e1','#f5a742','#ff9800'];
+var ROW_H=38,LANE_W=14,DOT_R=3.5,LINE_W=1.5;
+var _selected=null,_commits=[];
+
+window.addEventListener('message',function(e){
+  var msg=e.data;
+  if(!msg||!msg.type)return;
+  if(msg.type==='loadGraph')render(msg.commits||[]);
+  else if(msg.type==='selectCommit')highlight(msg.hash);
+});
+
+function render(commits){
+  _commits=commits;
+  var container=document.getElementById('graph');
+  if(!commits.length){
+    container.innerHTML='<div id="empty">No commits</div>';
+    return;
+  }
+  container.innerHTML='';
+  var lanes=assignLanes(commits);
+  var svgW=Math.max((lanes.max+1)*LANE_W+LANE_W/2,LANE_W*2);
+
+  commits.forEach(function(c,i){
+    var row=document.createElement('div');
+    row.className='row'+(c.hash===_selected?' selected':'');
+    row.dataset.hash=c.hash;
+
+    var myLane=lanes.lane[c.hash]||0;
+    var myX=(myLane+0.5)*LANE_W;
+    var myColor=COLORS[myLane%COLORS.length];
+
+    // Build SVG graph column
+    var svg=buildSVG(i,commits,lanes,svgW,myX,myColor,c.hash);
+    svg.className='svg-col';
+    row.appendChild(svg);
+
+    // Meta column
+    var meta=document.createElement('div');
+    meta.className='meta';
+
+    // Ref badges
+    var refs=c.refs||[];
+    if(refs.length){
+      var bd=document.createElement('div');
+      bd.className='badges';
+      refs.forEach(function(ref){
+        var b=document.createElement('span');
+        var cl='badge ';
+        if(ref==='HEAD')cl+='badge-head';
+        else if(ref.startsWith('tag:'))cl+='badge-tag';
+        else if(ref.includes('/'))cl+='badge-remote';
+        else cl+='badge-branch';
+        b.className=cl;
+        b.textContent=ref.replace(/^tag:\s*/,'');
+        bd.appendChild(b);
+      });
+      meta.appendChild(bd);
+    }
+
+    var msg=document.createElement('div');
+    msg.className='msg';
+    msg.textContent=c.message||'(no message)';
+    meta.appendChild(msg);
+
+    var sub=document.createElement('div');
+    sub.className='sub';
+    var shortHash=(c.hash||'').substring(0,7);
+    sub.innerHTML='<span class="hash">'+shortHash+'</span> · '+(c.author||'')+' · '+(c.date||'');
+    meta.appendChild(sub);
+
+    row.appendChild(meta);
+    row.addEventListener('click',function(){selectRow(c.hash);});
+    container.appendChild(row);
+  });
+}
+
+function buildSVG(i,commits,lanes,svgW,myX,myColor,hash){
+  var ns='http://www.w3.org/2000/svg';
+  var svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('width',svgW);
+  svg.setAttribute('height',ROW_H);
+
+  // Draw lines for lanes that pass through this row
+  var laneSet={};
+  if(i<commits.length-1){
+    // Lines coming out downward: each commit's lane continues to its first parent
+    for(var j=0;j<=i;j++){
+      var c=commits[j];
+      if(!c.parents||!c.parents.length)continue;
+      var firstParentIdx=commits.findIndex(function(x){return x.hash===c.parents[0];});
+      if(firstParentIdx>i){
+        // This lane passes through row i
+        var l=lanes.lane[c.hash]||0;
+        laneSet[l]=true;
+      }
+    }
+  }
+  // Draw vertical continuation lines
+  for(var l in laneSet){
+    var lx=(parseInt(l)+0.5)*LANE_W;
+    var lc=COLORS[parseInt(l)%COLORS.length];
+    addLine(svg,ns,lx,0,lx,ROW_H,lc,LINE_W);
+  }
+
+  // Draw lines from this commit to its parents
+  var commit=commits[i];
+  var myLane=lanes.lane[commit.hash]||0;
+  var myX=(myLane+0.5)*LANE_W;
+
+  if(i>0){
+    addLine(svg,ns,myX,0,myX,ROW_H/2,myColor,LINE_W);
+  }
+  if(i<commits.length-1){
+    // Only draw downward line if there's a parent below
+    var hasParentBelow=commit.parents&&commit.parents.some(function(p){
+      return commits.findIndex(function(x){return x.hash===p;})>i;
+    });
+    if(hasParentBelow){
+      addLine(svg,ns,myX,ROW_H/2,myX,ROW_H,myColor,LINE_W);
+    }
+  }
+
+  // Draw connections to non-first parents (merge lines)
+  if(commit.parents){
+    for(var pi=1;pi<commit.parents.length;pi++){
+      var parentLane=lanes.lane[commit.parents[pi]]||0;
+      var px=(parentLane+0.5)*LANE_W;
+      var pc=COLORS[parentLane%COLORS.length];
+      // Draw curved merge line
+      var mid=(myX+px)/2;
+      var path=document.createElementNS(ns,'path');
+      path.setAttribute('d','M'+myX+','+(ROW_H/2)+' Q'+mid+','+ROW_H+' '+px+','+ROW_H);
+      path.setAttribute('stroke',pc);
+      path.setAttribute('stroke-width',LINE_W);
+      path.setAttribute('fill','none');
+      svg.appendChild(path);
+    }
+  }
+
+  // Dot
+  var circle=document.createElementNS(ns,'circle');
+  circle.setAttribute('cx',myX);
+  circle.setAttribute('cy',ROW_H/2);
+  circle.setAttribute('r',DOT_R);
+  circle.setAttribute('fill',myColor);
+  svg.appendChild(circle);
+
+  return svg;
+}
+
+function addLine(svg,ns,x1,y1,x2,y2,color,width){
+  var l=document.createElementNS(ns,'line');
+  l.setAttribute('x1',x1);l.setAttribute('y1',y1);
+  l.setAttribute('x2',x2);l.setAttribute('y2',y2);
+  l.setAttribute('stroke',color);l.setAttribute('stroke-width',width);
+  svg.appendChild(l);
+}
+
+function assignLanes(commits){
+  var lane={};
+  var laneInUse={};
+
+  commits.forEach(function(c){
+    if(lane[c.hash]===undefined){
+      var l=0;
+      while(laneInUse[l])l++;
+      lane[c.hash]=l;
+    }
+    var myLane=lane[c.hash];
+    laneInUse[myLane]=true;
+
+    var parents=c.parents||[];
+
+    // First parent inherits myLane (branch continues straight down).
+    // If first parent already has a different lane, myLane terminates here.
+    if(parents[0]){
+      if(lane[parents[0]]===undefined){
+        lane[parents[0]]=myLane; // lane stays in use via the parent
+      } else {
+        delete laneInUse[myLane]; // branch ends — lane is now free
+      }
+    } else {
+      delete laneInUse[myLane]; // root commit
+    }
+
+    // Merge parents each get their own lane (if not already assigned).
+    for(var pi=1;pi<parents.length;pi++){
+      var p=parents[pi];
+      if(lane[p]===undefined){
+        var nl=0;
+        while(laneInUse[nl])nl++;
+        lane[p]=nl;
+        laneInUse[nl]=true;
+      }
+    }
+  });
+
+  var maxLane=0;
+  for(var h in lane)if(lane[h]>maxLane)maxLane=lane[h];
+  return{lane:lane,max:maxLane};
+}
+
+function selectRow(hash){
+  _selected=hash;
+  document.querySelectorAll('.row').forEach(function(r){
+    r.classList.toggle('selected',r.dataset.hash===hash);
+  });
+  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.commitSelected){
+    window.webkit.messageHandlers.commitSelected.postMessage({hash:hash});
+  }
+}
+
+function highlight(hash){
+  _selected=hash;
+  document.querySelectorAll('.row').forEach(function(r){
+    r.classList.toggle('selected',r.dataset.hash===hash);
+  });
+}
+</script>
+</body>
+</html>

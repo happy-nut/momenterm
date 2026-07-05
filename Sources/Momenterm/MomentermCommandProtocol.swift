@@ -1,6 +1,6 @@
 import Foundation
 
-// Wire protocol for the Momenterm control socket (cmux axis 4: CLI/socket API).
+// Wire protocol for the Momenterm control socket (CLI/socket API).
 // Pure encode/decode so the CLI, the in-app socket server, and the isolation
 // smoke can all share one source of truth without dragging in AppKit. Each
 // command is a single JSON object on its own line ("JSON-lines"); malformed or

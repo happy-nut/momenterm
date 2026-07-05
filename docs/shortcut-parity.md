@@ -8,9 +8,9 @@ Conflict rules:
 - Terminal focus sends regular characters, Korean IME text, Enter, Tab, Backspace, Escape, arrows, PageUp/PageDown, Option word jumps, and Ctrl combinations to the PTY through `NativeTerminalTextView`.
 - App accelerators are limited to explicit menu/global shortcuts: Command combinations, F7/Shift+F7 review navigation, F8 files view, Alt+F12 terminal focus, and double-Shift quick open.
 - Overlay contexts own their own plain navigation keys only while an overlay is visible: Esc, arrows, Tab/Shift+Tab, Enter, PageUp/PageDown, `?`, `>`, and `<`.
-- Momenterm-specific workspace creation uses `Cmd+N`; if the current terminal directory is already a saved Git workspace, `Cmd+N` creates a sibling Git linked worktree with a `momenterm/linked-*` branch and opens that worktree as the new workspace. Monacori's `Cmd+Shift+N` prompt memo shortcut remains reserved for prompt memo.
+- Momenterm-specific workspace creation uses `Cmd+N`; if the current terminal directory is already a saved Git workspace, `Cmd+N` creates a sibling Git linked worktree with a `momenterm/linked-*` branch and opens that worktree as the new workspace. The `Cmd+Shift+N` prompt memo shortcut remains reserved for prompt memo.
 
-| Shortcut | Context | monacori action | monacori source reference | momenterm current status | momenterm source reference | test coverage |
+| Shortcut | Context | reference action | reference source | momenterm current status | momenterm source reference | test coverage |
 | --- | --- | --- | --- | --- | --- | --- |
 | `Cmd+O` | App/File | Open folder in focused window | `src/app-main.ts:384`, `src/render.ts:350` | implemented | `Sources/Momenterm/AppDelegate.swift` `openFolder`, `MainWindowController.openFolder()` | `scripts/parity-smoke.mjs` menu scan |
 | `Cmd+Shift+O` | App/File | Open folder in new window | `src/app-main.ts:385`, `src/render.ts:351` | implemented | `AppDelegate.openFolderInNewWindow()` | `scripts/parity-smoke.mjs` menu scan |

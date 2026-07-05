@@ -90,7 +90,12 @@ final class NativePtyManager {
 
 private final class NativePtySession {
     private let id: Int
-    private let process = Process()
+    private var childPid: pid_t = 0
+    private var exitSource: DispatchSourceProcess?
+    private let spawnPath: String
+    private let spawnArgs: [String]
+    private let spawnEnv: [String: String]
+    private let spawnCwd: String
     private let masterHandle: FileHandle
     private let slaveHandle: FileHandle
     private let masterFd: Int32
@@ -143,8 +148,8 @@ private final class NativePtySession {
         tmuxPath = availableTmux
         sessionName = availableTmux == nil ? nil : requestedSession
 
+        let launchDirectory = fallbackDirectory.path
         if let tmuxPath = tmuxPath, let sessionName = sessionName {
-            let launchDirectory = fallbackDirectory.path
             if enforceCwd {
                 NativePtySession.resetTmuxSessionIfDirectoryMismatch(
                     tmuxPath: tmuxPath,
@@ -152,18 +157,22 @@ private final class NativePtySession {
                     expectedDirectory: fallbackDirectory
                 )
             }
-            process.executableURL = URL(fileURLWithPath: tmuxPath)
-            process.arguments = ["new-session", "-A", "-s", sessionName, "-c", launchDirectory]
+            self.spawnPath = tmuxPath
+            self.spawnArgs = ["new-session", "-A", "-s", sessionName, "-c", launchDirectory]
         } else {
             let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
-            process.executableURL = URL(fileURLWithPath: shell)
-            process.arguments = NativePtySession.loginShellArguments(for: shell)
-            process.currentDirectoryURL = fallbackDirectory
+            self.spawnPath = shell
+            self.spawnArgs = NativePtySession.loginShellArguments(for: shell)
         }
-        process.environment = terminalEnvironment()
-        process.standardInput = slaveHandle
-        process.standardOutput = slaveHandle
-        process.standardError = slaveHandle
+        self.spawnEnv = NativePtySession.terminalEnvironment()
+        self.spawnCwd = launchDirectory
+    }
+
+    deinit {
+        // A resumed DispatchSourceProcess must be cancelled before release, or GCD can
+        // crash; cancelling here also guards against leaving the child unreaped if this
+        // instance is deallocated before the exit event fires.
+        exitSource?.cancel()
     }
 
     func currentDirectory() -> URL {
@@ -178,6 +187,51 @@ private final class NativePtySession {
     }
 
     func start() {
+        guard let slavePath = ttyname(slaveHandle.fileDescriptor).map({ String(cString: $0) }) else {
+            finish()
+            return
+        }
+
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        // Make the PTY slave the child's controlling terminal: with POSIX_SPAWN_SETSID
+        // (below) the child becomes a session leader with no controlling tty, and the
+        // first tty it open()s WITHOUT O_NOCTTY becomes its controlling terminal. So we
+        // open the slave on fd 0 with plain O_RDWR (never O_NOCTTY) and dup it to fd 1/2.
+        posix_spawn_file_actions_addopen(&actions, 0, slavePath, O_RDWR, 0)
+        posix_spawn_file_actions_adddup2(&actions, 0, 1)
+        posix_spawn_file_actions_adddup2(&actions, 0, 2)
+        posix_spawn_file_actions_addclose(&actions, masterFd)
+        posix_spawn_file_actions_addclose(&actions, slaveHandle.fileDescriptor)
+        // _np (not the macos(26.0)-only non-_np variant) so this back-deploys to the
+        // deployment target; the deprecation warning is expected and accepted.
+        posix_spawn_file_actions_addchdir_np(&actions, spawnCwd)
+
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        // CLOEXEC_DEFAULT prevents unrelated fds (e.g. a sibling session's PTY master)
+        // from leaking into the child; fd 0/1/2 are explicitly opened/dup2'd above via
+        // file_actions so they are unaffected by this default.
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
+
+        let argv = NativePtySession.makeCStringArray([spawnPath] + spawnArgs)
+        let envp = NativePtySession.makeCStringArray(spawnEnv.map { "\($0.key)=\($0.value)" })
+        defer {
+            NativePtySession.freeCStringArray(argv)
+            NativePtySession.freeCStringArray(envp)
+            posix_spawn_file_actions_destroy(&actions)
+            posix_spawnattr_destroy(&attr)
+        }
+
+        let rc = posix_spawn(&childPid, spawnPath, &actions, &attr, argv, envp)
+        guard rc == 0 else {
+            finish()
+            return
+        }
+
+        // Parent no longer needs the slave; the child holds its own fds.
+        try? slaveHandle.close()
+
         masterHandle.readabilityHandler = { [weak self] handle in
             guard let self = self else { return }
             let data = handle.availableData
@@ -190,16 +244,19 @@ private final class NativePtySession {
             }
         }
 
-        process.terminationHandler = { [weak self] _ in
-            self?.finish()
+        // Detect child exit and reap the zombie (replaces Process.terminationHandler).
+        let source = DispatchSource.makeProcessSource(identifier: childPid, eventMask: .exit, queue: .main)
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            // .exit already fired, so the child is reapable; block (not WNOHANG) so a
+            // not-yet-reapable 0 return can't leave a zombie behind.
+            var status: Int32 = 0
+            waitpid(self.childPid, &status, 0)
+            self.exitSource?.cancel()
+            self.finish()
         }
-
-        do {
-            try process.run()
-            try? slaveHandle.close()
-        } catch {
-            finish()
-        }
+        exitSource = source
+        source.resume()
     }
 
     func write(_ string: String) {
@@ -256,10 +313,9 @@ private final class NativePtySession {
     }
 
     private func deliverWinch() {
-        guard process.isRunning else {
+        guard childPid > 0, !didExit else {
             return
         }
-        let childPid = process.processIdentifier
         let childPgid = getpgid(childPid)
         // Never signal our own process group (would send SIGWINCH to Momenterm itself).
         guard childPid > 0, childPgid > 0, childPgid != getpgrp() else {
@@ -287,14 +343,14 @@ private final class NativePtySession {
     }
 
     func rootPidForSmokeTest() -> Int32? {
-        process.isRunning ? process.processIdentifier : nil
+        (childPid > 0 && !didExit) ? childPid : nil
     }
 
     private func currentProcessDirectory() -> URL? {
-        guard process.isRunning else {
+        guard childPid > 0, !didExit else {
             return fallbackDirectory
         }
-        let pid = String(process.processIdentifier)
+        let pid = String(childPid)
         guard let output = NativePtySession.runCapturing("/usr/sbin/lsof", ["-a", "-p", pid, "-d", "cwd", "-Fn"]) else {
             return fallbackDirectory
         }
@@ -309,20 +365,25 @@ private final class NativePtySession {
 
     private func closeClient(notifyExit: Bool) {
         masterHandle.readabilityHandler = nil
-        let rootPid = process.isRunning ? process.processIdentifier : 0
+        let rootPid = (childPid > 0 && !didExit) ? childPid : 0
         if rootPid > 0 {
             Self.signalDescendants(of: rootPid, signal: SIGTERM)
-        }
-        if process.isRunning {
-            process.terminate()
+            Darwin.kill(rootPid, SIGTERM)
         }
         if rootPid > 0 {
             Thread.sleep(forTimeInterval: 0.05)
             Self.signalDescendants(of: rootPid, signal: SIGKILL)
-            if process.isRunning {
-                Darwin.kill(rootPid, SIGKILL)
-            }
+            Darwin.kill(rootPid, SIGKILL)
         }
+        if childPid > 0 {
+            // Reap synchronously here rather than relying solely on the exitSource event:
+            // this session is typically removed from the owning dictionary right after
+            // kill() returns, and with only a weak self captured, the instance can be
+            // deallocated before the exit event fires — leaving a zombie behind.
+            waitpid(childPid, nil, 0)
+        }
+        exitSource?.cancel()
+        exitSource = nil
         try? masterHandle.close()
         finish(notifyExit: notifyExit)
     }
@@ -374,7 +435,7 @@ private final class NativePtySession {
         }
     }
 
-    private func terminalEnvironment() -> [String: String] {
+    private static func terminalEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         for key in env.keys where key.lowercased().hasPrefix("npm_") {
             env.removeValue(forKey: key)
@@ -592,6 +653,21 @@ private final class NativePtySession {
 
     private static func runQuietly(_ executable: String, _ arguments: [String]) {
         _ = runCapturing(executable, arguments)
+    }
+
+    /// Builds a NULL-terminated C string array (as posix_spawn's argv/envp expect) by
+    /// strdup'ing each element. Ownership transfers to the caller, which must pass the
+    /// result to freeCStringArray once the spawn completes.
+    private static func makeCStringArray(_ values: [String]) -> [UnsafeMutablePointer<CChar>?] {
+        var result = values.map { strdup($0) }
+        result.append(nil)
+        return result
+    }
+
+    private static func freeCStringArray(_ array: [UnsafeMutablePointer<CChar>?]) {
+        for pointer in array where pointer != nil {
+            free(pointer)
+        }
     }
 
     private static func resetTmuxSessionIfDirectoryMismatch(tmuxPath: String, sessionName: String, expectedDirectory: URL) {

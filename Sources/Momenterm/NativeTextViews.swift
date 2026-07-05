@@ -243,11 +243,20 @@ final class NativeCodeTextView: NSTextView {
 
         let origin = textContainerOrigin
         let caretX = desiredLocation > characterIndex ? glyphRect.maxX : glyphRect.minX
+        // Cap cursor height to the actual line fragment height to avoid
+        // spanning the full text-container when glyphRect is anomalously tall.
+        let lineFragmentRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let cursorHeight: CGFloat
+        if !lineFragmentRect.isEmpty {
+            cursorHeight = lineFragmentRect.height
+        } else {
+            cursorHeight = ceil((font?.pointSize ?? 12) + 4)
+        }
         return NSRect(
             x: origin.x + caretX,
             y: origin.y + glyphRect.minY,
             width: 2,
-            height: max(glyphRect.height, (font?.pointSize ?? 12) + 3)
+            height: cursorHeight
         )
     }
 }
@@ -406,6 +415,10 @@ final class NativeInlineReviewCommentTextView: NSTextView {
         backgroundColor = theme.primaryBackground
         textColor = theme.primaryText
         insertionPointColor = theme.primaryText
+        selectedTextAttributes = [
+            .backgroundColor: NSColor(red: 33/255, green: 66/255, blue: 131/255, alpha: 1),
+            .foregroundColor: theme.primaryText,
+        ]
         font = MomentermDesign.Fonts.codeSmall
         textContainerInset = NSSize(width: 7, height: 6)
         isVerticallyResizable = true
@@ -446,6 +459,25 @@ final class NativeTerminalTextView: NSTextView {
     var onFocus: (() -> Void)?
     var onInput: ((String) -> Void)?
     var onPaste: ((String) -> Void)?
+
+    // Mouse-selection forwarding to the ghostty surface beneath this view. Wired only in
+    // ghostty-render mode; when set, mouse gestures drive ghostty's selection (it owns the
+    // visible grid and renders the highlight) instead of this near-invisible NSTextView, whose
+    // glyphs no longer match ghostty's grid. Nil in pure-NSTextView mode, where native
+    // drag-select is used as before.
+    var onMouseButton: ((_ event: NSEvent, _ pressed: Bool) -> Void)?
+    var onMouseDrag: ((NSEvent) -> Void)?
+    var onMouseSelectionEnd: (() -> Void)?
+
+    private var forwardsMouseToGhostty: Bool { onMouseButton != nil }
+
+#if DEBUG
+    // True once the ghostty mouse-selection hooks are wired (ghostty-render mode). Lets a smoke
+    // test assert the selection-forwarding fix is in place.
+    func mouseForwardingHooksWiredForSmokeTest() -> Bool {
+        onMouseButton != nil && onMouseDrag != nil && onMouseSelectionEnd != nil
+    }
+#endif
 
     // Regression instrumentation: records which branch keyDown routed the last event
     // through, so smoke tests can assert that IME composition keys defer to the input
@@ -494,7 +526,32 @@ final class NativeTerminalTextView: NSTextView {
         if window?.firstResponder !== self {
             window?.makeFirstResponder(self)
         }
+        // In ghostty-render mode, drive ghostty's selection instead of this view's. We stay first
+        // responder (keyboard/IME) but hand the mouse gesture to ghostty and skip super, so
+        // NSTextView doesn't also start a (invisible, mismatched) selection of its own.
+        if forwardsMouseToGhostty {
+            onMouseButton?(event, true)
+            return
+        }
         super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if forwardsMouseToGhostty {
+            onMouseDrag?(event)
+            return
+        }
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if forwardsMouseToGhostty {
+            onMouseButton?(event, false)
+            // A completed drag lands on the clipboard, matching macOS terminal behavior.
+            onMouseSelectionEnd?()
+            return
+        }
+        super.mouseUp(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -579,6 +636,12 @@ final class NativeTerminalTextView: NSTextView {
         } else if let text = insertString as? String {
             onInput?(text)
         }
+        // Replace the marked-text span with "" so the storage is clean for the next
+        // composition. Without this, the previous syllable's marked text remains in
+        // storage after commit, hasMarkedText() stays true on the next keyDown, and
+        // the IME re-processes stale content — dropping the first character of the
+        // next Korean word.
+        super.insertText("", replacementRange: replacementRange)
     }
 
     override func doCommand(by selector: Selector) {

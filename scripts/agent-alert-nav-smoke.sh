@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression smoke for the agent-alert unread jump navigation (Cmd+Shift+U, cmux axis 1d).
+# Regression smoke for the agent-alert unread jump navigation (Cmd+Shift+U).
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/.build/debug"
 

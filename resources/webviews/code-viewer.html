@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:transparent;overflow:hidden}
+#editor{width:100%;height:100%;display:none}
+#md-view{
+  width:100%;height:100%;overflow-y:auto;padding:24px 32px;display:none;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-size:14px;line-height:1.7;
+  color:var(--fg,#d4d4d4);background:var(--bg,#1e1e1e)
+}
+#img-view{
+  width:100%;height:100%;display:none;align-items:center;justify-content:center;
+  background:var(--bg-dark,#141414)
+}
+#img-view img{max-width:100%;max-height:100%;object-fit:contain}
+#md-view h1,#md-view h2{border-bottom:1px solid var(--border,#3a3a3a);padding-bottom:.3em;margin-bottom:.6em;margin-top:1.2em}
+#md-view h1{font-size:1.8em}#md-view h2{font-size:1.4em}
+#md-view h3,#md-view h4,#md-view h5,#md-view h6{margin:.8em 0 .4em;font-weight:600}
+#md-view p{margin:.6em 0}
+#md-view code{background:var(--code-bg,#2a2a2a);padding:.1em .4em;border-radius:3px;font-family:monospace;font-size:.88em}
+#md-view pre{background:var(--code-bg,#2a2a2a);padding:12px;border-radius:6px;overflow-x:auto;margin:.8em 0}
+#md-view pre code{background:none;padding:0}
+#md-view blockquote{border-left:3px solid var(--accent,#4da1f5);padding-left:12px;color:var(--secondary,#888);margin:.8em 0}
+#md-view table{border-collapse:collapse;width:100%;margin:.8em 0}
+#md-view th,#md-view td{border:1px solid var(--border,#3a3a3a);padding:6px 12px;text-align:left}
+#md-view th{background:var(--code-bg,#2a2a2a);font-weight:600}
+#md-view ul,#md-view ol{padding-left:1.6em;margin:.6em 0}
+#md-view li{margin:.2em 0}
+#md-view hr{border:none;border-top:1px solid var(--border,#3a3a3a);margin:1.2em 0}
+#md-view img{max-width:100%;border-radius:4px}
+#md-view a{color:var(--accent,#4da1f5);text-decoration:none}
+#md-view a:hover{text-decoration:underline}
+#md-view li.task-list-item{list-style:none;margin-left:-1.4em}
+#md-view input[type=checkbox]{margin-right:6px}
+</style>
+</head>
+<body>
+<div id="editor"></div>
+<div id="md-view"></div>
+<div id="img-view"><img id="img-el" alt=""></div>
+
+<script>
+'use strict';
+var _editor=null,_markedLoaded=false,_monacoLoaded=false,_pendingLoad=null;
+
+window.addEventListener('message',function(e){
+  var msg=e.data;
+  if(!msg||!msg.type)return;
+  if(msg.type==='loadFile')loadFile(msg);
+  else if(msg.type==='setTheme')applyTheme(msg.theme);
+});
+
+function applyTheme(t){
+  if(!t)return;
+  var r=document.documentElement.style;
+  r.setProperty('--bg',t.bg||'#1e1e1e');
+  r.setProperty('--fg',t.fg||'#d4d4d4');
+  r.setProperty('--bg-dark',t.bgDark||'#141414');
+  r.setProperty('--accent',t.accent||'#4da1f5');
+  r.setProperty('--border',t.border||'#3a3a3a');
+  r.setProperty('--code-bg',t.codeBg||'#2a2a2a');
+  r.setProperty('--secondary',t.secondary||'#888');
+  if(window.monaco&&_editor&&t.monacoTheme)monaco.editor.setTheme(t.monacoTheme);
+}
+
+function show(id){
+  ['editor','md-view','img-view'].forEach(function(x){
+    document.getElementById(x).style.display=x===id?(id==='img-view'?'flex':'block'):'none';
+  });
+}
+
+function loadFile(msg){
+  var content=msg.content||'';
+  var lang=(msg.language||'').toLowerCase();
+  var isImg=!!msg.isImage;
+  if(msg.theme)applyTheme(msg.theme);
+
+  if(isImg){
+    show('img-view');
+    document.getElementById('img-el').src=content;
+    return;
+  }
+  var isMd=lang==='markdown'||lang==='md';
+  if(isMd){
+    show('md-view');
+    renderMarkdown(content);
+    return;
+  }
+  show('editor');
+  renderCode(content,lang);
+}
+
+function renderMarkdown(content){
+  var el=document.getElementById('md-view');
+  if(_markedLoaded){el.innerHTML=marked.parse(content);return;}
+  _pendingLoad={type:'md',content:content};
+  var s=document.createElement('script');
+  s.src='./marked.min.js';
+  s.onerror=function(){el.innerHTML='<pre style="color:#f57c7c;padding:12px">Failed to load markdown renderer.</pre>';};
+  s.onload=function(){
+    _markedLoaded=true;
+    if(_pendingLoad&&_pendingLoad.type==='md'){
+      el.innerHTML=marked.parse(_pendingLoad.content);
+      _pendingLoad=null;
+    }
+  };
+  document.head.appendChild(s);
+}
+
+function renderCode(content,lang){
+  if(_monacoLoaded){updateMonaco(content,lang);return;}
+  _pendingLoad={type:'code',content:content,lang:lang};
+  var s=document.createElement('script');
+  s.src='./vs/loader.js';
+  s.onerror=function(){
+    var el=document.getElementById('editor');el.style.display='block';
+    el.textContent=_pendingLoad?_pendingLoad.content:'';_pendingLoad=null;
+  };
+  s.onload=function(){
+    require.config({paths:{vs:'./vs'}});
+    require(['vs/editor/editor.main'],function(){
+      _monacoLoaded=true;
+      var p=_pendingLoad;
+      _pendingLoad=null;
+      if(p&&p.type==='code'){
+        _editor=monaco.editor.create(document.getElementById('editor'),{
+          value:p.content,language:mapLang(p.lang),
+          readOnly:true,theme:'vs-dark',
+          minimap:{enabled:false},scrollBeyondLastLine:false,
+          fontSize:11.5,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
+          lineNumbers:'on',automaticLayout:true,wordWrap:'off',
+          contextmenu:false,overviewRulerLanes:0,
+          scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}
+        });
+        _editor.focus();
+      }
+    });
+  };
+  document.head.appendChild(s);
+}
+
+function updateMonaco(content,lang){
+  if(!_editor){renderCode(content,lang);return;}
+  var old=_editor.getModel();
+  var m=monaco.editor.createModel(content,mapLang(lang));
+  _editor.setModel(m);
+  if(old)old.dispose();
+}
+
+var LANG={
+  swift:'swift',js:'javascript',javascript:'javascript',jsx:'javascript',
+  ts:'typescript',typescript:'typescript',tsx:'typescript',
+  py:'python',python:'python',rs:'rust',rust:'rust',
+  go:'go',java:'java',kt:'kotlin',kotlin:'kotlin',scala:'scala',
+  c:'c',cpp:'cpp',cc:'cpp',cxx:'cpp',h:'cpp',hpp:'cpp',
+  cs:'csharp',csharp:'csharp',
+  css:'css',scss:'scss',less:'less',
+  html:'html',xml:'xml',svg:'xml',json:'json',
+  yaml:'yaml',yml:'yaml',toml:'ini',ini:'ini',conf:'ini',
+  sh:'shell',bash:'shell',zsh:'shell',fish:'shell',
+  sql:'sql',rb:'ruby',ruby:'ruby',php:'php',
+  r:'r',dart:'dart',lua:'lua',
+  dockerfile:'dockerfile',makefile:'makefile',
+  txt:'plaintext',text:'plaintext',log:'plaintext',csv:'plaintext',tsv:'plaintext'
+};
+function mapLang(l){return LANG[l]||'plaintext';}
+</script>
+</body>
+</html>

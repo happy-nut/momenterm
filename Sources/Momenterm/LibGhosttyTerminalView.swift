@@ -38,7 +38,7 @@ private final class MomentermGhosttyRuntime {
         let fgHex = Self.hexString(ThemeManager.shared.theme.terminalForeground) ?? "eeeeee"
         // Neutral grey selection (theme secondary surface) instead of the old olive/yellow
         // highlight, which read as unnecessary emphasis.
-        let selectionHex = Self.hexString(ThemeManager.shared.theme.secondarySurface) ?? "393e46"
+        let selectionHex = "214283"
         let allowedCursorStyles = ["block", "bar", "underline"]
         let cursorStyle = UserDefaults.standard.string(forKey: "momenterm.terminal.cursorStyle")
             .flatMap { allowedCursorStyles.contains($0) ? $0 : nil } ?? "block"
@@ -53,6 +53,7 @@ private final class MomentermGhosttyRuntime {
         background = \(bgHex)
         foreground = \(fgHex)
         selection-background = \(selectionHex)
+        selection-foreground = \(fgHex)
         cursor-style = \(cursorStyle)
         cursor-style-blink = \(cursorBlink)
         window-padding-x = 4
@@ -74,6 +75,7 @@ private final class MomentermGhosttyRuntime {
         runtime.wakeup_cb = momentermGhosttyWakeupCallback
         runtime.action_cb = momentermGhosttyActionCallback
         runtime.close_surface_cb = momentermGhosttyCloseSurfaceCallback
+        runtime.write_clipboard_cb = momentermGhosttyWriteClipboardCallback
 
         app = ghostty_app_new(&runtime, config)
         if let app = app {
@@ -154,6 +156,19 @@ private let momentermGhosttyActionCallback: ghostty_runtime_action_cb = { _, _, 
 private let momentermGhosttyCloseSurfaceCallback: ghostty_runtime_close_surface_cb = { _, _ in
 }
 
+private let momentermGhosttyWriteClipboardCallback: ghostty_runtime_write_clipboard_cb = { _, _, items, count, _ in
+    guard let items = items, count > 0 else { return }
+    for i in 0..<Int(count) {
+        let item = items.advanced(by: i).pointee
+        guard let mime = item.mime, let data = item.data else { continue }
+        if String(cString: mime).hasPrefix("text/") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(String(cString: data), forType: .string)
+            return
+        }
+    }
+}
+
 private let momentermGhosttyReceiveBufferCallback: ghostty_surface_receive_buffer_cb = { userdata, ptr, len in
     guard let userdata = userdata, let ptr = ptr, len > 0 else {
         return
@@ -190,6 +205,11 @@ final class LibGhosttyTerminalView: NSView {
     private var renderScheduled = false
     private var lastColumns = 0
     private var lastRows = 0
+#if DEBUG
+    // Counts mouse events forwarded into the ghostty surface so a smoke test can assert the
+    // NSTextView on top actually relays its drag-select gesture here (the selection-bug fix).
+    private(set) var forwardedMouseEventCountForSmokeTest = 0
+#endif
 
     var isRenderingAvailable: Bool {
         MomentermGhosttyRuntime.shared.app != nil
@@ -279,6 +299,89 @@ final class LibGhosttyTerminalView: NSView {
         requestRender()
     }
 
+    // Mouse forwarding for text selection. The app's NSTextView sits on top of this Metal
+    // surface (z-order) and owns keyboard/IME focus, so it relays its mouse gesture here.
+    // ghostty owns the visible grid and renders the selection highlight itself; these three
+    // entry points drive press/drag/release and read the resulting selection back out.
+    func forwardMouseButton(_ event: NSEvent, pressed: Bool) {
+        buildSurfaceIfNeeded()
+        guard let surface = surface else {
+            return
+        }
+        let state = pressed ? GHOSTTY_MOUSE_PRESS : GHOSTTY_MOUSE_RELEASE
+        // Position must precede the button so ghostty starts the selection at the click cell.
+        sendMousePos(event, surface: surface)
+        ghostty_surface_mouse_button(surface, state, GHOSTTY_MOUSE_LEFT, Self.mouseMods(event.modifierFlags))
+#if DEBUG
+        forwardedMouseEventCountForSmokeTest += 1
+#endif
+        requestRender()
+    }
+
+    func forwardMouseDrag(_ event: NSEvent) {
+        guard let surface = surface else {
+            return
+        }
+        sendMousePos(event, surface: surface)
+#if DEBUG
+        forwardedMouseEventCountForSmokeTest += 1
+#endif
+        requestRender()
+    }
+
+    // Reads ghostty's current selection (if any) into the general pasteboard. Returns true when
+    // a non-empty selection was copied. Called on mouse-up so a completed drag lands on the
+    // clipboard, matching macOS terminal behavior, and reused by the app's Cmd-C path.
+    @discardableResult
+    func copySelectionToPasteboard() -> Bool {
+        guard let surface = surface, ghostty_surface_has_selection(surface) else {
+            return false
+        }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &text) else {
+            return false
+        }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard let ptr = text.text, text.text_len > 0 else {
+            return false
+        }
+        let selected = String(decoding: UnsafeRawBufferPointer(start: ptr, count: Int(text.text_len)), as: UTF8.self)
+        guard !selected.isEmpty else {
+            return false
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(selected, forType: .string)
+        return true
+    }
+
+    // Non-empty only while ghostty holds a live selection; lets the app's Cmd-C prefer the
+    // ghostty selection over the (invisible, stale) NSTextView selection when a surface exists.
+    func hasSelection() -> Bool {
+        guard let surface = surface else {
+            return false
+        }
+        return ghostty_surface_has_selection(surface)
+    }
+
+    // Converts an NSEvent's window location into ghostty surface coordinates. ghostty expects
+    // logical points in the surface's own space with a top-left origin, so we convert from the
+    // window into this view and flip Y (AppKit is bottom-left). Content scale is applied by
+    // ghostty via set_content_scale, so we pass points, not backing pixels.
+    private func sendMousePos(_ event: NSEvent, surface: ghostty_surface_t) {
+        let pos = convert(event.locationInWindow, from: nil)
+        ghostty_surface_mouse_pos(surface, Double(pos.x), Double(bounds.height - pos.y), Self.mouseMods(event.modifierFlags))
+    }
+
+    private static func mouseMods(_ flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+        var mods: UInt32 = GHOSTTY_MODS_NONE.rawValue
+        if flags.contains(.shift) { mods |= GHOSTTY_MODS_SHIFT.rawValue }
+        if flags.contains(.control) { mods |= GHOSTTY_MODS_CTRL.rawValue }
+        if flags.contains(.option) { mods |= GHOSTTY_MODS_ALT.rawValue }
+        if flags.contains(.command) { mods |= GHOSTTY_MODS_SUPER.rawValue }
+        if flags.contains(.capsLock) { mods |= GHOSTTY_MODS_CAPS.rawValue }
+        return ghostty_input_mods_e(mods)
+    }
+
     func requestRender() {
         guard surface != nil, !renderScheduled else {
             return
@@ -304,6 +407,10 @@ final class LibGhosttyTerminalView: NSView {
 #if DEBUG
     func isSurfaceAttachedForSmokeTest() -> Bool {
         surface != nil
+    }
+
+    func mouseForwardCountForSmokeTest() -> Int {
+        forwardedMouseEventCountForSmokeTest
     }
 
     func usesMetalLayerForSmokeTest() -> Bool {
@@ -425,12 +532,18 @@ final class LibGhosttyTerminalView: NSView {
     func receive(_ data: Data) {}
     func fitToSize() {}
     func setFocused(_ focused: Bool) {}
+    func forwardMouseButton(_ event: NSEvent, pressed: Bool) {}
+    func forwardMouseDrag(_ event: NSEvent) {}
+    @discardableResult
+    func copySelectionToPasteboard() -> Bool { false }
+    func hasSelection() -> Bool { false }
     func requestRender() {}
     func applyGridResize(columns: Int, rows: Int) {}
     func releaseSurface() {}
 #if DEBUG
     func isSurfaceAttachedForSmokeTest() -> Bool { false }
     func usesMetalLayerForSmokeTest() -> Bool { false }
+    func mouseForwardCountForSmokeTest() -> Int { 0 }
 #endif
     func gridSize() -> (columns: Int, rows: Int)? { nil }
 }

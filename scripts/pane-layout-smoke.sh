@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression smoke for terminal pane split layout serialization (cmux axis 3 /
-# PRD US-4). Compiles the pure PaneLayoutCodec + JSONValue in isolation (no
+# Regression smoke for terminal pane split layout serialization
+# (PRD US-4). Compiles the pure PaneLayoutCodec + JSONValue in isolation (no
 # AppKit, no PTY, no MainWindowController) and pins the
 # encode -> JSON -> decode round-trip for single-pane, below/horizontal,
 # side-by-side/vertical, nested splits, sanitization, and v2 backward

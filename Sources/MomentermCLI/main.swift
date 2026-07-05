@@ -1,7 +1,7 @@
 import Foundation
 
-// momenterm CLI — control the running app over its Unix domain socket
-// (cmux axis 4). Encodes a MomentermCommand with the shared pure protocol and
+// momenterm CLI — control the running app over its Unix domain socket.
+// Encodes a MomentermCommand with the shared pure protocol and
 // writes it as one JSON-line. Exits non-zero if the socket is unavailable so
 // agent hooks can detect "app not running".
 //

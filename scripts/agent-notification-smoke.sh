@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression smoke for the agent-notification OSC parser (cmux axis 1).
+# Regression smoke for the agent-notification OSC parser.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/.build/debug"
 

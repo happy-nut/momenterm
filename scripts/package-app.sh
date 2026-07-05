@@ -15,6 +15,9 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$BIN" "$MACOS/Momenterm"
 cp "$SOURCE_ICON" "$ICON"
+if [ -d "$ROOT/resources/webviews" ]; then
+  cp -r "$ROOT/resources/webviews" "$RESOURCES/webviews"
+fi
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

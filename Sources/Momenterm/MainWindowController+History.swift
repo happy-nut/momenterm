@@ -87,6 +87,28 @@ extension MainWindowController {
         }
         renderSelectedHistoryCommitSummary()
         scrollHistoryRowToVisible()
+
+        // US-H8: show JS git graph in content area.
+        let graphCommits: [[String: Any]] = historyCommits.prefix(80).compactMap { commit in
+            guard let obj = commit.objectValue else { return nil }
+            let hash = obj["hash"]?.stringValue ?? ""
+            let subject = obj["subject"]?.stringValue ?? ""
+            let author = obj["author"]?.stringValue ?? ""
+            let rawDate = obj["date"]?.stringValue ?? ""
+            let date = String(rawDate.prefix(10))
+            let parents = (obj["parents"]?.arrayValue ?? []).compactMap { $0.stringValue }
+            let refsStr = (obj["refs"]?.stringValue ?? "").trimmingCharacters(in: .whitespaces)
+            let refs = refsStr.isEmpty ? [] : refsStr.components(separatedBy: ", ").filter { !$0.isEmpty }
+            return ["hash": hash, "message": subject, "author": author, "date": date, "parents": parents, "refs": refs]
+        }
+        let selectedHash = historyCommits.indices.contains(selectedHistoryIndex)
+            ? (historyCommits[selectedHistoryIndex].objectValue?["hash"]?.stringValue ?? "")
+            : ""
+        historyGraphWebView.postJSON(["type": "loadGraph", "commits": graphCommits])
+        if !selectedHash.isEmpty {
+            historyGraphWebView.postJSON(["type": "selectCommit", "hash": selectedHash])
+        }
+        showHistoryGraphPane()
     }
     // IntelliJ-style commit row: a continuous graph rail on the left, then two text columns —
     // the subject on top, and hash · author · date underneath. Branch/tag refs are appended.

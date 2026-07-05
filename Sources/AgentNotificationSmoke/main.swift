@@ -1,6 +1,6 @@
 import Foundation
 
-// Regression smoke for the agent-notification OSC parser (cmux axis 1).
+// Regression smoke for the agent-notification OSC parser.
 // Pins the recognized sequences so the "agent waiting/done" signal can't silently break.
 
 func fail(_ message: String) -> Never {

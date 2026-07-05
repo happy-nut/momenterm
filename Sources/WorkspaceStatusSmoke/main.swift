@@ -1,7 +1,7 @@
 import Foundation
 
-// Regression smoke for WorkspaceStatusProvider's PURE parsing functions (cmux axis 2:
-// rich workspace rail status). Compiles WorkspaceStatusProvider + Shell in isolation
+// Regression smoke for WorkspaceStatusProvider's PURE parsing functions
+// (rich workspace rail status). Compiles WorkspaceStatusProvider + Shell in isolation
 // (same pattern as core-smoke) and pins the two parsers that turn raw `gh`/`lsof`
 // output into rail badges — with NO process ever spawned:
 //   (a) `gh pr view --json number,state,isDraft` JSON -> (number, state)

@@ -1,10 +1,10 @@
-# cmux 워크스페이스 개념 적용 플랜
+# 워크스페이스 개념 적용 플랜
 
-> 작성일: 2026-07-01 · 목표: momenterm 워크스페이스를 cmux 수준의 "살아있는 에이전트 작업 단위"로 확장
+> 작성일: 2026-07-01 · 목표: momenterm 워크스페이스를 "살아있는 에이전트 작업 단위" 수준으로 확장
 
 ## 배경
 
-cmux(manaflow-ai/cmux)는 momenterm과 거의 동일한 컨셉(Swift/AppKit + libghostty, AI 코딩 에이전트용 터미널)이다.
+목표는 각 워크스페이스를 에이전트 인지형 터미널(Swift/AppKit + libghostty)의 살아있는 작업 단위로 다루는 것이다.
 momenterm은 워크스페이스의 *구조*는 이미 갖췄다:
 - `Workspace(path, name, color, iconName, branchName)`, `addWorkspaceIfNeeded`, `openWorkspace`
 - Cmd+N → git linked worktree(`momenterm/linked-{token}`)
@@ -12,7 +12,7 @@ momenterm은 워크스페이스의 *구조*는 이미 갖췄다:
 - 좌측 rail UI, UserDefaults 영속화(최대 40개)
 - `workspaceAgentAlertPaths`(에이전트 알림 경로 집합 — 부분 구현)
 
-cmux가 앞서는 건 각 워크스페이스를 **rich 상태 + 에이전트 알림 + 완전한 restore + 스크립트 제어**로 다루는 부분.
+아직 부족한 건 각 워크스페이스를 **rich 상태 + 에이전트 알림 + 완전한 restore + 스크립트 제어**로 다루는 부분.
 
 ## 설계 원칙
 
@@ -59,7 +59,7 @@ cmux가 앞서는 건 각 워크스페이스를 **rich 상태 + 에이전트 알
 
 ### 축 4 · CLI / socket API
 - **Unix domain socket 서버**(앱 내) + **CLI 바이너리**(`momenterm` 또는 `momenterm-cli`).
-- **명령**: workspace 생성/전환, tab 생성, keystroke 전송, `notify`(에이전트 훅용 — cmux notify 대응).
+- **명령**: workspace 생성/전환, tab 생성, keystroke 전송, `notify`(에이전트 훅용).
 - 단계:
   - 4a. socket 서버 + 명령 프로토콜(JSON 라인). **격리 스모크**: 프로토콜 인코딩/디코딩.
   - 4b. CLI 바이너리(socket 클라이언트) — 새 SwiftPM executable 타겟.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the momenterm control-socket CLI (cmux axis 4). Separate from
+# Builds the momenterm control-socket CLI. Separate from
 # scripts/build.sh (which only compiles the app) because the CLI is its own
 # executable that shares the pure wire protocol with the app.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

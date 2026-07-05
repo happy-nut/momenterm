@@ -114,7 +114,7 @@ MainWindowController  (얇은 Coordinator, 목표 300~500줄)
 
 - 신규 유닛 스모크 실행파일 통과 (`swiftc` 격리 컴파일)
 - `scripts/smoke.sh` + `scripts/parity-smoke.mjs` + `scripts/ab-parity-smoke.mjs` 통과
-- `docs/parity-gap.md`의 런타임 마커 스캔 유지 (Electron/Node/Monacori 마커 부재)
+- `docs/parity-gap.md`의 런타임 마커 스캔 유지 (Electron/Node 런타임 마커 부재)
 - MainWindowController 라인 수가 단계마다 감소 (진행 지표)
 
 ## 뉴 아키텍처 재설계 — CodePaneController (공유 뷰 소유권 격리)

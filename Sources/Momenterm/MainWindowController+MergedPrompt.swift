@@ -148,10 +148,12 @@ extension MainWindowController {
             || isMergedPromptSidePanelActive()
             || isMergedPromptFloatingCollapsedActive()
     }
-    // The merged prompt is "targeting" a terminal either while its panel is open OR during the
-    // post-Option+Enter pane-selection phase. The pane highlight + "Enter" hint stay alive for both.
+    // The on-terminal selection UI (accent ring + "Enter" hint) belongs to the post-Option+Enter
+    // pane-selection phase ONLY. While the panel is merely open (phase 1), focus stays in the prompt
+    // and the terminals show nothing — otherwise the "Enter" hint pops onto a terminal the instant the
+    // panel opens, before the user has committed to sending.
     func isMergedPromptTargetingActive() -> Bool {
-        isMergedPromptPanelActive() || mergedPromptPaneSelectionActive
+        mergedPromptPaneSelectionActive
     }
     // Option+Enter (phase 1 → 2): capture the merged prompt text, close the panel without focusing a
     // terminal, and enter pane-selection mode with the panes highlighted.
@@ -395,7 +397,8 @@ extension MainWindowController {
         mergedPromptPanelHiddenLeadingConstraint?.isActive = false
         mergedPromptPanelVisibleTrailingConstraint?.isActive = true
         animateMemoPanelLayout(animated: wasHidden)
-        // Highlight + "Enter" hint on the chosen send-target terminal the moment the panel opens.
+        // Panel-open is phase 1: focus goes into the prompt, terminals stay clean. This refresh only
+        // tears down any stale phase-2 hint (targeting is false until Option+Enter).
         refreshMergedPromptTerminalSelectionOverlays()
         focusMergedPromptPanel()
     }
@@ -515,6 +518,14 @@ extension MainWindowController {
     private func focusMergedPromptPanel() {
         window?.makeKeyAndOrderFront(nil)
         window?.makeFirstResponder(mergedPromptTextView)
+        // The pane-style refresh that runs as the panel opens can pull first-responder toward a
+        // terminal; re-assert prompt focus on the next runloop so typing lands in the prompt.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isMergedPromptSidePanelActive() else {
+                return
+            }
+            self.window?.makeFirstResponder(self.mergedPromptTextView)
+        }
     }
     private func applyMergedPromptPanelShadow() {
         mergedPromptSidePanel.wantsLayer = true

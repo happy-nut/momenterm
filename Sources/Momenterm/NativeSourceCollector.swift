@@ -45,7 +45,7 @@ struct NativeSourceCollector {
         for path in listedPaths where isSourceCandidate(path) {
             paths.insert(path)
         }
-        let planPath = ".monacori/plan.md"
+        let planPath = ".momenterm/plan.md"
         if FileManager.default.fileExists(atPath: root.appendingPathComponent(planPath).path) {
             paths.insert(planPath)
         }
@@ -79,7 +79,7 @@ struct NativeSourceCollector {
         for path in changed where isSourceCandidate(path) {
             paths.insert(path)
         }
-        let planPath = ".monacori/plan.md"
+        let planPath = ".momenterm/plan.md"
         if FileManager.default.fileExists(atPath: root.appendingPathComponent(planPath).path) {
             paths.insert(planPath)
         }
@@ -284,27 +284,7 @@ struct NativeSourceCollector {
         guard let out = try? gitClient.run(root: root, arguments: ["status", "--porcelain"]) else {
             return [:]
         }
-        var result: [String: String] = [:]
-        for line in out.components(separatedBy: .newlines) where line.count >= 3 {
-            let chars = Array(line)
-            let x = chars[0]
-            let y = chars[1]
-            var path = String(line.dropFirst(3))
-            if let range = path.range(of: " -> ") {
-                path = String(path[range.upperBound...])
-            }
-            if path.hasPrefix("\"") && path.hasSuffix("\"") {
-                path = String(path.dropFirst().dropLast())
-            }
-            if x == "?" && y == "?" {
-                result[path] = "new"
-            } else if x != " " && x != "?" {
-                result[path] = "staged"
-            } else {
-                result[path] = "edited"
-            }
-        }
-        return result
+        return NativeGitPorcelain.parse(out)
     }
 
     private func isRegularFile(_ url: URL) -> Bool {
@@ -328,7 +308,7 @@ struct NativeSourceCollector {
 
     private func isSourceCandidate(_ path: String) -> Bool {
         let normalized = path.replacingOccurrences(of: "\\", with: "/")
-        if normalized.isEmpty || normalized.hasPrefix(".monacori/") {
+        if normalized.isEmpty || normalized.hasPrefix(".momenterm/") {
             return false
         }
         let blocked = [

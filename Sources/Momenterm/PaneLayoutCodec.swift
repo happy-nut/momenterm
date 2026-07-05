@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure serialization/deserialization for a terminal tab's pane split layout
-/// (cmux axis 3: pane split layout + scrollback restore, PRD US-4).
+/// (pane split layout + scrollback restore, PRD US-4).
 ///
 /// This type is intentionally free of AppKit and of `MainWindowController`'s
 /// runtime pane objects so it can be compiled in isolation for the

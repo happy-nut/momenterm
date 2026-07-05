@@ -16,7 +16,8 @@ let package = Package(
             name: "Momenterm",
             linkerSettings: [
                 .linkedFramework("AppKit"),
-                .linkedFramework("UserNotifications")
+                .linkedFramework("UserNotifications"),
+                .linkedFramework("WebKit")
             ]
         ),
         // Control-socket client. Shares the pure wire protocol with the app via a

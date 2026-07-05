@@ -204,8 +204,8 @@ enum MomentermDesign {
                 terminalForeground: ui.foreground,
                 // — Diff axis: PINNED to base `dark` constants (invariant) —
                 codeHeaderBackground: dark.secondary,
-                selectionBackground: ui.accent.withAlphaComponent(0.30),
-                selectionBorder: ui.accent.withAlphaComponent(0.82),
+                selectionBackground: rgb(33, 66, 131),
+                selectionBorder: rgb(33, 66, 131),
                 // Active pane header: a neutral lightening of the header, NOT an accent (gold)
                 // blend — the amber tint read as a tacky yellow highlight on the focused terminal.
                 activeHeaderBackground: blend(ui.foreground, into: ui.secondary, amount: 0.12),
@@ -468,10 +468,10 @@ enum MomentermDesign {
         static let railCollapsedWidth: CGFloat = 38
         static let railExpandedWidth: CGFloat = 236
         static let sidebarRowHeight: CGFloat = 22
-        static let fileTreeRowHeight: CGFloat = 20
+        static let fileTreeRowHeight: CGFloat = 22   // match diffSidebarRowHeight for a consistent list rhythm
         static let fileTreeIconSize: CGFloat = 13
         static let fileTreeIndentStep: CGFloat = 13
-        static let fileTreeLeadingInset: CGFloat = 4
+        static let fileTreeLeadingInset: CGFloat = 5   // match the diff sidebar's icon leading (+5)
         static let fileTreeLabelGap: CGFloat = 5
         static let diffSidebarRowHeight: CGFloat = 22
         static let controlRadius: CGFloat = Radius.control
@@ -520,7 +520,7 @@ enum MomentermDesign {
     enum Fonts {
         static let sidebar = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         static let sidebarSelected = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
-        static let code = NSFont(name: "Monaco", size: 14) ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        static let code = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         static let diffCode = NSFont(name: "Monaco", size: 11.5) ?? NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
         static let codeSmall = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 

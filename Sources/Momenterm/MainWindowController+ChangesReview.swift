@@ -651,8 +651,15 @@ extension MainWindowController {
         let line: Int
         if overlayMode == .files {
             line = lineNumber(in: textView.string, location: textView.selectedRange().location)
-        } else if let renderedLine = renderedSourceLineNumber(atSelectionIn: textView) {
-            line = renderedLine
+        } else if let gutterLine = diffGutterLineNumber(
+            in: textView,
+            atLocation: textView.reviewCursorLocation ?? textView.selectedRange().location
+        ) {
+            // The diff's line numbers live in the gutter caches, not the rendered text, so the
+            // cursor→line lookup must read the same gutter map saving does (diffGutterLineNumber).
+            // Parsing a leading number out of the code text (the old renderedSourceLineNumber path)
+            // never matches a saved note's line here, so arrow navigation could not re-select a comment.
+            line = gutterLine
         } else {
             return nil
         }
@@ -832,17 +839,54 @@ extension MainWindowController {
             diffNewGutterNumbers.append(nil)
         }
 
+        // The gutter padding + the new pane's inner exclusion strip must be set on the text container
+        // BEFORE the content is laid out. Setting exclusionPaths only AFTER setNewContent+scroll lays
+        // the text out ignoring the strip, so the line numbers overlap the code (the bug the user saw).
+        // diffGutterWidth is a fixed 44pt, so this doesn't need the post-content line counts.
+        applyDiffGutterTextInsets()
         codePane.setOldContent(oldOutput)
         codePane.setNewContent(newOutput)
         codePane.scrollOldToTop()
         codePane.scrollNewToTop()
-        // Apply the gutter text-container insets (padding + the new pane's inner exclusion strip)
-        // BEFORE placing the cursor, so the caret's glyph layout is computed against the final
-        // exclusion geometry instead of being invalidated by a later async reflow.
-        applyDiffGutterTextInsets()
         placeDiffHunkCursor(for: file)
         balanceOverlayDiffSplit()
         layoutDiffLineGutters(oldNumbers: diffOldGutterNumbers, newNumbers: diffNewGutterNumbers)
+
+        // The native split pane above is already fully populated with the diff. The Monaco
+        // hybrid pane is layered on top only when its webviews bundle shipped; smoke builds
+        // (no Resources/webviews/) keep the native NSTextView split pane so the diff stays
+        // navigable and focusable — mirroring how the file view falls back for plain source.
+        guard hybridWebViewsAvailable else {
+            showNativeSplitPane()
+            refreshInlineReviewCommentBoxes()
+            return
+        }
+        // US-H7: send reconstructed old/new content to Monaco diff editor.
+        let diffLanguage = languageForPath(file.newPath.isEmpty ? file.oldPath : file.newPath)
+        var oldLines: [String] = []
+        var newLines: [String] = []
+        for hunk in file.hunks {
+            for line in hunk.lines {
+                switch line.kind {
+                case .context:
+                    oldLines.append(line.text)
+                    newLines.append(line.text)
+                case .deletion:
+                    oldLines.append(line.text)
+                case .addition:
+                    newLines.append(line.text)
+                case .meta:
+                    break
+                }
+            }
+        }
+        diffHybridView.postJSON([
+            "type": "loadDiff",
+            "original": oldLines.joined(separator: "\n"),
+            "modified": newLines.joined(separator: "\n"),
+            "language": diffLanguage
+        ])
+        showHybridDiffPane()
         refreshInlineReviewCommentBoxes()
     }
     private func configureDiffEditorChrome(for file: DiffFile) {
@@ -951,60 +995,16 @@ extension MainWindowController {
         ].contains { lower.hasSuffix($0) }
     }
     private func diffSidebarRowButton(_ row: DiffSidebarRow) -> NSButton {
-        let button = NSButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
-        button.identifier = NSUserInterfaceItemIdentifier(row.identifier)
-        button.isBordered = false
-        button.bezelStyle = .regularSquare
-        button.alignment = .left
-        button.wantsLayer = true
-        button.layer?.cornerRadius = MomentermDesign.Metrics.controlRadius
-        button.layer?.backgroundColor = row.selected ? theme.selectionBackground.cgColor : NSColor.clear.cgColor
-        button.layer?.borderColor = row.selected ? theme.selectionBorder.cgColor : NSColor.clear.cgColor
-        button.layer?.borderWidth = row.selected ? 1 : 0
-        button.toolTip = row.path
-        button.translatesAutoresizingMaskIntoConstraints = false
-
-        let tint = diffStatusColor(status: row.status, vcs: row.vcs)
-        let iconView = NSImageView()
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = NSImage(systemSymbolName: diffFileIconName(for: row), accessibilityDescription: row.name)
-            ?? NSImage(systemSymbolName: "doc", accessibilityDescription: row.name)
-        iconView.image?.isTemplate = true
-        iconView.contentTintColor = tint
-        iconView.imageScaling = .scaleProportionallyDown
-
-        let nameLabel = NSTextField(labelWithString: row.name)
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = MomentermDesign.Fonts.codeSmall
-        nameLabel.textColor = tint
-        nameLabel.lineBreakMode = .byTruncatingMiddle
-        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        // Single line: name + review badges inline (they used to wrap onto a second row and
-        // overlap the file name). The name truncates to make room; badges hug their content.
-        let topLine = NSStackView()
-        topLine.orientation = .horizontal
-        topLine.alignment = .centerY
-        topLine.spacing = 5
-        topLine.translatesAutoresizingMaskIntoConstraints = false
-        topLine.addArrangedSubview(nameLabel)
+        var badges: [NSView] = []
         if row.viewed {
-            topLine.addArrangedSubview(diffReviewBadgeLabel("VIEWED", color: theme.additionText))
+            badges.append(diffReviewBadgeLabel("VIEWED", color: theme.additionText))
         }
         if row.questionCount > 0 {
-            topLine.addArrangedSubview(diffReviewBadgeLabel("Q\(row.questionCount)", color: theme.accent))
+            badges.append(diffReviewBadgeLabel("Q\(row.questionCount)", color: theme.accent))
         }
         if row.changeRequestCount > 0 {
-            topLine.addArrangedSubview(diffReviewBadgeLabel("CR\(row.changeRequestCount)", color: theme.deletionText))
+            badges.append(diffReviewBadgeLabel("CR\(row.changeRequestCount)", color: theme.deletionText))
         }
-        topLine.setHuggingPriority(.defaultLow, for: .horizontal)
-
-        let textStack = NSStackView()
-        textStack.orientation = .vertical
-        textStack.alignment = .leading
-        textStack.spacing = 0
-        textStack.translatesAutoresizingMaskIntoConstraints = false
-        textStack.addArrangedSubview(topLine)
 
         let additionsLabel = diffSidebarStatsLabel(
             identifier: "diff-stat-additions",
@@ -1022,42 +1022,29 @@ extension MainWindowController {
         countsStack.spacing = 3
         countsStack.translatesAutoresizingMaskIntoConstraints = false
         countsStack.toolTip = diffSidebarStatsText(additions: row.additions, deletions: row.deletions).string
-        countsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
-        countsStack.setContentHuggingPriority(.required, for: .horizontal)
         countsStack.addArrangedSubview(additionsLabel)
         countsStack.addArrangedSubview(deletionsLabel)
-
-        let content = NSView()
-        content.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(iconView)
-        content.addSubview(textStack)
-        content.addSubview(countsStack)
-        button.addSubview(content)
-
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.sidebarWidth),
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: MomentermDesign.Metrics.diffSidebarRowHeight),
-            content.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 5),
-            content.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -5),
-            content.topAnchor.constraint(equalTo: button.topAnchor, constant: 1),
-            content.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -1),
-            iconView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            iconView.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 13),
-            iconView.heightAnchor.constraint(equalToConstant: 13),
-            textStack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 5),
-            textStack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-            textStack.topAnchor.constraint(greaterThanOrEqualTo: content.topAnchor),
-            textStack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor),
-            textStack.trailingAnchor.constraint(lessThanOrEqualTo: countsStack.leadingAnchor, constant: -5),
-            countsStack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            countsStack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
             additionsLabel.widthAnchor.constraint(equalToConstant: 53),
             deletionsLabel.widthAnchor.constraint(equalToConstant: 43),
-            countsStack.widthAnchor.constraint(equalToConstant: 99),
-            textStack.widthAnchor.constraint(greaterThanOrEqualToConstant: 72)
+            countsStack.widthAnchor.constraint(equalToConstant: 99)
         ])
-        return button
+
+        // The diff sidebar is the shared file row as a FLAT list (depth 0, changed files only, no
+        // folders) carrying review badges + the +add/-del stats accessory. Everything else is the same
+        // builder the Cmd+1 file tree uses.
+        return fileRowButton(
+            identifier: row.identifier,
+            iconSymbol: diffFileIconName(for: row),
+            iconFallback: "doc",
+            tint: diffStatusColor(status: row.status, vcs: row.vcs),
+            name: row.name,
+            selected: row.selected,
+            depth: 0,
+            tooltip: row.path,
+            badges: badges,
+            trailing: countsStack
+        )
     }
     private func diffSidebarStatsLabel(identifier: String, text: String, color: NSColor) -> NSTextField {
         let label = NSTextField(labelWithString: text)
@@ -1114,7 +1101,7 @@ extension MainWindowController {
         label.widthAnchor.constraint(greaterThanOrEqualToConstant: title.count > 3 ? 43 : 24).isActive = true
         return label
     }
-    private func diffStatusColor(status: String, vcs: String?) -> NSColor {
+    func diffStatusColor(status: String, vcs: String?) -> NSColor {
         let normalized = (vcs ?? status).lowercased()
         if normalized == "new" || normalized == "untracked" || normalized == "unknown" {
             return theme.fileTreeVcsUntracked

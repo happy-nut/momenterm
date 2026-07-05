@@ -34,6 +34,14 @@ extension MainWindowController {
         guard let session = activeSession() else {
             return
         }
+        // Under ghostty the visible selection lives in the ghostty surface, not the (invisible,
+        // stale) NSTextView. Prefer it; copySelectionToPasteboard writes the clipboard itself and
+        // reports whether anything was selected.
+        if let ghosttyView = session.ghosttyView, ghosttyView.hasSelection() {
+            if ghosttyView.copySelectionToPasteboard() {
+                return
+            }
+        }
         let selectedText = selectedTerminalText(for: session)
         let text = selectedText.isEmpty ? session.output.string : selectedText
         guard !text.isEmpty else {
@@ -333,10 +341,13 @@ extension MainWindowController {
         terminalView.addSubview(terminalPaneSplitView)
 
         NSLayoutConstraint.activate([
-            terminalView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            terminalView.topAnchor.constraint(equalTo: rootView.safeAreaLayoutGuide.topAnchor),
             terminalView.leadingAnchor.constraint(equalTo: railView.trailingAnchor),
             terminalView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
-            terminalView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+            // Stop above the bottom system-stats bar (rail stays full-height beside it) so the bar
+            // never overlaps the terminal's last rows. systemStatsBar is always in the hierarchy
+            // (statsBarEnabled is constant true) even though its own constraints are set just below.
+            terminalView.bottomAnchor.constraint(equalTo: systemStatsBar.topAnchor),
 
             terminalPaneSplitView.topAnchor.constraint(equalTo: terminalView.topAnchor),
             terminalPaneSplitView.leadingAnchor.constraint(equalTo: terminalView.leadingAnchor),
@@ -779,7 +790,7 @@ extension MainWindowController {
             tab.workspacePath = workspacePath(forId: workspaceId)
             setActiveWorkspace(id: workspaceId)
             root = activeWorkspacePath.map { URL(fileURLWithPath: $0).standardizedFileURL }
-            // Looking at a pane clears its unread agent-alert ring (cmux axis 1c).
+            // Looking at a pane clears its unread agent-alert ring.
             clearAgentAlert(for: id)
         }
         persistActiveWorkspacePath()
@@ -1036,7 +1047,7 @@ extension MainWindowController {
                 container.layer = CALayer()
             }
             // A pane with a pending agent alert that the user isn't looking at yet
-            // gets a blue "unread" ring (cmux axis 1c), overriding the usual split
+            // gets a blue "unread" ring, overriding the usual split
             // borders and staying visible even for a single, unsplit pane.
             let hasUnreadAlert = !active && agentAlertSessionIds.contains(pane.id)
             // ghostty's Metal layer ignores NSView alphaValue, so an inactive pane is
@@ -1052,10 +1063,11 @@ extension MainWindowController {
                 container.layer?.borderWidth = MomentermDesign.Border.emphasis
                 container.layer?.borderColor = theme.stateAttention.cgColor
             } else {
-                // The active pane is indicated by its header + the un-dimmed content; the border
-                // stays a quiet neutral separator (no gold/amber accent ring, which read as tacky).
-                container.layer?.borderWidth = hasSplitPanes ? (active ? MomentermDesign.Border.regular : MomentermDesign.Border.hairline) : 0
-                container.layer?.borderColor = theme.panelBorder.withAlphaComponent(active ? 0.6 : 0.42).cgColor
+                // Panes read apart by their header + the un-dimmed content alone; no neutral
+                // separator border is drawn (it showed as a faint white line against the light
+                // theme). The agent-alert ring above and the merged-prompt ring below still paint.
+                container.layer?.borderWidth = 0
+                container.layer?.borderColor = NSColor.clear.cgColor
             }
             pane.paneHeaderView?.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.inactiveHeaderBackground).withAlphaComponent(active ? 1.0 : 0.88).cgColor
             pane.paneStatusBarView?.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.inactiveHeaderBackground).withAlphaComponent(active ? 1.0 : 0.88).cgColor
@@ -1171,6 +1183,18 @@ extension MainWindowController {
             }
             textView.drawsBackground = false
             textView.alphaValue = 0.01
+            // The textView sits on top (z-order) and keeps keyboard/IME focus, but ghostty owns
+            // the visible grid, so route mouse selection to ghostty. It renders its own highlight
+            // and, on mouse-up, we pull the selection to the clipboard.
+            textView.onMouseButton = { [weak ghosttyView] event, pressed in
+                ghosttyView?.forwardMouseButton(event, pressed: pressed)
+            }
+            textView.onMouseDrag = { [weak ghosttyView] event in
+                ghosttyView?.forwardMouseDrag(event)
+            }
+            textView.onMouseSelectionEnd = { [weak ghosttyView] in
+                ghosttyView?.copySelectionToPasteboard()
+            }
         }
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false

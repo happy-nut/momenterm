@@ -128,19 +128,19 @@ extension MainWindowController {
                         settingsPromptTextRow(
                             kind: "plan",
                             title: "Plan contract (change requests + memo)",
-                            detail: "Monacori default shown. Edits are saved for this workspace.",
+                            detail: "Momenterm default shown. Edits are saved for this workspace.",
                             rows: 5
                         ),
                         settingsPromptTextRow(
                             kind: "q",
                             title: "Questions heading",
-                            detail: "Monacori default shown. Edits are saved for this workspace.",
+                            detail: "Momenterm default shown. Edits are saved for this workspace.",
                             rows: 4
                         ),
                         settingsPromptTextRow(
                             kind: "c",
                             title: "Change-requests heading",
-                            detail: "Monacori default shown. Edits are saved for this workspace.",
+                            detail: "Momenterm default shown. Edits are saved for this workspace.",
                             rows: 4
                         ),
                         settingsPromptActionsRow()
@@ -348,7 +348,7 @@ extension MainWindowController {
         textView.backgroundColor = theme.codeBackground
         textView.font = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         textView.string = displayedMergePromptText(kind: kind)
-        textView.toolTip = "Monacori default prompt is shown when no workspace override is saved."
+        textView.toolTip = "Momenterm default prompt is shown when no workspace override is saved."
         textView.onTextChange = { [weak self] value in
             self?.saveMergePromptSetting(kind: kind, text: value, flash: true)
         }

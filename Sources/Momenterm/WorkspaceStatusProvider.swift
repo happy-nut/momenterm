@@ -1,6 +1,6 @@
 import Foundation
 
-// Rich workspace status (cmux axis 2): resolves the GitHub PR state and the local
+// Rich workspace status: resolves the GitHub PR state and the local
 // listening ports for a workspace so the rail can show "#123 open" / ":3000" badges
 // next to each workspace.
 //

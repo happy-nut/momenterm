@@ -32,7 +32,7 @@ Current classifications:
 - [ ] ISP: keep protocols narrow. Do not expose PTY, WebKit, or HTTP methods through Git/source abstractions.
 - [ ] DIP: high-level review orchestration depends on `GitClient`, not directly on process spawning.
 
-## UI/Parity Gate
+## UI Gate
 
 - [ ] Darcula visual tokens and syntax classes stay covered by `scripts/parity-smoke.sh`.
 - [ ] Design-system token scales (spacing, typography, radius/border/elevation, semantic
@@ -40,9 +40,9 @@ Current classifications:
       which pins their structural invariants (monotonic spacing, descending type ladder,
       ordered radius/border/elevation ramps, and semantic-color contracts). The pinned
       Darcula anchor values remain covered separately by `scripts/theme-smoke.sh`.
-- [ ] Monacori build-output parity stays covered by `scripts/ab-parity-smoke.sh` for modified, staged, untracked text, untracked binary, rename/delete/image, review signatures, source metadata, and HTTP environment fixtures.
-- [ ] Monacori-like action exposure stays covered: no topbar global action row, icon activity rail, guarded Quick Open binding, and icon-only contextual controls.
-- [ ] New keyboard shortcuts require parity smoke coverage.
+- [ ] Native review build-output stays covered by `scripts/ab-parity-smoke.sh` for modified, staged, untracked text, untracked binary, rename/delete/image, review signatures, source metadata, and HTTP environment fixtures.
+- [ ] IntelliJ-style action exposure stays covered: no topbar global action row, icon activity rail, guarded Quick Open binding, and icon-only contextual controls.
+- [ ] New keyboard shortcuts require smoke coverage.
 - [ ] New settings require persistence checks through the native settings bridge.
 - [ ] Terminal pane split layout persistence (pane count, split direction, split
       groups) stays covered by `scripts/pane-layout-smoke.sh`, which pins the pure
@@ -84,10 +84,10 @@ pass/fail. Under headless CI, GUI smokes are skipped via `SMOKE_SKIP="launch-smo
 (see `.github/workflows/ci.yml`). To run one smoke in isolation, call it directly, e.g.
 `./scripts/parity-smoke.sh` or `./scripts/pty-smoke.sh /path/to/repo`.
 
-For dependency-removal or native-port parity work, also scan for forbidden runtime markers:
+For dependency-removal or native-port work, also scan for forbidden runtime markers:
 
 ```bash
-rg -n "monacori/dist|monacori-bridge|MONACORI_DIST|NODE_BIN|buildDiffReview\\(|renderWelcomeHtml\\(|performHttpRequest\\(" Sources/Momenterm scripts Package.swift README.md -g '!*.app' -g '!ab-parity-smoke.mjs'
+rg -n "NODE_BIN|buildDiffReview\\(|renderWelcomeHtml\\(|performHttpRequest\\(" Sources/Momenterm scripts Package.swift README.md -g '!*.app' -g '!ab-parity-smoke.mjs'
 ```
 
 The scan should return no matches.

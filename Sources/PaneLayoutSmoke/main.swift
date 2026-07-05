@@ -1,7 +1,7 @@
 import Foundation
 
 // Isolated regression smoke for terminal pane split layout serialization
-// (cmux axis 3 / PRD US-4). Compiles PaneLayoutCodec + JSONValue in isolation
+// (PRD US-4). Compiles PaneLayoutCodec + JSONValue in isolation
 // (no AppKit, no PTY, no MainWindowController) and pins the pure
 // encode -> JSON -> decode round-trip for the split layout:
 //   * single pane

@@ -323,7 +323,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let color: NSColor
         let iconName: String
         let branchName: String?
-        // Rich rail status (cmux axis 2). These are runtime-refreshed by
+        // Rich rail status. These are runtime-refreshed by
         // WorkspaceStatusProvider and intentionally NOT persisted — only
         // path/name/color/icon/branch survive across launches.
         var prNumber: Int?
@@ -465,7 +465,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var terminalTabs: [TerminalTab] = []
     var workspaces: [Workspace] = []
     var workspaceAgentAlertPaths = Set<String>()
-    // Pane-level agent alerts (cmux axis 1c): the session ids of terminal panes
+    // Pane-level agent alerts: the session ids of terminal panes
     // that received an agent notification and haven't been looked at yet. Drives
     // the blue "unread" ring around a pane and the Cmd+Shift+U jump target.
     var agentAlertSessionIds = Set<Int>()
@@ -556,7 +556,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var keyMonitor: Any?
     var diffScrollSyncObserver: NSObjectProtocol?
     var workspaceRailExpanded = false
-    let workspaceRailAnimationDuration: TimeInterval = 0.16
+    let workspaceRailAnimationDuration: TimeInterval = 0.25
     var workspaceRailLastAnimatedTransition: (from: CGFloat, to: CGFloat, duration: TimeInterval)?
     private var lastShiftAt: TimeInterval = 0
     private var lastShiftKeyCode: UInt16 = 0
@@ -571,7 +571,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     let rootView = NSView()
     // Window-wide bottom bar (CPU/Memory/Network), independent of how many panes are split.
-    private let systemStatsBar = SystemStatsBarView()
+    let systemStatsBar = SystemStatsBarView()
     let railView = NSView()
     let railStack = NSStackView()
     // Bottom-pinned rail actions (Settings) that sit at the very bottom of the
@@ -636,6 +636,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let sourcePreviewScrollView = NSScrollView()
     let sourcePreviewDocumentView = NSView()
     let sourcePreviewImageView = NSImageView()
+    // JS-hybrid content views (US-H4/H5 file viewer, US-H7 diff, US-H8 git graph).
+    let fileHybridView = NativeHybridWebView()
+    let diffHybridView = NativeHybridWebView()
+    // True when the Monaco/webviews bundle actually shipped alongside the binary.
+    // Smoke builds compiled straight with swiftc have no Resources/webviews/, so the
+    // hybrid WKWebView panes can never load — diff rendering falls back to the native
+    // NSTextView split pane, exactly like the file view does for plain source files.
+    lazy var hybridWebViewsAvailable: Bool = {
+        guard let resourcesURL = Bundle.main.resourceURL else { return false }
+        let diffViewer = resourcesURL.appendingPathComponent("webviews/diff-viewer.html")
+        return FileManager.default.fileExists(atPath: diffViewer.path)
+    }()
+    let historyGraphWebView = NativeHybridWebView()
     var memoPanelVisibleTrailingConstraint: NSLayoutConstraint?
     var memoPanelHiddenLeadingConstraint: NSLayoutConstraint?
     var mergedPromptPanelVisibleTrailingConstraint: NSLayoutConstraint?
@@ -669,6 +682,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     var theme = ThemeManager.shared.theme
     private var themeChangeObserver: NSObjectProtocol?
+    private var scrollerStyleObserver: NSObjectProtocol?
 
     init(initialRoot: URL?, initialTerminalCommand: String? = nil) {
         let standardizedInitialRoot = initialRoot?.standardizedFileURL
@@ -679,11 +693,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1320, height: 900),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = "Momenterm"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         window.minSize = NSSize(width: 960, height: 620)
 
         super.init(window: window)
@@ -704,6 +721,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         ) { [weak self] _ in
             self?.applyTheme(ThemeManager.shared.theme)
         }
+        scrollerStyleObserver = NotificationCenter.default.addObserver(
+            forName: NSScroller.preferredScrollerStyleDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.reapplyMinimalScrollbarStyles()
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -723,6 +747,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
         if let themeChangeObserver = themeChangeObserver {
             NotificationCenter.default.removeObserver(themeChangeObserver)
+        }
+        if let scrollerStyleObserver = scrollerStyleObserver {
+            NotificationCenter.default.removeObserver(scrollerStyleObserver)
         }
     }
 
@@ -1168,9 +1195,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         header.addSubview(close)
 
         sourceRawToggleButton.translatesAutoresizingMaskIntoConstraints = false
-        sourceRawToggleButton.bezelStyle = .rounded
+        sourceRawToggleButton.bezelStyle = .regularSquare
+        sourceRawToggleButton.isBordered = false
+        sourceRawToggleButton.imageScaling = .scaleNone
         sourceRawToggleButton.controlSize = .small
-        sourceRawToggleButton.font = MomentermDesign.Fonts.UI.caption.font
         sourceRawToggleButton.target = self
         sourceRawToggleButton.action = #selector(toggleSourceRawModeAction)
         sourceRawToggleButton.isHidden = true
@@ -1297,6 +1325,29 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         sourcePreviewScrollView.isHidden = true
         overlayContentView.addSubview(sourcePreviewScrollView)
 
+        fileHybridView.translatesAutoresizingMaskIntoConstraints = false
+        fileHybridView.isHidden = true
+        fileHybridView.onDidFinishLoad = { [weak self] in self?.reapplyMinimalScrollbarStyles() }
+        overlayContentView.addSubview(fileHybridView)
+        fileHybridView.loadFromBundle(htmlFile: "code-viewer.html")
+
+        diffHybridView.translatesAutoresizingMaskIntoConstraints = false
+        diffHybridView.isHidden = true
+        diffHybridView.onDidFinishLoad = { [weak self] in self?.reapplyMinimalScrollbarStyles() }
+        overlayContentView.addSubview(diffHybridView)
+        diffHybridView.loadFromBundle(htmlFile: "diff-viewer.html")
+
+        historyGraphWebView.translatesAutoresizingMaskIntoConstraints = false
+        historyGraphWebView.isHidden = true
+        historyGraphWebView.onDidFinishLoad = { [weak self] in self?.reapplyMinimalScrollbarStyles() }
+        overlayContentView.addSubview(historyGraphWebView)
+        historyGraphWebView.loadFromBundle(htmlFile: "git-graph.html")
+        historyGraphWebView.registerMessageHandler(name: "commitSelected") { [weak self] body in
+            guard let self = self, let dict = body as? [String: Any],
+                  let hash = dict["hash"] as? String else { return }
+            self.selectHistoryCommitByHash(hash)
+        }
+
         let settingsDocument = NSView()
         settingsDocument.translatesAutoresizingMaskIntoConstraints = false
         settingsDocument.wantsLayer = true
@@ -1358,7 +1409,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlaySidebarHeightConstraint = sidebarScroll.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.findPanelResultsHeight)
         overlaySidebarWidthConstraint?.isActive = true
 
-        overlayTopConstraint = overlayView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: MomentermDesign.Metrics.panelOuterPadding)
+        overlayTopConstraint = overlayView.topAnchor.constraint(equalTo: rootView.safeAreaLayoutGuide.topAnchor, constant: MomentermDesign.Metrics.panelOuterPadding)
         overlayLeadingConstraint = overlayView.leadingAnchor.constraint(equalTo: railView.trailingAnchor, constant: MomentermDesign.Metrics.panelOuterPadding)
         overlayTrailingConstraint = overlayView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding)
         overlayBottomConstraint = overlayView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding)
@@ -1387,11 +1438,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             diffEditorStatusLabel.centerYAnchor.constraint(equalTo: diffEditorToolbarStack.centerYAnchor),
             diffEditorStatusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
 
+            // The path (revision + file path) is the bottom-left of the chrome; cap its trailing at the
+            // "Current version" checkbox so a long path (e.g. .omc/state/…​.json) truncates instead of
+            // drawing straight through the checkbox and status text. byTruncatingMiddle keeps head+tail.
             diffEditorPathLabel.leadingAnchor.constraint(equalTo: diffEditorChromeView.leadingAnchor, constant: 8),
-            diffEditorPathLabel.trailingAnchor.constraint(lessThanOrEqualTo: diffEditorStatusLabel.leadingAnchor, constant: -12),
+            diffEditorPathLabel.trailingAnchor.constraint(lessThanOrEqualTo: diffEditorCurrentVersionCheckbox.leadingAnchor, constant: -12),
             diffEditorPathLabel.bottomAnchor.constraint(equalTo: diffEditorChromeView.bottomAnchor, constant: -4),
 
-            diffEditorCurrentVersionCheckbox.centerXAnchor.constraint(equalTo: diffEditorChromeView.centerXAnchor),
+            // Checkbox sits bottom-right (under the status line), not centered — centering ran it
+            // straight into the path label.
+            diffEditorCurrentVersionCheckbox.trailingAnchor.constraint(equalTo: diffEditorChromeView.trailingAnchor, constant: -8),
             diffEditorCurrentVersionCheckbox.bottomAnchor.constraint(equalTo: diffEditorChromeView.bottomAnchor, constant: -3),
 
             overlayDiffTopConstraint!,
@@ -1403,6 +1459,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             sourcePreviewScrollView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor, constant: MomentermDesign.Metrics.panelInnerPadding),
             sourcePreviewScrollView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor, constant: -MomentermDesign.Metrics.panelInnerPadding),
             sourcePreviewScrollView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor, constant: -MomentermDesign.Metrics.panelInnerPadding),
+
+            // fileHybridView: same position as sourcePreviewScrollView (no inner padding for Monaco).
+            fileHybridView.topAnchor.constraint(equalTo: overlayContentView.topAnchor),
+            fileHybridView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor),
+            fileHybridView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor),
+            fileHybridView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor),
+
+            // diffHybridView: sits below chrome bar (same as overlayDiffSplitView).
+            diffHybridView.topAnchor.constraint(equalTo: diffEditorChromeView.bottomAnchor),
+            diffHybridView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor),
+            diffHybridView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor),
+            diffHybridView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor),
+
+            // historyGraphWebView: fills the content area in history mode.
+            historyGraphWebView.topAnchor.constraint(equalTo: overlayContentView.topAnchor),
+            historyGraphWebView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor),
+            historyGraphWebView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor),
+            historyGraphWebView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor),
 
             overlaySettingsScrollView.topAnchor.constraint(equalTo: overlayContentView.topAnchor, constant: MomentermDesign.Metrics.panelInnerPadding),
             overlaySettingsScrollView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor, constant: MomentermDesign.Metrics.panelInnerPadding),
@@ -1752,7 +1826,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 openMergedView(kind: "c")
                 return true
             }
-            // Cmd+Shift+U: jump to the next pane waiting on an agent alert (cmux axis 1d).
+            // Cmd+Shift+U: jump to the next pane waiting on an agent alert.
             if lowerKey == "u" || event.keyCode == 32 {
                 if jumpToNextAgentAlertPane() {
                     return true
@@ -1941,18 +2015,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     private func handleOverlayNavigationKey(_ event: NSEvent, key: String) -> Bool {
         if let codeView = overlayCodePaneForNavigationKey(event) {
-            if (event.keyCode == 125 || event.keyCode == 126),
-               selectedReviewNoteIndex != nil {
-                refreshInlineReviewCommentBoxes()
-                return true
-            }
-            if (event.keyCode == 125 || event.keyCode == 126),
-               selectedReviewNoteIndex == nil,
-               let noteIndex = reviewNoteIndexAtCursor(in: codeView) {
-                selectedReviewNoteIndex = noteIndex
-                refreshInlineReviewCommentBoxes()
-                return true
-            }
+            // Arrow keys always move the review cursor; the comment selection then follows the cursor
+            // (updateInlineReviewSelectionForCursor highlights a comment when the cursor lands on its
+            // line and clears it otherwise). A selected comment used to swallow up/down here, trapping
+            // the cursor the instant a comment was added and giving no way to deselect by moving away.
             _ = codeView.moveReviewCursorForNavigationKey(event.keyCode)
             updateInlineReviewSelectionForCursor(in: codeView)
             return true
@@ -1992,12 +2058,32 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             codePane.focusOldPane(in: window)
             return true
         case 124:
+            // Right arrow expands the selected folder in the file tree (IntelliJ-style), so folders
+            // open with either Enter or →. On a file, an already-expanded folder, or any other overlay
+            // it keeps its original job of moving focus into the code pane.
+            if overlayMode == .files,
+               let row = fileTreeModel.selectedRow(),
+               row.isFolder,
+               !fileTreeModel.expandedFolders.contains(row.path) {
+                expandFileTreeFolder(row.path, focusSidebarAfterLoad: true)
+                return true
+            }
             codePane.focusNewPane(in: window)
             return true
         case 125:
+            // When the file-view WKWebView (Monaco) has focus, let the event fall through to
+            // the editor so the cursor moves within the file instead of changing the sidebar selection.
+            if overlayMode == .files, !fileHybridView.isHidden,
+               firstResponderIsOrDescends(from: fileHybridView) {
+                return false
+            }
             moveOverlaySelection(delta: 1)
             return true
         case 126:
+            if overlayMode == .files, !fileHybridView.isHidden,
+               firstResponderIsOrDescends(from: fileHybridView) {
+                return false
+            }
             moveOverlaySelection(delta: -1)
             return true
         case 36, 76:
@@ -2061,17 +2147,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             let nextIndex = (currentIndex + delta + fileTreeModel.rowsAll.count) % fileTreeModel.rowsAll.count
             let row = fileTreeModel.rowsAll[nextIndex]
             fileTreeModel.selectedIdentifier = row.identifier
-            if !row.isFolder, let sourceIndex = row.sourceIndex {
-                selectedSourceIndex = sourceIndex
-                pushCursorHistory(row.path)
-            }
-            if updateVisibleFileTreeSelection() {
-                if row.isFolder {
-                    renderSourceFile(syntheticFolderSourceFile(path: row.path))
-                } else {
-                    scheduleSelectedSourcePreviewRender()
-                }
-            } else {
+            // Arrow keys only move the tree cursor; the code pane keeps showing the last file that was
+            // actually opened (Enter or click). Walking across rows — folders included — never re-renders
+            // the preview, so a folder row can't replace the open file with a "Press Enter to expand" stub.
+            if !updateVisibleFileTreeSelection() {
                 populateFilesOverlay()
             }
             focusFileSidebar()
@@ -2095,7 +2174,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             }
             awaitingNextFileAfterLastHunk = false
             renderDiffFile(files[selectedDiffIndex])
-            codePane.focusNewPane(in: window)
+            if diffHybridView.isHidden {
+                codePane.focusNewPane(in: window)
+            } else {
+                diffHybridView.focusWebContent(in: window)
+            }
         case .files:
             guard let row = fileTreeModel.selectedRow() else {
                 return
@@ -2106,9 +2189,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             } else if let sourceIndex = row.sourceIndex,
                       let document = activeFilesDocument(),
                       document.sourceFiles.indices.contains(sourceIndex) {
+                // Enter is what actually opens a file: commit it as the previewed file
+                // (selectedSourceIndex) so later sidebar rebuilds keep showing it, then focus the pane.
+                selectedSourceIndex = sourceIndex
                 let selected = document.sourceFiles[sourceIndex]
                 renderSourceFile(selected)
-                codePane.focusOldPane(in: window)
+                if !fileHybridView.isHidden {
+                    fileHybridView.focusWebContent(in: window)
+                } else {
+                    codePane.focusOldPane(in: window)
+                }
                 pushCursorHistory(selected.path)
             }
         case .history:
@@ -2257,7 +2347,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
 
-    // MARK: - Control socket (cmux axis 4)
+    // MARK: - Control socket
 
     /// Applies a command received over the Momenterm control socket. Reuses the
     /// same window actions a keyboard shortcut would, so scripting stays in sync
@@ -2340,6 +2430,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             labels.append(contentsOf: collectTextFields(in: subview))
         }
         return labels
+    }
+
+    func reapplyMinimalScrollbarStyles() {
+        guard window != nil else { return }
+        collectScrollViews(in: rootView).forEach { scroll in
+            guard scroll.verticalScroller is MomentermMinimalScroller,
+                  scroll.scrollerStyle != .overlay else { return }
+            scroll.scrollerStyle = .overlay
+        }
     }
 
     func collectScrollViews(in view: NSView) -> [NSScrollView] {
@@ -2569,6 +2668,63 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlaySidebarStack.spacing = 4
         overlayContentView.layer?.borderColor = NSColor.clear.cgColor
         overlayContentView.layer?.borderWidth = 0
+        // Reset hybrid panels to hidden. overlayDiffSplitView visibility is managed by
+        // setSettingsContentVisible (called before this from populateOverlay) and by
+        // the showXxxPane helpers in each render call — do not touch it here.
+        fileHybridView.isHidden = true
+        diffHybridView.isHidden = true
+        historyGraphWebView.isHidden = true
+    }
+
+    // MARK: - Hybrid content pane visibility
+
+    func showHybridFilePane() {
+        overlayDiffSplitView.isHidden = true
+        sourcePreviewScrollView.isHidden = true
+        fileHybridView.isHidden = false
+        diffHybridView.isHidden = true
+        historyGraphWebView.isHidden = true
+    }
+
+    func showHybridDiffPane() {
+        overlayDiffSplitView.isHidden = true
+        sourcePreviewScrollView.isHidden = true
+        fileHybridView.isHidden = true
+        diffHybridView.isHidden = false
+        historyGraphWebView.isHidden = true
+    }
+
+    func showHistoryGraphPane() {
+        overlayDiffSplitView.isHidden = true
+        sourcePreviewScrollView.isHidden = true
+        fileHybridView.isHidden = true
+        diffHybridView.isHidden = true
+        historyGraphWebView.isHidden = false
+    }
+
+    func showNativeSplitPane() {
+        overlayDiffSplitView.isHidden = false
+        sourcePreviewScrollView.isHidden = true
+        fileHybridView.isHidden = true
+        diffHybridView.isHidden = true
+        historyGraphWebView.isHidden = true
+    }
+
+    func showNativeImagePane() {
+        overlayDiffSplitView.isHidden = true
+        sourcePreviewScrollView.isHidden = false
+        fileHybridView.isHidden = true
+        diffHybridView.isHidden = true
+        historyGraphWebView.isHidden = true
+    }
+
+    // Called when a commit is selected in the JS git graph.
+    func selectHistoryCommitByHash(_ hash: String) {
+        guard let idx = historyCommits.firstIndex(where: {
+            ($0.objectValue?["hash"]?.stringValue ?? "").hasPrefix(hash) || hash.hasPrefix($0.objectValue?["hash"]?.stringValue ?? "X")
+        }) else { return }
+        selectedHistoryIndex = idx
+        populateHistoryOverlay()
     }
 
     private func configureFilesOverlayBodyLayout() {
@@ -3250,13 +3406,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             }
         }
 
-        // Docked panels drop the rounded card corners, but KEEP the hairline border so they
-        // read as a framed region consistent with the terminal panes' white-line border. Only a
-        // fully-maximized (rail hidden) panel goes fully borderless.
+        // Docked panels drop the rounded card corners; floating panels keep the rounded card
+        // shape. Neither draws a border anymore — the hairline read as a faint white line against
+        // the light-theme background, so panels are framed by their fill + corner radius alone.
         let seamless = dockedOverlayModeActive || effectiveMaximized
         overlayView.layer?.cornerRadius = seamless ? 0 : MomentermDesign.Radius.medium
-        overlayView.layer?.borderWidth = effectiveMaximized ? 0 : 1
-        overlayView.layer?.borderColor = theme.panelBorder.cgColor
+        overlayView.layer?.borderWidth = 0
+        overlayView.layer?.borderColor = NSColor.clear.cgColor
 
         // Only floating (compact) panels need the click-blocking backdrop; full/maximized
         // overlays already cover the content and must leave the rail interactive. With a side
@@ -3329,12 +3485,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         guard canToggle else {
             return
         }
-        // The button shows the action it performs: in rendered mode it offers "Raw",
-        // in raw mode it offers "Rendered".
-        sourceRawToggleButton.title = sourceRawMode ? "Rendered" : "Raw"
-        sourceRawToggleButton.toolTip = sourceRawMode
-            ? "Show the rendered preview (⇧⌘R)"
-            : "Show the raw source text (⇧⌘R)"
+        // Icon toggle: in rendered mode the button offers the raw-source glyph, in raw mode the
+        // rendered-document glyph. Both symbols ship in macOS 11 (the deployment target). ⇧⌘R
+        // (menu: Toggle Raw/Rendered) toggles the same state.
+        let symbol = sourceRawMode ? "doc.richtext" : "chevron.left.slash.chevron.right"
+        let label = sourceRawMode ? "Show the rendered preview" : "Show the raw source text"
+        sourceRawToggleButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        sourceRawToggleButton.imagePosition = .imageOnly
+        sourceRawToggleButton.toolTip = "\(label) (⇧⌘R)"
     }
 
     @objc func toggleSourceRawModeAction() {
@@ -3526,10 +3684,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             fileTreeModel.expandedFolders = storedFileTreeExpandedFolders(forRoot: listingRootPath)
         }
 
-        if let fileListingDocument = fileListingDocument,
-           normalizedWorkspacePath(fileListingDocument.root) == listingRootPath,
-           normalizedWorkspacePath(fileListingRoot?.path) == listingRootPath {
+        // Use any already-available document for this root (fileListingDocument or currentDocument
+        // when it is a git repo for the same path) to avoid a redundant background fileListing call.
+        if let existingDoc = activeFilesDocument(),
+           normalizedWorkspacePath(existingDoc.root) == listingRootPath {
             isLoadingFileListing = false
+            if fileListingDocument == nil {
+                fileListingDocument = existingDoc
+                fileListingRoot = listingRoot
+                // Reload path: expandedFolders was cleared; re-apply stored expansion.
+                if fileTreeModel.expandedFolders.isEmpty {
+                    fileTreeModel.expandedFolders = storedFileTreeExpandedFolders(forRoot: listingRootPath)
+                    ensureExpandedFileTreeFoldersLoaded()
+                }
+            }
             showOverlay(.files)
             focusFileSidebar()
             return
@@ -4131,7 +4299,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     func defaultMergePrompt(kind: String) -> String {
         switch kind {
         case "plan":
-            return "Before changing any code, write a short implementation PLAN to `.monacori/plan.md` as Markdown. Break the work into small, independently verifiable steps — each with a one-line check for how you'll confirm it works. Get the plan right first, then implement one step at a time, keeping each step small enough to review on its own."
+            return "Before changing any code, write a short implementation PLAN to `.momenterm/plan.md` as Markdown. Break the work into small, independently verifiable steps — each with a one-line check for how you'll confirm it works. Get the plan right first, then implement one step at a time, keeping each step small enough to review on its own."
         case "c":
             return "The following are change requests for code you just wrote. For each, edit the code at the quoted location to satisfy the request. Keep changes minimal and focused; do not make unrelated edits."
         default:
@@ -4185,11 +4353,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
 
 
-
-
-    @objc func reloadAction() {
-        reload()
-    }
 
 
     @objc func showFilesAction() {
@@ -4312,7 +4475,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     static let settingsKey = "momenterm.settings"
     static let recentProjectsKey = "momenterm.recentProjects"
-    static let mergePromptsSettingsKey = "monacori-merge-prompts"
+    static let mergePromptsSettingsKey = "momenterm-merge-prompts"
     static let promptMemoSettingsKey = "momenterm.prompt-memo.by-workspace"
     static let reviewNotesSettingsKey = "momenterm.review-notes.by-workspace"
     // Expanded file-tree folders persisted per listing root path so a relaunch restores exactly the

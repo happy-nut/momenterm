@@ -1,6 +1,6 @@
 import Foundation
 
-// Regression smoke for the Momenterm control-socket wire protocol (cmux axis 4).
+// Regression smoke for the Momenterm control-socket wire protocol.
 // Pins the pure encode -> JSON-line -> decode round-trip for every command and
 // verifies malformed / unknown / partial input decodes to nil (graceful skip),
 // so scripting the app over the socket can't silently break.

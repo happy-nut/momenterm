@@ -8,7 +8,7 @@ protocol MomentermSocketServerDelegate: AnyObject {
     func socketServer(_ server: MomentermSocketServer, didReceive command: MomentermCommand)
 }
 
-// Unix domain socket server for the Momenterm control API (cmux axis 4).
+// Unix domain socket server for the Momenterm control API.
 // Listens on a per-user socket, reads JSON-lines, decodes them into
 // `MomentermCommand`s (via the pure protocol), and forwards each to the
 // delegate on the main queue. Everything is best-effort: if the socket can't be
