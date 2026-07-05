@@ -1522,6 +1522,16 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("beginning a workspace rename did not enter inline-edit mode with a rename field present")
             return
         }
+        // Reported regression: a background rail repaint (workspace-status refresh / agent OSC
+        // notification) arriving mid-rename must NOT collapse the inline edit field. Before the fix
+        // that rebuild tore the focused field out of the view tree, fired commit-on-focus-loss, and
+        // snapped the row back to a static label so it could no longer be typed into.
+        controller.simulateBackgroundRailRepaintForSmokeTest()
+        guard controller.isRenamingWorkspaceForSmokeTest(),
+              controller.workspaceRenameFieldIsPresentForSmokeTest() else {
+            fail("a background rail repaint during inline rename tore down the edit field (rename-revert regression)")
+            return
+        }
         guard controller.commitWorkspaceInlineRenameForSmokeTest("home-alpha-inline"),
               !controller.isRenamingWorkspaceForSmokeTest(),
               controller.workspaceNameForSmokeTest(id: idA) == "home-alpha-inline" else {
@@ -1539,6 +1549,39 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
                 return
             }
         }
+
+        // Reported ask: each expanded workspace row carries a top-right ✕ button that removes that
+        // specific instance, and Backspace removes the highlighted one. Both go through the same
+        // forget-by-id core (US-15), so same-path siblings are removed independently.
+        let closeButtonIds = controller.expandedWorkspaceCloseButtonIdsForSmokeTest()
+        guard closeButtonIds.contains(idA), closeButtonIds.contains(idB) else {
+            fail("expanded workspace rows are missing their ✕ close buttons; ids=\(closeButtonIds)")
+            return
+        }
+        let countBeforeClose = controller.workspaceCountForSmokeTest()
+        guard controller.triggerWorkspaceCloseButtonForSmokeTest(id: idB) else {
+            fail("the workspace ✕ close button action did not fire for the target instance")
+            return
+        }
+        guard controller.workspaceNameForSmokeTest(id: idB) == nil,
+              controller.workspaceNameForSmokeTest(id: idA) != nil,
+              controller.workspaceCountForSmokeTest() == countBeforeClose - 1 else {
+            fail("the ✕ button did not remove exactly the targeted workspace; A=\(controller.workspaceNameForSmokeTest(id: idA) ?? "nil") B=\(controller.workspaceNameForSmokeTest(id: idB) ?? "nil") count=\(controller.workspaceCountForSmokeTest())")
+            return
+        }
+        guard let indexA = controller.workspacePickerIndexForSmokeTest(id: idA) else {
+            fail("could not locate the surviving workspace to exercise Backspace removal")
+            return
+        }
+        controller.selectWorkspacePickerIndexForSmokeTest(indexA)
+        let countBeforeBackspace = controller.workspaceCountForSmokeTest()
+        guard controller.removeSelectedWorkspaceViaBackspaceForSmokeTest(),
+              controller.workspaceNameForSmokeTest(id: idA) == nil,
+              controller.workspaceCountForSmokeTest() == countBeforeBackspace - 1 else {
+            fail("Backspace did not remove the highlighted workspace; A=\(controller.workspaceNameForSmokeTest(id: idA) ?? "nil") count=\(controller.workspaceCountForSmokeTest())")
+            return
+        }
+
         controller.closeMemoAndFocusTerminalForSmokeTest()
     }
 

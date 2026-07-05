@@ -2954,6 +2954,48 @@ extension MainWindowController {
         return true
     }
 
+    // Regression hook: simulates a background rail repaint (workspace-status refresh or agent OSC
+    // notification) landing while an inline rename is open. With the guard in rebuildWorkspaceButtons
+    // this must be a no-op that leaves the focused rename field intact; before the fix it tore the
+    // field out of the view tree and committed early, snapping the row back to a static label.
+    func simulateBackgroundRailRepaintForSmokeTest() {
+        rebuildWorkspaceButtons()
+    }
+
+    // Identifiers (workspace ids) of the ✕ close buttons currently rendered in the expanded rail.
+    // Identified by their tooltip so the check exercises the real rendered affordance.
+    func expandedWorkspaceCloseButtonIdsForSmokeTest() -> [String] {
+        collectWorkspaceCloseButtons(in: workspaceStack).compactMap { $0.identifier?.rawValue }
+    }
+
+    // Invokes the real ✕ button target/action for the given workspace id, exercising the full
+    // close-button wiring (including the private handler) end to end.
+    @discardableResult
+    func triggerWorkspaceCloseButtonForSmokeTest(id: String) -> Bool {
+        guard let button = collectWorkspaceCloseButtons(in: workspaceStack).first(where: { $0.identifier?.rawValue == id }),
+              let action = button.action else {
+            return false
+        }
+        return NSApp.sendAction(action, to: button.target, from: button)
+    }
+
+    // Mirrors the Backspace case in handleWorkspaceRailKey: removes the highlighted workspace.
+    @discardableResult
+    func removeSelectedWorkspaceViaBackspaceForSmokeTest() -> Bool {
+        forgetSelectedWorkspacePickerItem()
+    }
+
+    private func collectWorkspaceCloseButtons(in view: NSView) -> [NSButton] {
+        var result: [NSButton] = []
+        for subview in view.subviews {
+            if let button = subview as? NSButton, (button.toolTip ?? "").hasPrefix("Remove workspace") {
+                result.append(button)
+            }
+            result.append(contentsOf: collectWorkspaceCloseButtons(in: subview))
+        }
+        return result
+    }
+
     func beginTerminalPaneRenameForSmokeTest() {
         renameTerminalPane()
     }

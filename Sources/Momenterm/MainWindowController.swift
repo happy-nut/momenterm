@@ -501,6 +501,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // When set, the expanded rail renders an inline editable name field for this workspace instead of
     // a label (US: create/rename without a modal dialog).
     var renamingWorkspaceId: String?
+    // Set only for the single rebuildWorkspaceButtons() pass that *creates* the inline rename
+    // field (from beginWorkspaceRename). It lets rebuildWorkspaceButtons skip *background* repaints
+    // (workspace-status refresh, agent OSC notifications) while a rename is open — those would
+    // otherwise tear the focused field out of the view tree and fire commit-on-focus-loss, snapping
+    // the edit back to a static label mid-type.
+    var isBuildingWorkspaceRenameField = false
     // True while a terminal pane header shows its inline rename field.
     var renamingTerminalPaneActive = false
     var lastSidebarFocusDiagnostic = ""

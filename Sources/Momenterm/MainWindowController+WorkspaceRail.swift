@@ -25,10 +25,14 @@ extension MainWindowController {
         if overlayMode != .hidden {
             hideOverlay()
         }
+        // Build the rail (and expand it if needed) with the create-field flag on, so the guard in
+        // rebuildWorkspaceButtons lets these rebuilds through and actually drops in the edit field.
+        isBuildingWorkspaceRenameField = true
         if !workspaceRailExpanded {
             setWorkspaceRailPickerVisible(true, animated: true)
         }
         rebuildWorkspaceButtons()
+        isBuildingWorkspaceRenameField = false
         focusRenamingWorkspaceField()
     }
     private func focusRenamingWorkspaceField() {
@@ -390,6 +394,17 @@ extension MainWindowController {
         return container
     }
     func rebuildWorkspaceButtons() {
+        // Guard: a background repaint must not tear down an in-progress inline rename field.
+        // Removing the focused field from the view tree drops first responder, which fires
+        // NativeInlineRenameField's commit-on-focus-loss and collapses the edit back to a static
+        // label mid-type — the reported "press e, it enters edit then snaps back and can't be
+        // typed into" bug. renamingWorkspaceId marks an open rename; isBuildingWorkspaceRenameField
+        // is set only for the rebuild that creates the field, so creation still runs. Deferred
+        // repaints (workspace-status refresh, agent notifications) land on the next rebuild after
+        // the rename commits or cancels.
+        if renamingWorkspaceId != nil, !isBuildingWorkspaceRenameField {
+            return
+        }
         workspaceStack.arrangedSubviews.forEach { view in
             workspaceStack.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -444,7 +459,14 @@ extension MainWindowController {
             button.imageScaling = .scaleNone
             button.imagePosition = .imageOnly
             button.contentTintColor = workspace.color
-            button.toolTip = tooltipText(label: "Select workspace: \(tooltip)", shortcut: "Cmd+P")
+            // Hover tooltip advertises the row shortcuts. The expanded switcher is keyboard-driven
+            // (Enter/E/Backspace), so it spells those out; the collapsed rail just names the Cmd+P
+            // picker that opens it.
+            if workspaceRailExpanded {
+                button.toolTip = "\(tooltip)\nEnter: open · E: rename · Backspace: remove"
+            } else {
+                button.toolTip = tooltipText(label: "Select workspace: \(tooltip)", shortcut: "Cmd+P")
+            }
             button.title = ""
             button.alignment = .left
             button.font = MomentermDesign.Fonts.sidebarSelected
@@ -518,6 +540,27 @@ extension MainWindowController {
         icon.contentTintColor = workspace.color
         icon.imageScaling = .scaleNone
         button.addSubview(icon)
+
+        // Top-right ✕ button removes this specific workspace instance (US-15: by id, so same-path
+        // siblings are removed independently). Same effect as Backspace on the highlighted row; its
+        // own hover tooltip advertises the shortcut. Pinned in the corner and given its own click
+        // target so it doesn't trigger the row's select action.
+        let closeButton = NSButton(title: "", target: self, action: #selector(closeWorkspaceButton(_:)))
+        closeButton.identifier = NSUserInterfaceItemIdentifier(workspace.id)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.isBordered = false
+        closeButton.bezelStyle = .regularSquare
+        closeButton.imagePosition = .imageOnly
+        closeButton.imageScaling = .scaleProportionallyDown
+        closeButton.contentTintColor = theme.secondaryText
+        if let mark = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Remove workspace") {
+            closeButton.image = mark
+        } else {
+            closeButton.title = "✕"
+            closeButton.font = MomentermDesign.Fonts.sidebar
+        }
+        closeButton.toolTip = tooltipText(label: "Remove workspace: \(workspace.name)", shortcut: "Backspace")
+        button.addSubview(closeButton)
 
         // While renaming this workspace, the name row is an inline editable field (Enter commits,
         // Esc cancels) instead of a static label — no modal dialog.
@@ -603,8 +646,14 @@ extension MainWindowController {
             icon.widthAnchor.constraint(equalToConstant: 8),
             icon.heightAnchor.constraint(equalToConstant: 8),
 
+            closeButton.widthAnchor.constraint(equalToConstant: 16),
+            closeButton.heightAnchor.constraint(equalToConstant: 16),
+            closeButton.topAnchor.constraint(equalTo: button.topAnchor, constant: MomentermDesign.Spacing.space1),
+            closeButton.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -MomentermDesign.Spacing.space2),
+
             nameView.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: rowInset),
-            nameView.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -rowInset),
+            // Stop the name before the ✕ so a long name truncates instead of sliding under the button.
+            nameView.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -MomentermDesign.Spacing.space1),
             nameView.topAnchor.constraint(equalTo: button.topAnchor, constant: branchVisible ? MomentermDesign.Spacing.space1 + 1 : MomentermDesign.Spacing.space4 - 1),
 
             branchLabel.leadingAnchor.constraint(equalTo: nameView.leadingAnchor),
@@ -656,7 +705,9 @@ extension MainWindowController {
             dot.widthAnchor.constraint(equalToConstant: dotSize),
             dot.heightAnchor.constraint(equalToConstant: dotSize),
             dot.topAnchor.constraint(equalTo: button.topAnchor, constant: workspaceRailExpanded ? MomentermDesign.Spacing.space1 + 1 : MomentermDesign.Spacing.space1 / 2),
-            dot.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: workspaceRailExpanded ? -(MomentermDesign.Spacing.space2 + 1) : -(MomentermDesign.Spacing.space1 / 2))
+            // Expanded rows carry a 16pt ✕ button in the top-right corner, so the alert dot sits to
+            // its left (button width + gap) instead of under it. Collapsed rows have no ✕.
+            dot.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: workspaceRailExpanded ? -(MomentermDesign.Spacing.space2 + 1 + 20) : -(MomentermDesign.Spacing.space1 / 2))
         ])
     }
     func setWorkspaceRailPickerVisible(_ visible: Bool, animated: Bool) {
@@ -790,6 +841,12 @@ extension MainWindowController {
             return true
         case 36, 76:
             openSelectedWorkspacePickerItem()
+            return true
+        case 51:
+            // Backspace removes the highlighted workspace — mirrors the row's ✕ button. Safe while
+            // editing: handleShortcut returns early when renamingWorkspaceId != nil, so an inline
+            // rename keeps Backspace as a text edit and never reaches this handler.
+            _ = forgetSelectedWorkspacePickerItem()
             return true
         default:
             return false
@@ -1226,5 +1283,13 @@ extension MainWindowController {
         }
         setWorkspaceRailPickerVisible(false, animated: true)
         openWorkspace(URL(fileURLWithPath: workspace.path).standardizedFileURL, revealReview: false, attachActiveTab: false, announce: false, workspaceId: id)
+    }
+    @objc private func closeWorkspaceButton(_ sender: NSButton) {
+        // The ✕ button identifier is the workspace id (US-15), so it removes exactly the instance it
+        // sits on. Keep the expanded picker open so several workspaces can be pruned in a row.
+        guard let id = sender.identifier?.rawValue else {
+            return
+        }
+        _ = forgetWorkspace(id: id, keepWorkspacePickerOpen: true)
     }
 }

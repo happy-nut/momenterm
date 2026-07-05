@@ -114,6 +114,9 @@ function compileDump() {
     path.join(root, "Sources/Momenterm/NativeReviewTypes.swift"),
     path.join(root, "Sources/Momenterm/UnifiedDiffParser.swift"),
     path.join(root, "Sources/Momenterm/NativeSyntaxHighlighting.swift"),
+    // NativeSourceCollector calls NativeGitPorcelain.parse; include the (WebKit-free,
+    // dependency-free) porcelain parser so the model-dump target compiles.
+    path.join(root, "Sources/Momenterm/NativeGitPorcelain.swift"),
     path.join(root, "Sources/Momenterm/NativeSourceCollector.swift"),
     path.join(root, "Sources/Momenterm/NativeHttpEnvironmentReader.swift"),
     path.join(root, "Sources/Momenterm/NativeReviewCore.swift"),
