@@ -55,7 +55,7 @@ const all = Object.values(files).join("\n");
 // After the native workbench refactor, symbols that used to live in
 // MainWindowController.swift now live in sibling files (NativeTextViews,
 // NativeContentRenderers, NativeAnsiRenderer, NativeCodePane, NativeTheme,
-// HttpRunnerController). These merged views let the parity checks below keep
+// HttpRunnerController). These merged views let the checks below keep
 // asserting the same behavior against whichever file now owns each symbol.
 const controllerAndTextViews = files.controller + "\n" + files.textViews;
 const controllerAndCodeViews = files.controller + "\n" + files.textViews + "\n" + files.codePane;
@@ -219,7 +219,7 @@ check("key input smoke verifies Momenterm palette schema and visible contrast", 
 check("Darcula syntax registry covers common extensions", /enum NativeLanguageRegistry/.test(files.syntax) && /extensionLanguageMap: \[String: String\]/.test(files.syntax) && /"kt": "kotlin"/.test(files.syntax) && /"tsx": "typescript"/.test(files.syntax) && /"http": "http"/.test(files.syntax) && /darculaHighlightedLanguages/.test(files.syntax) && /NativeLanguageRegistry\.language\(forPath: path\)/.test(files.controller) && /NativeLanguageRegistry\.language\(forPath: path\)/.test(files.sourceCollector));
 check("Darcula highlighter has language-specific rules", /rulesForLanguage/.test(files.contentRenderers) && /case "kotlin"/.test(files.contentRenderers) && /case "python"/.test(files.contentRenderers) && /case "json"/.test(files.contentRenderers) && /case "yaml", "toml"/.test(files.contentRenderers) && /case "markup", "xml", "svg"/.test(files.contentRenderers) && /case "http"/.test(files.contentRenderers) && /cachedRegex/.test(files.contentRenderers));
 check("key input smoke verifies Darcula syntax extension coverage", /darculaSyntaxCoverageDiagnosticsForSmokeTest/.test(files.controller) && /Darcula syntax highlighting did not cover expected file extensions/.test(files.keyInputSmokeSource));
-check("core smoke builds include syntax registry", /NativeSyntaxHighlighting\.swift/.test(files.smoke ?? read("scripts/smoke.sh")) && /NativeSyntaxHighlighting\.swift/.test(files.perfSmokeScript ?? read("scripts/perf-smoke.sh")) && /NativeSyntaxHighlighting\.swift/.test(files.abParity ?? read("scripts/ab-parity-smoke.mjs")));
+check("core smoke builds include syntax registry", /NativeSyntaxHighlighting\.swift/.test(files.smoke ?? read("scripts/smoke.sh")) && /NativeSyntaxHighlighting\.swift/.test(files.perfSmokeScript ?? read("scripts/perf-smoke.sh")) && /NativeSyntaxHighlighting\.swift/.test(files.abSmoke ?? read("scripts/ab-smoke.mjs")));
 check("Prompt memo is native docked side panel", /(?:private )?let memoSidePanel = NSView\(\)/.test(files.controller) && /(?:private )?func configureMemoSidePanel\(\)/.test(files.controller) && !/NativePromptMemoPanel: NSPanel/.test(files.controller));
 check("Prompt memo side panel uses 40 percent right dock width", /memoSidePanel\.widthAnchor\.constraint\(equalTo: rootView\.widthAnchor, multiplier: 0\.40\)/.test(files.controller) && /memoPanelVisibleTrailingConstraint = memoSidePanel\.trailingAnchor\.constraint\(equalTo: rootView\.trailingAnchor\)/.test(files.controller));
 check("Prompt memo has sliding animation and panel shadow", /memoPanelHiddenLeadingConstraint = memoSidePanel\.leadingAnchor\.constraint\(equalTo: rootView\.trailingAnchor\)/.test(files.controller) && /animateMemoPanelLayout\(animated:/.test(files.controller) && /memoPanelAnimationDuration/.test(files.controller) && /shadowOpacity = 0\.34/.test(files.controller) && /shadowRadius = 22/.test(files.controller) && /shadowOffset = NSSize\(width: -8, height: 0\)/.test(files.controller));
@@ -462,7 +462,7 @@ check("key input smoke verifies prompt memo Cmd+Shift+N", /Cmd\+Shift\+N did not
 check("Option+F12 is the only terminal focus shortcut", /targetedItem\("Focus Terminal", #selector\(toggleTerminal\), functionKey\(0xF70F\), \[\.option\]\)/.test(files.appDelegate) && !/targetedItem\("Focus Terminal", #selector\(toggleTerminal\), "`", \[\.control\]\)/.test(files.appDelegate) && !/lowerKey == "`"[\s\S]*toggleTerminal\(\)/.test(files.controller) && /Option\+F12 did not toggle the open review panel back to terminal focus/.test(files.keyInputSmokeSource) && /Ctrl\+\` still focused terminal even though terminal shortcut must be Option\+F12 only/.test(files.keyInputSmokeSource) && /Option\+F12 did not remain the single terminal focus shortcut after Ctrl\+\` was ignored/.test(files.keyInputSmokeSource));
 
 if (failures.length) {
-  console.error(`\n${failures.length} native parity checks failed`);
+  console.error(`\n${failures.length} native guard checks failed`);
   process.exit(1);
 }
-console.log("\nnative parity smoke ok");
+console.log("\nnative guard smoke ok");

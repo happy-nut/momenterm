@@ -22,6 +22,6 @@ jobs:
         run: ./scripts/build.sh
 
       # launch-smoke boots the AppKit app and is skipped under the headless runner;
-      # every other smoke (isolated swiftc + node parity) runs.
+      # every other smoke (isolated swiftc + node smokes) runs.
       - name: Smoke suite
         run: SMOKE_SKIP="launch-smoke.sh" ./scripts/smoke-all.sh

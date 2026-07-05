@@ -113,8 +113,8 @@ MainWindowController  (얇은 Coordinator, 목표 300~500줄)
 > `guard/exit(1)` 방식으로 만든다. 순수 타입을 별도 파일로 빼내는 것이 곧 격리 테스트를 가능하게 한다.
 
 - 신규 유닛 스모크 실행파일 통과 (`swiftc` 격리 컴파일)
-- `scripts/smoke.sh` + `scripts/parity-smoke.mjs` + `scripts/ab-parity-smoke.mjs` 통과
-- `docs/parity-gap.md`의 런타임 마커 스캔 유지 (Electron/Node 런타임 마커 부재)
+- `scripts/smoke.sh` + `scripts/native-guard-smoke.mjs` + `scripts/ab-smoke.mjs` 통과
+- `docs/native-capabilities.md`의 런타임 마커 스캔 유지 (Electron/Node 런타임 마커 부재)
 - MainWindowController 라인 수가 단계마다 감소 (진행 지표)
 
 ## 뉴 아키텍처 재설계 — CodePaneController (공유 뷰 소유권 격리)

@@ -34,13 +34,13 @@ Current classifications:
 
 ## UI Gate
 
-- [ ] Darcula visual tokens and syntax classes stay covered by `scripts/parity-smoke.sh`.
+- [ ] Darcula visual tokens and syntax classes stay covered by `scripts/native-guard-smoke.sh`.
 - [ ] Design-system token scales (spacing, typography, radius/border/elevation, semantic
       colors in `NativeDesignSystem.swift`) stay covered by `scripts/design-system-smoke.sh`,
       which pins their structural invariants (monotonic spacing, descending type ladder,
       ordered radius/border/elevation ramps, and semantic-color contracts). The pinned
       Darcula anchor values remain covered separately by `scripts/theme-smoke.sh`.
-- [ ] Native review build-output stays covered by `scripts/ab-parity-smoke.sh` for modified, staged, untracked text, untracked binary, rename/delete/image, review signatures, source metadata, and HTTP environment fixtures.
+- [ ] Native review build-output stays covered by `scripts/ab-smoke.sh` for modified, staged, untracked text, untracked binary, rename/delete/image, review signatures, source metadata, and HTTP environment fixtures.
 - [ ] IntelliJ-style action exposure stays covered: no topbar global action row, icon activity rail, guarded Quick Open binding, and icon-only contextual controls.
 - [ ] New keyboard shortcuts require smoke coverage.
 - [ ] New settings require persistence checks through the native settings bridge.
@@ -82,12 +82,12 @@ git diff --check
 `scripts/smoke-all.sh` is the single entry point that runs every smoke and aggregates
 pass/fail. Under headless CI, GUI smokes are skipped via `SMOKE_SKIP="launch-smoke.sh"`
 (see `.github/workflows/ci.yml`). To run one smoke in isolation, call it directly, e.g.
-`./scripts/parity-smoke.sh` or `./scripts/pty-smoke.sh /path/to/repo`.
+`./scripts/native-guard-smoke.sh` or `./scripts/pty-smoke.sh /path/to/repo`.
 
 For dependency-removal or native-port work, also scan for forbidden runtime markers:
 
 ```bash
-rg -n "NODE_BIN|buildDiffReview\\(|renderWelcomeHtml\\(|performHttpRequest\\(" Sources/Momenterm scripts Package.swift README.md -g '!*.app' -g '!ab-parity-smoke.mjs'
+rg -n "NODE_BIN|buildDiffReview\\(|renderWelcomeHtml\\(|performHttpRequest\\(" Sources/Momenterm scripts Package.swift README.md -g '!*.app' -g '!ab-smoke.mjs'
 ```
 
 The scan should return no matches.

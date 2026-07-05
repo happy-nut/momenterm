@@ -1,19 +1,19 @@
-# Native UI Parity Review
+# Native UI Review
 
-This pass compares Momenterm against the reference IntelliJ-style review surface instead of only checking feature markers.
+This pass evaluates Momenterm's UI against the IntelliJ-style review surface it targets, instead of only checking feature markers.
 
 ## Gaps Found
 
-- Syntax highlighting was not Darcula. Momenterm used GitHub-like token colors while the reference baseline is Darcula: editor `#2b2b2b`, tool windows `#3c3f41`, text `#a9b7c6`, keywords `#cc7832`, strings `#6a8759`, function/type accents around `#ffc66d` and `#a9b7c6`.
+- Syntax highlighting was not Darcula. Momenterm used GitHub-like token colors while the target palette is Darcula: editor `#2b2b2b`, tool windows `#3c3f41`, text `#a9b7c6`, keywords `#cc7832`, strings `#6a8759`, function/type accents around `#ffc66d` and `#a9b7c6`.
 - UI density was too loose. Momenterm had oversized chrome, rounder buttons/cards, and a generic web-app feel rather than an IntelliJ-style local review workspace.
 - The activity rail looked passive. It did not clearly drive the Changes/Files tool-window state or show active feedback.
 - The diff/source work area did not read as an editor. It needed a darker editor plane, tighter file headers, compact gutters, and less card-like spacing.
 - Settings looked incomplete and visually generic. It needed Darcula as the named default and controls for language and prompt templates, not just a theme switch.
-- Action exposure was wrong. The reference UI keeps global review actions in an IntelliJ-style icon rail and exposes text buttons mostly inside the current context, while Momenterm had a visible topbar full of text actions, duplicated Quick Open entry points, text-only terminal controls, text-only dock controls, and per-file text buttons on every diff header.
+- Action exposure was wrong. An IntelliJ-style UI keeps global review actions in an icon rail and exposes text buttons mostly inside the current context, while Momenterm had a visible topbar full of text actions, duplicated Quick Open entry points, text-only terminal controls, text-only dock controls, and per-file text buttons on every diff header.
 - The base surface was still review-first. Diff, source, history, changes, and file tree views occupied the permanent workspace, while the terminal was only a hideable lower panel.
 - Non-Git folders fell out of the terminal-first shell entirely. That made the Files view unavailable even though browsing files does not require Git metadata.
 - Font fallback was brittle. The UI mixed `font` shorthand with Monaco-first stacks, so WKWebView and zsh prompts could render Korean text, Powerline glyphs, or terminal escape noise poorly.
-- Existing parity smoke checked that controls existed, but not that the Darcula visual tokens and shortcut/settings matrix were actually present.
+- The existing UI smoke checked that controls existed, but not that the Darcula visual tokens and shortcut/settings matrix were actually present.
 
 ## Actions Taken
 
@@ -28,11 +28,11 @@ This pass compares Momenterm against the reference IntelliJ-style review surface
 - Made the native PTY terminal the default base surface. Review tools now open in a floating overlay, and terminal sessions are managed as tabs instead of a show/hide panel.
 - Kept new terminal tabs rooted at `~`, and made non-Git folders render Diff guidance while Files uses a native filesystem scan.
 - Replaced shorthand font declarations with explicit UI/code/terminal font tokens, including Korean system fallbacks and Nerd Font fallbacks for shell prompts.
-- Added Darcula visual checks to `scripts/parity-smoke.mjs` so regressions fail automatically.
+- Added Darcula visual checks to `scripts/native-guard-smoke.mjs` so regressions fail automatically.
 
 ## Verification
 
-`./scripts/parity-smoke.sh` now checks:
+`./scripts/native-guard-smoke.sh` now checks:
 
 - embedded client script boots
 - syntax highlighter emits Darcula token classes
@@ -41,7 +41,7 @@ This pass compares Momenterm against the reference IntelliJ-style review surface
 - Darcula color tokens and compact layout anchors are present
 - topbar global action buttons stay removed
 - activity rail buttons use SVG icons with tooltip shortcuts
-- the rail action set stays aligned with the reference app shell
+- the rail action set stays aligned with the intended app shell
 - the diff `Viewed` control is hidden only until a selectable file exists
 - terminal, settings, dock, and file-header controls remain icon buttons
 - terminal-first layout markers remain present and review tools stay in a floating overlay

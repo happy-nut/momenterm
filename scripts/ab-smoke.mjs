@@ -117,7 +117,7 @@ function compileDump() {
     path.join(root, "Sources/Momenterm/NativeSourceCollector.swift"),
     path.join(root, "Sources/Momenterm/NativeHttpEnvironmentReader.swift"),
     path.join(root, "Sources/Momenterm/NativeReviewCore.swift"),
-    path.join(root, "Sources/ABParityDump/main.swift"),
+    path.join(root, "Sources/ABDumpModel/main.swift"),
     "-framework", "Foundation"
   ]);
 }
