@@ -214,9 +214,9 @@ enum MomentermDesign {
                 hunkBackground: dark.accent.withAlphaComponent(0.13),
                 diffEditorToolbarBackground: dark.secondary,
                 diffEditorPathBackground: dark.secondary,
-                // Neutral faint highlight for the focused hunk (IntelliJ doesn't green-wash a
-                // whole hunk). Was secondaryAccent (teal/green) which tinted added-file panes green.
-                diffFocusedHunkBackground: dark.foreground.withAlphaComponent(0.05),
+                // IntelliJ Darcula paints the active diff block as a visible blue-gray band across
+                // both panes. Keep it opaque so native NSTextView and Monaco receive the same token.
+                diffFocusedHunkBackground: rgb(44, 64, 75),
                 diffGutterBackground: dark.primary,
                 diffCenterGutterBackground: dark.secondary,
                 // Line backgrounds stay muted (Darcula); the saturated *Text colors are reused
@@ -502,6 +502,8 @@ enum MomentermDesign {
         static let recentFilesResultRowHeight: CGFloat = 22
         static let recentFilesResultFontSize: CGFloat = 12.5
         static let recentFilesResultIconSize: CGFloat = 14
+        static let goToLinePanelWidth: CGFloat = 360
+        static let goToLinePanelHeight: CGFloat = 150
         static let settingsSidebarWidth: CGFloat = 260
         static let settingsContentWidth: CGFloat = 620
         static let settingsMinWidth: CGFloat = 900

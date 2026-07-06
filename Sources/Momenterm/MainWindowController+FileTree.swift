@@ -306,6 +306,7 @@ extension MainWindowController {
         }
         showNativeSplitPane()
         setSingleCodePaneVisible(true)
+        resetDiffLineGutters()
         codePane.clearReviewCursors()
         // A file is "renderable" when it has a form distinct from its raw source:
         // Markdown, CSV/TSV, and SVG all render (formatted text / table / image) and
@@ -334,6 +335,10 @@ extension MainWindowController {
                     // SVG's rendered form is an image, not derivable from the source text.
                     payload["rendered"] = renderedFile.image
                 }
+                if let preferredLine = preferredLine {
+                    payload["cursorLine"] = preferredLine
+                }
+                payload["focus"] = focus
                 fileHybridView.postJSON(payload)
             } else {
                 renderRenderableSourceFileNatively(renderedFile, mode: mode, preferredLine: preferredLine, focus: focus)
@@ -366,6 +371,7 @@ extension MainWindowController {
         let renderedCursorLine = sourcePreviewRenderedLine(path: renderedFile.path, contentLine: contentCursorLine)
         codePane.scrollOldToTop()
         codePane.scrollNewToTop()
+        layoutSourceLineGutter()
         placeCodeCursor(in: codePane.oldPaneCodeView, preferredLine: renderedCursorLine, focus: focus)
         refreshInlineReviewCommentBoxes()
     }
@@ -399,6 +405,9 @@ extension MainWindowController {
         }
         codePane.scrollOldToTop()
         codePane.scrollNewToTop()
+        if mode == .raw || mode == .side {
+            layoutSourceLineGutter()
+        }
         placeCodeCursor(in: codePane.oldPaneCodeView, preferredLine: line, focus: focus)
     }
     // Native rendered form: Markdown → line-aligned attributed text (so review lines still map),

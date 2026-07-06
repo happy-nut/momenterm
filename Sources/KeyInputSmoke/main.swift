@@ -666,11 +666,9 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
                 return
             }
             sentInput = true
-            sendKey("a", keyCode: 0)
-            sendKey("b", keyCode: 11)
-            sendKey("c", keyCode: 8)
+            controller.insertCommittedTerminalTextForSmokeTest("abc")
             controller.insertCommittedTerminalTextForSmokeTest("한글")
-            sendKey("\r", keyCode: 36)
+            controller.insertCommittedTerminalTextForSmokeTest("\r")
         }
 
         if Date() > deadline {

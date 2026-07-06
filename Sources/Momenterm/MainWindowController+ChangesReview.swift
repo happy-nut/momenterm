@@ -1,5 +1,22 @@
 import AppKit
 
+private struct DiffReviewTarget {
+    let hunkIndex: Int
+    let oldLine: Int?
+    let newLine: Int?
+    let originalStartLine: Int
+    let originalEndLine: Int
+    let modifiedStartLine: Int
+    let modifiedEndLine: Int
+
+    var cursorLine: Int {
+        if modifiedEndLine >= modifiedStartLine {
+            return modifiedStartLine
+        }
+        return max(1, modifiedStartLine - 1)
+    }
+}
+
 // ChangesReview methods extracted from MainWindowController (refactor Phase 2 — move-only).
 extension MainWindowController {
     func openChangesView() {
@@ -30,7 +47,7 @@ extension MainWindowController {
 
         selectedDiffIndex = min(max(selectedDiffIndex, 0), files.count - 1)
         let currentFile = files[selectedDiffIndex]
-        let currentHunkCount = max(currentFile.hunks.count, 1)
+        let currentHunkCount = max(reviewTargetCount(for: currentFile), 1)
         selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), currentHunkCount - 1)
 
         if delta > 0 {
@@ -61,7 +78,7 @@ extension MainWindowController {
             let path = files[candidate].displayPath
             if !viewedFilePaths.contains(path) || viewedFilePaths.count >= count {
                 selectedDiffIndex = candidate
-                let nextHunkCount = max(files[candidate].hunks.count, 1)
+                let nextHunkCount = max(reviewTargetCount(for: files[candidate]), 1)
                 selectedDiffHunkIndex = delta < 0 ? nextHunkCount - 1 : 0
                 awaitingNextFileAfterLastHunk = false
                 pushCursorHistory(path)
@@ -154,7 +171,7 @@ extension MainWindowController {
                 return
             }
             selectedDiffIndex = min(max(selectedDiffIndex, 0), override.count - 1)
-            selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(override[selectedDiffIndex].hunks.count - 1, 0))
+            selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(reviewTargetCount(for: override[selectedDiffIndex]) - 1, 0))
             for row in diffSidebarRows(for: override, selectedIndex: selectedDiffIndex) {
                 overlaySidebarStack.addArrangedSubview(diffSidebarRowButton(row))
             }
@@ -195,7 +212,7 @@ extension MainWindowController {
         }
 
         selectedDiffIndex = min(selectedDiffIndex, document.diffFiles.count - 1)
-        selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(document.diffFiles[selectedDiffIndex].hunks.count - 1, 0))
+        selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(reviewTargetCount(for: document.diffFiles[selectedDiffIndex]) - 1, 0))
         for row in diffSidebarRows(for: document.diffFiles, selectedIndex: selectedDiffIndex) {
             overlaySidebarStack.addArrangedSubview(diffSidebarRowButton(row))
         }
@@ -721,8 +738,89 @@ extension MainWindowController {
         guard !file.hunks.isEmpty else {
             return nil
         }
+        if let target = selectedReviewTarget(in: file),
+           file.hunks.indices.contains(target.hunkIndex) {
+            return file.hunks[target.hunkIndex]
+        }
         let index = min(max(selectedDiffHunkIndex, 0), file.hunks.count - 1)
         return file.hunks[index]
+    }
+    private func selectedReviewTarget(in file: DiffFile) -> DiffReviewTarget? {
+        let targets = reviewTargets(for: file)
+        guard !targets.isEmpty else {
+            return nil
+        }
+        return targets[min(max(selectedDiffHunkIndex, 0), targets.count - 1)]
+    }
+    func selectedReviewTargetLine(in file: DiffFile) -> Int? {
+        guard let target = selectedReviewTarget(in: file) else {
+            return nil
+        }
+        return target.newLine ?? target.oldLine
+    }
+    func reviewTargetCount(for file: DiffFile) -> Int {
+        let count = reviewTargets(for: file).count
+        if count > 0 {
+            return count
+        }
+        return file.binary || !file.hunks.isEmpty ? 1 : 0
+    }
+    private func reviewTargets(for file: DiffFile) -> [DiffReviewTarget] {
+        var targets: [DiffReviewTarget] = []
+        var originalModelLine = 1
+        var modifiedModelLine = 1
+
+        for (hunkIndex, hunk) in file.hunks.enumerated() {
+            var index = 0
+            while index < hunk.lines.count {
+                let line = hunk.lines[index]
+                switch line.kind {
+                case .context:
+                    originalModelLine += 1
+                    modifiedModelLine += 1
+                    index += 1
+                case .meta:
+                    index += 1
+                case .deletion, .addition:
+                    let originalStart = originalModelLine
+                    let modifiedStart = modifiedModelLine
+                    var originalCount = 0
+                    var modifiedCount = 0
+                    var oldLine: Int?
+                    var newLine: Int?
+                    var consumingChanges = true
+
+                    while consumingChanges && index < hunk.lines.count {
+                        let changed = hunk.lines[index]
+                        switch changed.kind {
+                        case .deletion:
+                            oldLine = oldLine ?? changed.oldNumber
+                            originalCount += 1
+                            originalModelLine += 1
+                            index += 1
+                        case .addition:
+                            newLine = newLine ?? changed.newNumber
+                            modifiedCount += 1
+                            modifiedModelLine += 1
+                            index += 1
+                        case .context, .meta:
+                            consumingChanges = false
+                        }
+                    }
+
+                    targets.append(DiffReviewTarget(
+                        hunkIndex: hunkIndex,
+                        oldLine: oldLine,
+                        newLine: newLine,
+                        originalStartLine: originalStart,
+                        originalEndLine: originalStart + originalCount - 1,
+                        modifiedStartLine: modifiedStart,
+                        modifiedEndLine: modifiedStart + modifiedCount - 1
+                    ))
+                }
+            }
+        }
+        return targets
     }
     func openSelectedDiffAsSource() {
         guard let path = selectedFilePath() else {
@@ -744,22 +842,24 @@ extension MainWindowController {
         diffOldGutterNumbers.removeAll(keepingCapacity: true)
         diffNewGutterNumbers.removeAll(keepingCapacity: true)
 
-        selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(file.hunks.count - 1, 0))
-        for (hunkIndex, hunk) in file.hunks.enumerated() {
-            let isFocusedHunk = hunkIndex == selectedDiffHunkIndex
-            let focusedBackground = isFocusedHunk ? theme.diffFocusedHunkBackground : nil
-            let emptyBackground = isFocusedHunk ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
-            // The F7-at-last-hunk "pause before next file" behavior stays (awaitingNextFileAfterLastHunk),
-            // but the yellow banner it used to draw was un-IntelliJ clutter and is now omitted.
+        selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(reviewTargetCount(for: file) - 1, 0))
+        var renderedTargetIndex = 0
+        for hunk in file.hunks {
+            // The F7-at-last-hunk "pause before next file" behavior stays
+            // (awaitingNextFileAfterLastHunk), but highlighting now follows actual changed blocks
+            // inside the git hunk, matching IntelliJ's difference navigation.
             var index = 0
             while index < hunk.lines.count {
                 let line = hunk.lines[index]
                 switch line.kind {
                 case .context:
-                    appendCodeLine(number: line.oldNumber, text: line.text, to: oldOutput, color: theme.codeText, background: focusedBackground, pane: .old, language: language)
-                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.codeText, background: focusedBackground, pane: .new, language: language)
+                    appendCodeLine(number: line.oldNumber, text: line.text, to: oldOutput, color: theme.codeText, background: nil, pane: .old, language: language)
+                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.codeText, background: nil, pane: .new, language: language)
                     index += 1
                 case .deletion:
+                    let isFocusedTarget = renderedTargetIndex == selectedDiffHunkIndex
+                    let focusedBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : nil
+                    let emptyBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
                     let start = index
                     var deletions: [DiffLine] = []
                     while index < hunk.lines.count, hunk.lines[index].kind == .deletion {
@@ -773,7 +873,7 @@ extension MainWindowController {
                     }
                     if additions.isEmpty {
                         for deletion in deletions {
-                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: theme.deletionBackground, pane: .old, language: language)
+                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: focusedBackground ?? theme.deletionBackground, pane: .old, language: language)
                             appendCodeLine(number: nil, text: "", to: newOutput, color: theme.codeText, background: emptyBackground, pane: .new)
                         }
                     } else {
@@ -789,7 +889,7 @@ extension MainWindowController {
                                     text: deletion.text,
                                     to: oldOutput,
                                     color: theme.modifiedText,
-                                    background: theme.modifiedBackground,
+                                    background: focusedBackground ?? theme.modifiedBackground,
                                     pane: .old,
                                     language: language,
                                     inlineHighlight: addition.flatMap { changedTextRange(in: deletion.text, comparedTo: $0.text) },
@@ -804,7 +904,7 @@ extension MainWindowController {
                                     text: addition.text,
                                     to: newOutput,
                                     color: theme.modifiedText,
-                                    background: theme.modifiedBackground,
+                                    background: focusedBackground ?? theme.modifiedBackground,
                                     pane: .new,
                                     language: language,
                                     inlineHighlight: deletion.flatMap { changedTextRange(in: addition.text, comparedTo: $0.text) },
@@ -818,13 +918,21 @@ extension MainWindowController {
                     if index == start {
                         index += 1
                     }
+                    renderedTargetIndex += 1
                 case .addition:
-                    appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground, pane: .old)
-                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.additionText, background: theme.additionBackground, pane: .new, language: language)
-                    index += 1
+                    let isFocusedTarget = renderedTargetIndex == selectedDiffHunkIndex
+                    let focusedBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : nil
+                    let emptyBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
+                    while index < hunk.lines.count, hunk.lines[index].kind == .addition {
+                        let addition = hunk.lines[index]
+                        appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground, pane: .old)
+                        appendCodeLine(number: addition.newNumber, text: addition.text, to: newOutput, color: theme.additionText, background: focusedBackground ?? theme.additionBackground, pane: .new, language: language)
+                        index += 1
+                    }
+                    renderedTargetIndex += 1
                 case .meta:
-                    appendLine(line.text, to: oldOutput, color: theme.hunkText, background: focusedBackground)
-                    appendLine(line.text, to: newOutput, color: theme.hunkText, background: focusedBackground)
+                    appendLine(line.text, to: oldOutput, color: theme.hunkText, background: nil)
+                    appendLine(line.text, to: newOutput, color: theme.hunkText, background: nil)
                     diffOldGutterNumbers.append(nil)
                     diffNewGutterNumbers.append(nil)
                     index += 1
@@ -865,14 +973,10 @@ extension MainWindowController {
         let diffLanguage = languageForPath(file.newPath.isEmpty ? file.oldPath : file.newPath)
         var oldLines: [String] = []
         var newLines: [String] = []
-        // 1-based line, in the reconstructed modified content, where each hunk begins — so the native
-        // side can place Monaco's (blinking) review cursor on the selected hunk.
-        var hunkModifiedStartLines: [Int] = []
         // Parallel to newLines: the real file (new) line number of each reconstructed modified line, so
         // review comments (stored by file line) map to/from Monaco's line numbers.
         var modifiedFileLines: [Int] = []
         for hunk in file.hunks {
-            hunkModifiedStartLines.append(newLines.count + 1)
             for line in hunk.lines {
                 switch line.kind {
                 case .context:
@@ -912,11 +1016,23 @@ extension MainWindowController {
             ])
         }
         showHybridDiffPane()
-        // Place Monaco's review cursor on the selected hunk (it blinks + moves with arrows natively),
-        // then, when F7 has paused at the file's last hunk, show the fading "one more F7" hint.
-        let cursorLine = hunkModifiedStartLines.indices.contains(selectedDiffHunkIndex)
-            ? hunkModifiedStartLines[selectedDiffHunkIndex]
-            : max(1, newLines.count)
+        // Place Monaco's review cursor and IntelliJ-style active hunk block on the selected changed
+        // block (not the broad git hunk), then show the optional "one more F7" hint at file boundary.
+        let activeTarget = selectedReviewTarget(in: file)
+        let cursorLine = activeTarget.map { min(max(1, $0.cursorLine), max(1, newLines.count)) } ?? max(1, newLines.count)
+        if let target = activeTarget {
+            diffHybridView.postJSON([
+                "type": "setActiveHunk",
+                "originalStartLine": target.originalStartLine,
+                "originalEndLine": target.originalEndLine,
+                "modifiedStartLine": target.modifiedStartLine,
+                "modifiedEndLine": target.modifiedEndLine,
+                "activeHunkBackground": theme.diffFocusedHunkBackground.hexString(fallback: "#2c404b"),
+                "activeHunkEdge": theme.modifiedText.hexString(fallback: "#6897bb")
+            ])
+        } else {
+            diffHybridView.postJSON(["type": "setActiveHunk"])
+        }
         diffHybridView.postJSON(["type": "setReviewCursor", "line": cursorLine])
         if awaitingNextFileAfterLastHunk {
             diffHybridView.postJSON([
@@ -1437,6 +1553,8 @@ extension MainWindowController {
         newLineGutter.isHidden = true
         codePane.oldPaneCodeView.textContainer?.exclusionPaths = []
         codePane.newPaneCodeView.textContainer?.exclusionPaths = []
+        codePane.setOldInset(MomentermDesign.Metrics.codeTextInset)
+        codePane.setNewInset(MomentermDesign.Metrics.codeTextInset)
     }
     // Text-container geometry (inner padding + the new pane's inner exclusion strip) that the
     // review cursor's glyph layout depends on. MUST run synchronously BEFORE placeDiffHunkCursor
@@ -1456,6 +1574,8 @@ extension MainWindowController {
     func layoutDiffLineGutters(oldNumbers: [Int?], newNumbers: [Int?]) {
         oldLineGutter.isHidden = false
         newLineGutter.isHidden = false
+        oldLineGutter.autoresizingMask = [.minXMargin, .height]
+        newLineGutter.autoresizingMask = [.maxXMargin, .height]
         // Frames and the old pane's outer-edge exclusion depend on the panes' laid-out size, which
         // settles after balanceOverlayDiffSplit; position on the next tick so bounds are final,
         // then let autoresizing track resizes. The new pane's inner exclusion + padding were
@@ -1476,6 +1596,30 @@ extension MainWindowController {
             // from the cache — never query layout inside draw().
             self.oldLineGutter.reload(numbers: oldNumbers)
             self.newLineGutter.reload(numbers: newNumbers)
+        }
+    }
+    func layoutSourceLineGutter() {
+        let textView = codePane.oldPaneCodeView
+        let nsText = textView.string as NSString
+        guard nsText.length > 0 else {
+            resetDiffLineGutters()
+            return
+        }
+        let lineCount = max(1, textView.string.components(separatedBy: .newlines).count)
+        let width = diffGutterWidth
+        oldLineGutter.alignRight = true
+        oldLineGutter.textColor = theme.tertiaryText
+        oldLineGutter.autoresizingMask = [.maxXMargin, .height]
+        oldLineGutter.isHidden = false
+        newLineGutter.isHidden = true
+        textView.textContainer?.exclusionPaths = []
+        textView.textContainer?.lineFragmentPadding = 6
+        codePane.setOldInset(NSSize(width: width + 10, height: MomentermDesign.Metrics.codeTextInset.height))
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.overlayMode == .files else { return }
+            let view = self.codePane.oldPaneCodeView
+            self.oldLineGutter.frame = NSRect(x: 0, y: 0, width: width, height: max(view.bounds.height, 0))
+            self.oldLineGutter.reload(numbers: Array(1...lineCount).map { Optional($0) })
         }
     }
     func appendDiffAttributed(_ value: String, to output: NSMutableAttributedString, color: NSColor, background: NSColor?) {

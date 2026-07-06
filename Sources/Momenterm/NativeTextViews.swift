@@ -9,6 +9,7 @@ import AppKit
 final class NativeCodeTextView: NSTextView {
     var onKeyDown: ((NSEvent) -> Bool)?
     var onEscapeKey: (() -> Void)?
+    private var selectionAnchorLocation: Int?
     var reviewCursorLocation: Int? {
         didSet {
             needsDisplay = true
@@ -53,8 +54,7 @@ final class NativeCodeTextView: NSTextView {
         if !flags.contains(.command),
            !flags.contains(.control),
            !flags.contains(.option),
-           !flags.contains(.shift),
-           moveReadOnlyCursor(for: event.keyCode) {
+           moveReadOnlyCursor(for: event.keyCode, extendingSelection: flags.contains(.shift)) {
             return
         }
         super.keyDown(with: event)
@@ -74,42 +74,46 @@ final class NativeCodeTextView: NSTextView {
         guard let storage = textStorage, storage.length > 0 else {
             return
         }
-        reviewCursorLocation = min(selectedRange().location, storage.length - 1)
+        let selection = selectedRange()
+        selectionAnchorLocation = selection.length == 0 ? nil : selectionAnchorLocation
+        reviewCursorLocation = min(NSMaxRange(selection), storage.length) == storage.length
+            ? storage.length - 1
+            : min(NSMaxRange(selection), storage.length - 1)
     }
 
-    private func moveReadOnlyCursor(for keyCode: UInt16) -> Bool {
+    private func moveReadOnlyCursor(for keyCode: UInt16, extendingSelection: Bool = false) -> Bool {
         switch keyCode {
         case 123:
-            moveReviewCursorByCharacter(delta: -1)
+            moveReviewCursorByCharacter(delta: -1, extendingSelection: extendingSelection)
             return true
         case 124:
-            moveReviewCursorByCharacter(delta: 1)
+            moveReviewCursorByCharacter(delta: 1, extendingSelection: extendingSelection)
             return true
         case 125:
-            moveReviewCursorByLine(delta: 1)
+            moveReviewCursorByLine(delta: 1, extendingSelection: extendingSelection)
             return true
         case 126:
-            moveReviewCursorByLine(delta: -1)
+            moveReviewCursorByLine(delta: -1, extendingSelection: extendingSelection)
             return true
         default:
             return false
         }
     }
 
-    private func moveReviewCursorByCharacter(delta: Int) {
+    private func moveReviewCursorByCharacter(delta: Int, extendingSelection: Bool) {
         guard let storage = textStorage, storage.length > 0 else {
             return
         }
-        let target = min(max(selectedRange().location + delta, 0), storage.length - 1)
-        setReviewCursorLocation(target)
+        let target = min(max(activeSelectionEndpoint() + delta, 0), storage.length - 1)
+        setReviewCursorLocation(target, extendingSelection: extendingSelection)
     }
 
-    private func moveReviewCursorByLine(delta: Int) {
+    private func moveReviewCursorByLine(delta: Int, extendingSelection: Bool) {
         guard let storage = textStorage, storage.length > 0 else {
             return
         }
         let nsString = string as NSString
-        let currentLocation = min(max(selectedRange().location, 0), storage.length - 1)
+        let currentLocation = min(max(activeSelectionEndpoint(), 0), storage.length - 1)
         let currentLine = nsString.lineRange(for: NSRange(location: currentLocation, length: 0))
         let currentColumn = max(currentLocation - currentLine.location, 0)
         let targetLine: NSRange
@@ -126,7 +130,7 @@ final class NativeCodeTextView: NSTextView {
             targetLine = nsString.lineRange(for: NSRange(location: currentLine.location - 1, length: 0))
         }
         let targetColumn = min(currentColumn, contentLength(ofLine: targetLine, in: nsString))
-        setReviewCursorLocation(min(targetLine.location + targetColumn, storage.length - 1))
+        setReviewCursorLocation(min(targetLine.location + targetColumn, storage.length - 1), extendingSelection: extendingSelection)
     }
 
     private func contentLength(ofLine line: NSRange, in string: NSString) -> Int {
@@ -142,15 +146,61 @@ final class NativeCodeTextView: NSTextView {
         return max(length, 0)
     }
 
-    private func setReviewCursorLocation(_ location: Int) {
+    private func activeSelectionEndpoint() -> Int {
+        let selection = selectedRange()
+        if let anchor = selectionAnchorLocation, selection.length > 0 {
+            return selection.location == anchor ? NSMaxRange(selection) : selection.location
+        }
+        return selection.location
+    }
+
+    private func setReviewCursorLocation(_ location: Int, extendingSelection: Bool = false) {
         guard let storage = textStorage, storage.length > 0 else {
             return
         }
         let boundedLocation = min(max(location, 0), storage.length - 1)
-        setSelectedRange(NSRange(location: boundedLocation, length: 0))
+        if extendingSelection {
+            let anchor = selectionAnchorLocation ?? selectedRange().location
+            selectionAnchorLocation = anchor
+            setSelectedRange(NSRange(
+                location: min(anchor, boundedLocation),
+                length: abs(boundedLocation - anchor)
+            ))
+        } else {
+            selectionAnchorLocation = nil
+            setSelectedRange(NSRange(location: boundedLocation, length: 0))
+        }
         reviewCursorLocation = boundedLocation
-        scrollRangeToVisible(NSRange(location: boundedLocation, length: 0))
+        scrollReviewCursorToVisible(location: boundedLocation)
         needsDisplay = true
+    }
+
+    private func scrollReviewCursorToVisible(location: Int) {
+        guard let scrollView = enclosingScrollView,
+              let documentView = scrollView.documentView,
+              let rect = reviewCursorRect(location: location)
+        else {
+            scrollRangeToVisible(NSRange(location: location, length: 0))
+            return
+        }
+        let visible = scrollView.contentView.documentVisibleRect
+        guard visible.height > 0 else {
+            scrollRangeToVisible(NSRange(location: location, length: 0))
+            return
+        }
+        let margin = visible.height * 0.15
+        var origin = visible.origin
+        if rect.minY < visible.minY + margin {
+            origin.y = rect.minY - margin
+        } else if rect.maxY > visible.maxY - margin {
+            origin.y = rect.maxY - visible.height + margin
+        } else {
+            return
+        }
+        let maxY = max(0, documentView.bounds.height - visible.height)
+        origin.y = min(max(0, origin.y), maxY)
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     override func cancelOperation(_ sender: Any?) {

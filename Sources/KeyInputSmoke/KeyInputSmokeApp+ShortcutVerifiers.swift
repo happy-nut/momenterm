@@ -727,7 +727,6 @@ extension KeyInputSmokeApp {
             return
         }
 
-        let fileListingLoadsBeforeCmd1 = controller.fileListingLoadCountForSmokeTest()
         sendShortcut("1", keyCode: 18, modifiers: [.command])
         guard controller.overlayTitleForSmokeTest() == "Files" else {
             fail("Cmd+1 did not open Files overlay; title=\(controller.overlayTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
@@ -876,6 +875,10 @@ extension KeyInputSmokeApp {
             fail("file tree Enter focused the file view but did not show a visible review cursor for comments")
             return
         }
+        guard controller.fileOverlayShowsLineNumberGutterForSmokeTest() else {
+            fail("file view did not show an IntelliJ-style line-number gutter")
+            return
+        }
         let selectedSourceIndexBeforePreviewArrow = controller.selectedSourceIndexForSmokeTest()
         let previewCursorLineBeforeArrow = controller.fileOverlayPreviewCursorLineForSmokeTest()
         sendShortcut("", keyCode: 125, modifiers: [])
@@ -884,6 +887,19 @@ extension KeyInputSmokeApp {
               controller.selectedSourceIndexForSmokeTest() == selectedSourceIndexBeforePreviewArrow,
               previewCursorLineAfterArrow > previewCursorLineBeforeArrow else {
             fail("file view Down arrow changed the file tree selection instead of moving the file-view cursor; selected \(selectedSourceIndexBeforePreviewArrow)->\(controller.selectedSourceIndexForSmokeTest()) cursorLine \(previewCursorLineBeforeArrow)->\(previewCursorLineAfterArrow)")
+            return
+        }
+        sendShortcut("", keyCode: 125, modifiers: [.shift])
+        guard controller.fileOverlayPreviewIsFirstResponderForSmokeTest(),
+              controller.fileOverlaySelectedTextLengthForSmokeTest() > 0 else {
+            fail("Shift+Down in the file view did not extend a visible text selection")
+            return
+        }
+        for _ in 0..<36 {
+            sendShortcut("", keyCode: 125, modifiers: [])
+        }
+        guard controller.fileOverlayPreviewCursorIsInsideScrollMarginForSmokeTest() else {
+            fail("file view cursor did not stay visible inside the 15 percent scroll margin during repeated Down navigation")
             return
         }
         // US-07 two-stage Esc for Files: the review cursor is focused in the file preview.
@@ -1193,6 +1209,14 @@ extension KeyInputSmokeApp {
         sendShortcut("l", keyCode: 37, modifiers: [.command])
         guard controller.overlayTitleForSmokeTest() == "Go to Line" else {
             fail("Cmd+L did not open Go to Line; title=\(controller.overlayTitleForSmokeTest())")
+            return
+        }
+        sendShortcut("3", keyCode: 20, modifiers: [])
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard controller.overlayTitleForSmokeTest() == "Files",
+              controller.fileOverlayPreviewIsFirstResponderForSmokeTest(),
+              controller.fileOverlayPreviewCursorLineForSmokeTest() == 3 else {
+            fail("Go to Line did not close into Files with the cursor on line 3; title=\(controller.overlayTitleForSmokeTest()) cursor=\(controller.fileOverlayPreviewCursorLineForSmokeTest())")
             return
         }
 

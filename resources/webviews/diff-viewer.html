@@ -14,6 +14,12 @@ html,body,#editor{height:100%;background:#1e1e1e;overflow:hidden}
    actually-changed tokens. Colors come from the native theme (matching the native diff pane exactly). */
 .mtm-modified-line{background-color:var(--mtm-mod-line,#2B3A52)!important;}
 .mtm-modified-token{background-color:var(--mtm-mod-token,rgba(104,151,187,0.42))!important;border-radius:2px;}
+.mtm-active-hunk-line{background-color:var(--mtm-active-hunk,rgba(44,64,75,0.78))!important;}
+.monaco-editor .margin-view-overlays .mtm-active-hunk-margin{background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.55))!important;}
+.monaco-editor .margin-view-overlays .mtm-active-hunk-gutter{
+  background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.55))!important;
+  box-shadow:inset 2px 0 0 var(--mtm-active-hunk-edge,#6897BB);
+}
 </style>
 </head>
 <body>
@@ -49,6 +55,7 @@ window.addEventListener('message',function(e){
   if(!msg||!msg.type)return;
   if(msg.type==='loadDiff')loadDiff(msg);
   else if(msg.type==='setFontSize')setFontSize(msg.fontSize);
+  else if(msg.type==='setActiveHunk')setActiveHunk(msg);
   else if(msg.type==='setReviewCursor')setReviewCursor(msg.line);
   else if(msg.type==='focusReview')focusReview();
   else if(msg.type==='showLastHunkHint')showLastHunkHint(msg.text);
@@ -247,7 +254,7 @@ function applyModifiedDiffColors(msg){
 // Reclassify Monaco's add(green)/delete(red) diff into IntelliJ's add/delete/modify: a block that
 // changed on BOTH sides is "modified" → paint it blue on each pane, with a stronger blue on the
 // changed tokens. Pure additions/deletions keep Monaco's green/red. Recomputed on every diff update.
-var _origDecorations=[],_modDecorations=[],_modToOrig={};
+var _origDecorations=[],_modDecorations=[],_activeOrigDecorations=[],_activeModDecorations=[],_activeHunk=null,_modToOrig={};
 // IntelliJ shows a SINGLE shared gutter in the center with BOTH the original and new line numbers.
 // Monaco side-by-side puts a separate gutter on the far left of each pane and exposes no line-mapping
 // API, so we reconstruct modified→original from getLineChanges() (a running delta of added/deleted lines
@@ -293,6 +300,7 @@ function installCenterLineNumbers(){
 }
 function onDiffUpdated(){
   applyModifiedLineDecorations();
+  applyActiveHunkDecorations();
   buildModOrigMap();
   installCenterLineNumbers();
 }
@@ -318,6 +326,55 @@ function applyModifiedLineDecorations(){
   var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
   _origDecorations=orig.deltaDecorations(_origDecorations,origDecos);
   _modDecorations=mod.deltaDecorations(_modDecorations,modDecos);
+}
+
+function setActiveHunk(msg){
+  if(!msg||!msg.originalStartLine){
+    _activeHunk=null;
+  }else{
+    var root=document.documentElement.style;
+    var bg=msg.activeHunkBackground||'#2c404b';
+    var edge=msg.activeHunkEdge||'#6897BB';
+    root.setProperty('--mtm-active-hunk',hexToRgba(bg,0.78));
+    root.setProperty('--mtm-active-hunk-margin',hexToRgba(bg,0.55));
+    root.setProperty('--mtm-active-hunk-edge',edge);
+    _activeHunk={
+      originalStartLine:+msg.originalStartLine||0,
+      originalEndLine:+msg.originalEndLine||0,
+      modifiedStartLine:+msg.modifiedStartLine||0,
+      modifiedEndLine:+msg.modifiedEndLine||0
+    };
+  }
+  applyActiveHunkDecorations();
+}
+function activeHunkDecorationOptions(){
+  var options={isWholeLine:true,className:'mtm-active-hunk-line',marginClassName:'mtm-active-hunk-margin',
+    linesDecorationsClassName:'mtm-active-hunk-gutter'};
+  if(typeof monaco!=='undefined'&&monaco.editor&&monaco.editor.OverviewRulerLane){
+    options.overviewRuler={color:'rgba(104,151,187,0.9)',position:monaco.editor.OverviewRulerLane.Full};
+  }
+  return options;
+}
+function activeHunkRange(start,end,maxLine){
+  start=Math.max(1,+start||0);end=Math.min(maxLine,+end||0);
+  if(!maxLine||end<start)return null;
+  return new monaco.Range(start,1,end,1);
+}
+function applyActiveHunkDecorations(){
+  if(!_diffEditor||typeof monaco==='undefined')return;
+  var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
+  var origModel=orig&&orig.getModel&&orig.getModel(),modModel=mod&&mod.getModel&&mod.getModel();
+  var origDecos=[],modDecos=[],options=activeHunkDecorationOptions();
+  if(_activeHunk&&origModel){
+    var or=activeHunkRange(_activeHunk.originalStartLine,_activeHunk.originalEndLine,origModel.getLineCount());
+    if(or)origDecos.push({range:or,options:options});
+  }
+  if(_activeHunk&&modModel){
+    var mr=activeHunkRange(_activeHunk.modifiedStartLine,_activeHunk.modifiedEndLine,modModel.getLineCount());
+    if(mr)modDecos.push({range:mr,options:options});
+  }
+  if(orig)_activeOrigDecorations=orig.deltaDecorations(_activeOrigDecorations,origDecos);
+  if(mod)_activeModDecorations=mod.deltaDecorations(_activeModDecorations,modDecos);
 }
 
 function loadDiff(msg){
@@ -366,6 +423,7 @@ function loadDiff(msg){
         // the only point getLineChanges() is valid — repaint the blue "modified" overlay + rebuild the
         // center line-number gutter there.
         _diffEditor.onDidUpdateDiff(onDiffUpdated);
+        applyActiveHunkDecorations();
         setReviewCursor(_reviewLine);
       }
     },function(err){

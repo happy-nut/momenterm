@@ -128,7 +128,7 @@ function loadFile(msg){
   if(msg.fontSize)_fontSize=+msg.fontSize;
   if(_editor)_editor.updateOptions({fontSize:_fontSize});
   if(msg.theme)applyTheme(msg.theme);
-  _currentLine=1;
+  _currentLine=Math.max(1,+msg.cursorLine||1);
 
   // Pure image (no raw text): just show it, ignore modes.
   if(_isImage){
@@ -217,6 +217,7 @@ function setEditor(content,lang){
       highlightCurrentBlock();
       postCursorLine();
     });
+    setEditorCursor();
     _editor.focus();
     return;
   }
@@ -224,6 +225,15 @@ function setEditor(content,lang){
   var m=monaco.editor.createModel(content,mapLang(lang));
   _editor.setModel(m);
   if(old)old.dispose();
+  setEditorCursor();
+}
+
+function setEditorCursor(){
+  if(!_editor)return;
+  _suppressMonacoSync=true;
+  _editor.setPosition({lineNumber:_currentLine,column:1});
+  _editor.revealLineInCenterIfOutsideViewport(_currentLine);
+  _suppressMonacoSync=false;
 }
 
 // ---- markdown preview with source-line blocks ---------------------------

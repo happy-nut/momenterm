@@ -4,6 +4,7 @@ import AppKit
 extension MainWindowController {
     func openGoToLinePrompt() {
         goToLineBuffer = ""
+        goToLineTargetPath = selectedFilePath()
         showOverlay(.goToLine)
     }
     func openQuickOpen(mode: QuickOpenMode, initialQuery: String = "") {
@@ -641,11 +642,11 @@ extension MainWindowController {
         }
     }
     private func activeQuickOpenDocument() -> ReviewDocument? {
-        if let currentDocument = currentDocument {
-            return currentDocument
-        }
         if let fileListingDocument = fileListingDocument {
             return fileListingDocument
+        }
+        if let currentDocument = currentDocument {
+            return currentDocument
         }
         return nil
     }
@@ -776,11 +777,19 @@ extension MainWindowController {
     func populateGoToLineOverlay() {
         resetOverlaySidebar()
         setSettingsContentVisible(false)
-        overlaySubtitleLabel.stringValue = goToLineBuffer.isEmpty ? "Type a line number" : "Line \(goToLineBuffer)"
-        addSidebarMessage("Enter: jump")
-        addSidebarMessage("Esc: cancel")
-        codePane.setOldContent(styledText("Go to line \(goToLineBuffer.isEmpty ? "_" : goToLineBuffer)\n\nCurrent location: \(currentFileLocation())", color: theme.primaryText))
+        overlaySidebarScrollView?.isHidden = true
+        overlaySidebarWidthConstraint?.constant = 0
+        overlaySidebarWidthConstraint?.isActive = true
+        overlayContentView.layer?.borderColor = NSColor.clear.cgColor
+        overlayContentView.layer?.borderWidth = 0
+        setSingleCodePaneVisible(true)
+        resetDiffLineGutters()
+        let target = goToLineTargetPath ?? selectedFilePath() ?? currentFileLocation()
+        overlaySubtitleLabel.stringValue = target
+        let value = goToLineBuffer.isEmpty ? "_" : goToLineBuffer
+        codePane.setOldContent(styledText("Line \(value)\n\nEnter: jump   Esc: cancel", color: theme.primaryText))
         codePane.setNewString("")
+        codePane.focusOldPane(in: window)
     }
     func updateFindInFilesCompactSize() {
         let outerPadding = MomentermDesign.Metrics.panelOuterPadding * 2

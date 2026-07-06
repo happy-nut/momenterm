@@ -1624,7 +1624,7 @@ extension MainWindowController {
         else {
             return 0
         }
-        return document.diffFiles[selectedDiffIndex].hunks.count
+        return reviewTargetCount(for: document.diffFiles[selectedDiffIndex])
     }
 
     func reviewHunkBoundaryHintIsVisibleForSmokeTest() -> Bool {
@@ -1686,7 +1686,7 @@ extension MainWindowController {
             return false
         }
         // A changed line may be classified as pure delete/add (red/green) or as a modified pair
-        // (blue on both sides), so accept the union of diff backgrounds / inline-highlight colors.
+        // (blue on both sides), but the active F7 target must now be a visible IntelliJ-style block.
         return storageContainsAnyBackground(oldStorage, colors: [theme.deletionBackground, theme.modifiedBackground])
             && storageContainsAnyBackground(newStorage, colors: [theme.additionBackground, theme.modifiedBackground])
             && storageContainsAnyBackground(oldStorage, colors: [theme.diffFocusedHunkBackground])
@@ -2027,6 +2027,36 @@ extension MainWindowController {
         }
         return firstResponderIsOrDescends(from: codePane.oldPaneCodeView)
             && codeTextViewHasVisibleCursor(codePane.oldPaneCodeView)
+    }
+
+    func fileOverlayShowsLineNumberGutterForSmokeTest() -> Bool {
+        guard overlayMode == .files, fileHybridView.isHidden else { return false }
+        return !oldLineGutter.isHidden
+            && oldLineGutter.frame.width >= diffGutterWidth - 1
+            && codePane.oldPaneCodeView.textContainerInset.width >= diffGutterWidth
+    }
+
+    func fileOverlaySelectedTextLengthForSmokeTest() -> Int {
+        guard overlayMode == .files, fileHybridView.isHidden else { return 0 }
+        return codePane.oldPaneCodeView.selectedRange().length
+    }
+
+    func fileOverlayPreviewCursorIsInsideScrollMarginForSmokeTest() -> Bool {
+        guard overlayMode == .files,
+              fileHybridView.isHidden,
+              firstResponderIsOrDescends(from: codePane.oldPaneCodeView),
+              let scrollView = codePane.oldPaneEnclosingScrollView,
+              let rect = codePane.oldPaneCodeView.reviewCursorRectForOverlay()
+        else {
+            return false
+        }
+        let visible = scrollView.contentView.documentVisibleRect
+        guard visible.height > 0 else {
+            return true
+        }
+        let margin = visible.height * MomentermDesign.Metrics.sidebarSelectionScrollMarginRatio
+        return rect.minY >= visible.minY + margin - 3
+            && rect.maxY <= visible.maxY - margin + 3
     }
 
     func fileOverlayPreviewCursorLineForSmokeTest() -> Int {

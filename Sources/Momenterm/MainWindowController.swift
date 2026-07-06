@@ -559,6 +559,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var quickOpenContentSearchRequestID = 0
     var quickOpenContentSearchLoading = false
     var goToLineBuffer = ""
+    var goToLineTargetPath: String?
     var viewedFilePaths = Set<String>()
     // US-05: mutations flow through every append/remove call site, so a didSet is the single
     // choke point that keeps the workspace-scoped persisted copy in sync. Loading from disk sets
@@ -1009,7 +1010,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
         let host = activeInlineReviewCodeView()
-        let location = host.reviewCursorLocation ?? host.selectedRange().location
+        let location = host.selectedRange().location
         guard let word = identifierWord(in: host.string, at: location), word.count >= 2 else {
             showShortcutStatus("Put the cursor on an identifier, then Cmd+B.", title: "Find usages")
             return
@@ -1047,7 +1048,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return
         }
         let host = activeInlineReviewCodeView()
-        let location = host.reviewCursorLocation ?? host.selectedRange().location
+        let location = host.selectedRange().location
         guard let word = identifierWord(in: host.string, at: location), word.count >= 2 else {
             showShortcutStatus("Put the cursor on an identifier, then Cmd+↓.", title: "Go to declaration")
             return
@@ -2048,14 +2049,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return true
         }
 
+        if overlayMode == .goToLine, handleGoToLineKey(event, key: key, lowerKey: lowerKey, flags: flags) {
+            return true
+        }
+
         if isEditableTextInputFocused() {
             return false
         }
 
         if overlayMode == .quickOpen, handleQuickOpenKey(event, key: key, lowerKey: lowerKey, flags: flags) {
-            return true
-        }
-        if overlayMode == .goToLine, handleGoToLineKey(event, key: key, lowerKey: lowerKey, flags: flags) {
             return true
         }
         if overlayMode == .history, handleHistoryKey(event, key: key, lowerKey: lowerKey, flags: flags) {
@@ -2325,6 +2327,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             updateInlineReviewSelectionForCursor(in: codeView)
             return true
         }
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift),
+           (event.keyCode == 123 || event.keyCode == 124 || event.keyCode == 125 || event.keyCode == 126),
+           overlayFocusedCodePaneForSelection() != nil {
+            return false
+        }
         switch event.keyCode {
         case 51:
             if deleteSelectedReviewNoteIfNeeded() {
@@ -2420,7 +2427,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         guard overlayMode == .files || overlayMode == .changes,
               !event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
               !event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control),
-              !event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.option)
+              !event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.option),
+              !event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift)
         else {
             return nil
         }
@@ -2438,13 +2446,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
     }
 
+    private func overlayFocusedCodePaneForSelection() -> NativeCodeTextView? {
+        guard overlayMode == .files || overlayMode == .changes else {
+            return nil
+        }
+        if firstResponderIsOrDescends(from: codePane.oldPaneCodeView) {
+            return codePane.oldPaneCodeView
+        }
+        if overlayMode == .changes, firstResponderIsOrDescends(from: codePane.newPaneCodeView) {
+            return codePane.newPaneCodeView
+        }
+        return nil
+    }
+
     func moveOverlaySelection(delta: Int) {
         switch overlayMode {
         case .changes:
             let files = activeChangesDiffFiles
             guard !files.isEmpty else { return }
             selectedDiffIndex = (selectedDiffIndex + delta + files.count) % files.count
-            selectedDiffHunkIndex = delta < 0 ? max(files[selectedDiffIndex].hunks.count - 1, 0) : 0
+            selectedDiffHunkIndex = delta < 0 ? max(reviewTargetCount(for: files[selectedDiffIndex]) - 1, 0) : 0
             awaitingNextFileAfterLastHunk = false
             pushCursorHistory(files[selectedDiffIndex].displayPath)
             populateChangesOverlay()
@@ -2990,6 +3011,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlaySidebarStack.spacing = 4
         overlayContentView.layer?.borderColor = NSColor.clear.cgColor
         overlayContentView.layer?.borderWidth = 0
+        overlaySidebarScrollView?.isHidden = false
         // Reset hybrid panels to hidden. overlayDiffSplitView visibility is managed by
         // setSettingsContentVisible (called before this from populateOverlay) and by
         // the showXxxPane helpers in each render call — do not touch it here.
@@ -3467,13 +3489,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         guard let line = Int(goToLineBuffer), line > 0 else {
             return
         }
-        if overlayMode == .goToLine, let path = selectedFilePath() {
-            openPathFromShortcut(path)
-        } else if overlayMode == .goToLine {
-            openFilesView()
+        let targetPath = goToLineTargetPath ?? selectedFilePath()
+        goToLineBuffer = ""
+        goToLineTargetPath = nil
+        if let path = targetPath, openFilePathInFilesView(path, preferredLine: line) {
+            return
         }
+        openFilesView()
         selectLineInOldTextView(line)
-        showShortcutStatus("Jumped to \(currentFileLocation(line: line))", title: "Go to Line")
+    }
+
+    @discardableResult
+    private func openFilePathInFilesView(_ path: String, preferredLine line: Int) -> Bool {
+        let rootPath = activeFilesDocument()?.root
+            ?? fileListingRoot?.path
+            ?? activeWorkspaceDetectedGitRoot()
+            ?? activeWorkspaceURL()?.path
+            ?? root?.path
+        guard let rootPath = rootPath else {
+            return false
+        }
+        let rootURL = URL(fileURLWithPath: rootPath).standardizedFileURL
+        let preview = service.filePreview(root: rootURL, path: path)
+            ?? activeFilesDocument()?.sourceFiles.first(where: { $0.path == path })
+            ?? currentDocument?.sourceFiles.first(where: { $0.path == path })
+        guard let preview = preview, preview.language != "folder" else {
+            return false
+        }
+        if overlayMode != .files {
+            showOverlay(.files)
+        }
+        if selectFileInTree(path: path) {
+            populateFilesOverlay()
+        }
+        pushCursorHistory(path)
+        renderSourceFile(preview, preferredLine: line, focus: true)
+        return true
     }
 
     private func selectLineInOldTextView(_ line: Int) {
@@ -3482,7 +3533,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         let lines = text.components(separatedBy: .newlines)
         let prefix = lines.prefix(max(line - 1, 0)).joined(separator: "\n")
         let location = min((prefix as NSString).length + (line > 1 ? 1 : 0), nsText.length)
-        codePane.selectOldPaneLocation(location)
+        placeCodeCursor(in: codePane.oldPaneCodeView, location: location, focus: true)
     }
 
 
@@ -3576,6 +3627,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
         if document.diffFiles.indices.contains(selectedDiffIndex) {
             let file = document.diffFiles[selectedDiffIndex]
+            if let line = selectedReviewTargetLine(in: file) {
+                return line
+            }
             if let hunk = selectedDiffHunk(in: file) {
                 return lineNumber(for: hunk)
             }
@@ -3652,6 +3706,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         !overlayMaximized && (
             overlayMode == .settings
                 || overlayMode == .workspacePicker
+                || overlayMode == .goToLine
                 || (overlayMode == .quickOpen && (quickOpenMode == .content || quickOpenMode == .recent))
         )
     }
@@ -3763,6 +3818,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             updateFindInFilesCompactSize()
         } else if overlayMode == .quickOpen && quickOpenMode == .recent {
             updateRecentFilesCompactSize()
+        } else if overlayMode == .goToLine {
+            overlayCompactWidthConstraint?.constant = MomentermDesign.Metrics.goToLinePanelWidth
+            overlayCompactHeightConstraint?.constant = MomentermDesign.Metrics.goToLinePanelHeight
         } else if overlayMode == .settings {
             updateSettingsCompactSize()
         } else {
@@ -3925,6 +3983,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 }
                 offset += (line as NSString).length + 1
             }
+            offset = 0
+            for (index, line) in lines.enumerated() {
+                if index + 1 == preferredLine {
+                    return offset
+                }
+                offset += (line as NSString).length + 1
+            }
+            return max(0, (text as NSString).length)
         }
         offset = 0
         for line in lines {
@@ -4857,4 +4923,3 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
 
 }
-
