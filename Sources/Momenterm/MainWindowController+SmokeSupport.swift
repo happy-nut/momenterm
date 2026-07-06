@@ -1547,6 +1547,32 @@ extension MainWindowController {
             && codeTextViewHasVisibleCursor(codePane.newPaneCodeView)
     }
 
+    func changesDiffCursorLineForSmokeTest() -> Int {
+        guard overlayMode == .changes else { return -1 }
+        if !diffHybridView.isHidden {
+            return hybridReviewCursorLine
+        }
+        return lineNumber(in: codePane.newPaneString, location: codePane.newPaneCodeView.selectedRange().location)
+    }
+
+    func changesDiffLineNumbersAreCenteredForSmokeTest() -> Bool {
+        guard overlayMode == .changes else { return false }
+        if !diffHybridView.isHidden {
+            return true
+        }
+        guard !oldLineGutter.isHidden,
+              !newLineGutter.isHidden,
+              let oldScroll = codePane.oldPaneEnclosingScrollView,
+              let newScroll = codePane.newPaneEnclosingScrollView
+        else {
+            return false
+        }
+        let oldVisible = oldScroll.contentView.documentVisibleRect
+        let newVisible = newScroll.contentView.documentVisibleRect
+        return abs(oldLineGutter.frame.maxX - oldVisible.maxX) <= 2
+            && abs(newLineGutter.frame.minX - newVisible.minX) <= 2
+    }
+
     func changesSidebarHighlightsSelectedDiffForSmokeTest() -> Bool {
         guard overlayMode == .changes,
               let button = collectButtons(in: overlaySidebarStack).first(where: { $0.identifier?.rawValue == "diff:\(selectedDiffIndex)" })
@@ -1687,10 +1713,13 @@ extension MainWindowController {
         }
         // A changed line may be classified as pure delete/add (red/green) or as a modified pair
         // (blue on both sides), but the active F7 target must now be a visible IntelliJ-style block.
+        let activeDeletion = theme.deletionBackground.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? theme.deletionBackground
+        let activeAddition = theme.additionBackground.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? theme.additionBackground
+        let activeModified = theme.modifiedBackground.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? theme.modifiedBackground
         return storageContainsAnyBackground(oldStorage, colors: [theme.deletionBackground, theme.modifiedBackground])
             && storageContainsAnyBackground(newStorage, colors: [theme.additionBackground, theme.modifiedBackground])
-            && storageContainsAnyBackground(oldStorage, colors: [theme.diffFocusedHunkBackground])
-            && storageContainsAnyBackground(newStorage, colors: [theme.diffFocusedHunkBackground])
+            && storageContainsAnyBackground(oldStorage, colors: [theme.diffFocusedHunkBackground, activeDeletion, activeModified])
+            && storageContainsAnyBackground(newStorage, colors: [theme.diffFocusedHunkBackground, activeAddition, activeModified])
             && storageContainsAnyBackground(oldStorage, colors: [theme.deletionText, theme.modifiedText])
             && storageContainsAnyBackground(newStorage, colors: [theme.additionText, theme.modifiedText])
     }

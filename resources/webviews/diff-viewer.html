@@ -14,7 +14,7 @@ html,body,#editor{height:100%;background:#1e1e1e;overflow:hidden}
    actually-changed tokens. Colors come from the native theme (matching the native diff pane exactly). */
 .mtm-modified-line{background-color:var(--mtm-mod-line,#2B3A52)!important;}
 .mtm-modified-token{background-color:var(--mtm-mod-token,rgba(104,151,187,0.42))!important;border-radius:2px;}
-.mtm-active-hunk-line{background-color:var(--mtm-active-hunk,rgba(44,64,75,0.78))!important;}
+.mtm-active-hunk-line{box-shadow:inset 3px 0 0 var(--mtm-active-hunk-edge,#6897BB),inset 0 0 0 9999px var(--mtm-active-hunk-wash,rgba(104,151,187,0.10))!important;}
 .monaco-editor .margin-view-overlays .mtm-active-hunk-margin{background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.55))!important;}
 .monaco-editor .margin-view-overlays .mtm-active-hunk-gutter{
   background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.55))!important;
@@ -336,6 +336,7 @@ function setActiveHunk(msg){
     var bg=msg.activeHunkBackground||'#2c404b';
     var edge=msg.activeHunkEdge||'#6897BB';
     root.setProperty('--mtm-active-hunk',hexToRgba(bg,0.78));
+    root.setProperty('--mtm-active-hunk-wash',hexToRgba(edge,0.10));
     root.setProperty('--mtm-active-hunk-margin',hexToRgba(bg,0.55));
     root.setProperty('--mtm-active-hunk-edge',edge);
     _activeHunk={

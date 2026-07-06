@@ -21,7 +21,8 @@ jobs:
       - name: Build
         run: ./scripts/build.sh
 
-      # launch-smoke boots the AppKit app and is skipped under the headless runner;
-      # every other smoke (isolated swiftc + node smokes) runs.
+      # launch-smoke and key-input-smoke boot AppKit windows, so they are skipped on the
+      # headless runner. The aggregate runner fails fast in CI and gives each smoke a
+      # bounded runtime so a single hang cannot consume the whole job timeout.
       - name: Smoke suite
-        run: SMOKE_SKIP="launch-smoke.sh" ./scripts/smoke-all.sh
+        run: SMOKE_SKIP="launch-smoke.sh key-input-smoke.sh" SMOKE_FAIL_FAST=1 SMOKE_TIMEOUT_SECONDS=600 ./scripts/smoke-all.sh

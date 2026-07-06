@@ -101,7 +101,17 @@ final class NativeHybridWebView: NSView, WKNavigationDelegate {
     func focusWebContent(in window: NSWindow?) {
         window?.makeFirstResponder(webView)
         // Also bring DOM focus into Monaco so arrow keys move the editor cursor.
-        evaluateJS("if(window._editor){window._editor.focus()}")
+        // code-viewer exposes `_editor`; diff-viewer exposes `focusReview()` / `_diffEditor`.
+        evaluateJS("""
+        if (window.focusReview) {
+          window.focusReview();
+        } else if (window._editor) {
+          window._editor.focus();
+        } else if (window._diffEditor && window._diffEditor.getModifiedEditor) {
+          var ed = window._diffEditor.getModifiedEditor();
+          if (ed) ed.focus();
+        }
+        """)
     }
 
 #if DEBUG

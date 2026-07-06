@@ -858,8 +858,9 @@ extension MainWindowController {
                     index += 1
                 case .deletion:
                     let isFocusedTarget = renderedTargetIndex == selectedDiffHunkIndex
-                    let focusedBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : nil
                     let emptyBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
+                    let deletionBackground = isFocusedTarget ? activeDiffBackground(theme.deletionBackground) : theme.deletionBackground
+                    let modifiedBackground = isFocusedTarget ? activeDiffBackground(theme.modifiedBackground) : theme.modifiedBackground
                     let start = index
                     var deletions: [DiffLine] = []
                     while index < hunk.lines.count, hunk.lines[index].kind == .deletion {
@@ -873,7 +874,7 @@ extension MainWindowController {
                     }
                     if additions.isEmpty {
                         for deletion in deletions {
-                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: focusedBackground ?? theme.deletionBackground, pane: .old, language: language)
+                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: deletionBackground, pane: .old, language: language)
                             appendCodeLine(number: nil, text: "", to: newOutput, color: theme.codeText, background: emptyBackground, pane: .new)
                         }
                     } else {
@@ -889,7 +890,7 @@ extension MainWindowController {
                                     text: deletion.text,
                                     to: oldOutput,
                                     color: theme.modifiedText,
-                                    background: focusedBackground ?? theme.modifiedBackground,
+                                    background: modifiedBackground,
                                     pane: .old,
                                     language: language,
                                     inlineHighlight: addition.flatMap { changedTextRange(in: deletion.text, comparedTo: $0.text) },
@@ -904,7 +905,7 @@ extension MainWindowController {
                                     text: addition.text,
                                     to: newOutput,
                                     color: theme.modifiedText,
-                                    background: focusedBackground ?? theme.modifiedBackground,
+                                    background: modifiedBackground,
                                     pane: .new,
                                     language: language,
                                     inlineHighlight: deletion.flatMap { changedTextRange(in: addition.text, comparedTo: $0.text) },
@@ -921,12 +922,12 @@ extension MainWindowController {
                     renderedTargetIndex += 1
                 case .addition:
                     let isFocusedTarget = renderedTargetIndex == selectedDiffHunkIndex
-                    let focusedBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : nil
                     let emptyBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
+                    let additionBackground = isFocusedTarget ? activeDiffBackground(theme.additionBackground) : theme.additionBackground
                     while index < hunk.lines.count, hunk.lines[index].kind == .addition {
                         let addition = hunk.lines[index]
                         appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground, pane: .old)
-                        appendCodeLine(number: addition.newNumber, text: addition.text, to: newOutput, color: theme.additionText, background: focusedBackground ?? theme.additionBackground, pane: .new, language: language)
+                        appendCodeLine(number: addition.newNumber, text: addition.text, to: newOutput, color: theme.additionText, background: additionBackground, pane: .new, language: language)
                         index += 1
                     }
                     renderedTargetIndex += 1
@@ -1585,18 +1586,27 @@ extension MainWindowController {
             guard let self = self else { return }
             let oldView = self.codePane.oldPaneCodeView
             let newView = self.codePane.newPaneCodeView
+            guard let oldScroll = oldView.enclosingScrollView,
+                  let newScroll = newView.enclosingScrollView else { return }
             let width = self.diffGutterWidth
             let tall: CGFloat = 1_000_000
+            let oldVisible = oldScroll.contentView.documentVisibleRect
+            let newVisible = newScroll.contentView.documentVisibleRect
+            let oldGutterX = max(oldVisible.maxX - width, 0)
+            let newGutterX = max(newVisible.minX, 0)
             // Old pane: gutter hugs the right edge (toward the center divider); its strip depends on bounds.
-            oldView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: max(oldView.bounds.width - width, 0), y: 0, width: width, height: tall))]
-            self.oldLineGutter.frame = NSRect(x: max(oldView.bounds.width - width, 0), y: 0, width: width, height: max(oldView.bounds.height, 0))
+            oldView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: oldGutterX, y: 0, width: width, height: tall))]
+            self.oldLineGutter.frame = NSRect(x: oldGutterX, y: 0, width: width, height: max(oldView.bounds.height, oldVisible.maxY))
             // New pane: gutter hugs the left edge (toward the center divider).
-            self.newLineGutter.frame = NSRect(x: 0, y: 0, width: width, height: max(newView.bounds.height, 0))
+            self.newLineGutter.frame = NSRect(x: newGutterX, y: 0, width: width, height: max(newView.bounds.height, newVisible.maxY))
             // Compute line positions once (after the exclusion paths reflow the text), then draw
             // from the cache — never query layout inside draw().
             self.oldLineGutter.reload(numbers: oldNumbers)
             self.newLineGutter.reload(numbers: newNumbers)
         }
+    }
+    private func activeDiffBackground(_ base: NSColor) -> NSColor {
+        base.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? base
     }
     func layoutSourceLineGutter() {
         let textView = codePane.oldPaneCodeView

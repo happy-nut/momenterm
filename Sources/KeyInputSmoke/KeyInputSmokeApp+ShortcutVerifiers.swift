@@ -684,6 +684,22 @@ extension KeyInputSmokeApp {
             fail("Changes Enter did not keep the diff open with a visible cursor in the code pane")
             return
         }
+        guard waitUntil("Changes diff line numbers centered after Enter", timeout: 2, condition: {
+            controller.changesDiffLineNumbersAreCenteredForSmokeTest()
+        }) else {
+            fail("Changes diff line numbers did not sit against the center divider")
+            return
+        }
+        let diffPathAfterEnter = controller.selectedDiffPathForSmokeTest()
+        let diffCursorLineBeforeDown = controller.changesDiffCursorLineForSmokeTest()
+        sendShortcut("", keyCode: 125, modifiers: [])
+        let diffCursorLineAfterDown = controller.changesDiffCursorLineForSmokeTest()
+        guard controller.changesDiffCodePaneHasVisibleCursorForSmokeTest(),
+              controller.selectedDiffPathForSmokeTest() == diffPathAfterEnter,
+              diffCursorLineAfterDown > diffCursorLineBeforeDown else {
+            fail("Down after Changes Enter moved the sidebar instead of the diff cursor; path=\(diffPathAfterEnter ?? "nil")->\(controller.selectedDiffPathForSmokeTest() ?? "nil") cursorLine=\(diffCursorLineBeforeDown)->\(diffCursorLineAfterDown) focus=\(controller.firstResponderDiagnosticsForSmokeTest())")
+            return
+        }
         guard controller.reviewCodePanesShowCursorForSmokeTest() else {
             fail("Diff and file views did not keep a visible code cursor for review comments")
             return

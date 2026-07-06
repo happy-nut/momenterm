@@ -2508,11 +2508,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             }
             awaitingNextFileAfterLastHunk = false
             renderDiffFile(files[selectedDiffIndex])
-            if diffHybridView.isHidden {
-                codePane.focusNewPane(in: window)
-            } else {
-                diffHybridView.focusWebContent(in: window)
-            }
+            focusActiveDiffReviewPane()
         case .files:
             guard let row = fileTreeModel.selectedRow() else {
                 return
@@ -2543,6 +2539,27 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             openSelectedWorkspacePickerItem()
         default:
             break
+        }
+    }
+
+    private func focusActiveDiffReviewPane() {
+        guard overlayMode == .changes else {
+            return
+        }
+        if diffHybridView.isHidden {
+            codePane.focusNewPane(in: window)
+        } else {
+            diffHybridView.focusWebContent(in: window)
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.overlayMode == .changes else {
+                return
+            }
+            if self.diffHybridView.isHidden {
+                self.codePane.focusNewPane(in: self.window)
+            } else {
+                self.diffHybridView.focusWebContent(in: self.window)
+            }
         }
     }
 

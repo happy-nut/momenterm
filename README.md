@@ -1,39 +1,53 @@
 # Momenterm
 
-Momenterm is a native macOS terminal and code-review app, built without Electron.
+[한국어 README](README.ko.md)
 
-It puts a fast terminal and a local code-review workflow in one AppKit window:
+Momenterm is a native macOS terminal and code-review workbench for people who live in the terminal but still want an IDE-grade review surface.
 
-- native AppKit application shell — no Electron, no Node, no bundled JS app runtime
-- libghostty-backed terminal as the base workbench, with multiple tabs, split panes, and new tabs rooted at `~` by default
-- workspaces: switch between saved repositories and Git linked worktrees from a left rail, each with its own scoped terminal tabs
-- agent-notification aware: terminal OSC sequences ("agent waiting / done") surface as per-pane rings and workspace alerts, with `Cmd+Shift+U` to jump to the next unread pane
-- local code review: Swift builds the Git diff, source listing, Git history, and HTTP-request surface; review comments, viewed-file marks, and settings persist locally
-- Monaco-backed diff and file views: the file, diff, and Git-graph panels render in an embedded Monaco editor (`WKWebView`) with Darcula theming, while the terminal stays fully native
-- non-Git folders still open in the terminal-first shell; Diff shows guidance and Files browses the folder
+It keeps the fast terminal, repository navigation, Git diff review, file tree, history, HTTP client, and agent notifications in one AppKit window. No Electron, no bundled Node runtime, and no browser app shell.
 
-Review tools (diff, source, history, changes, file tree, quick-open, settings) open as overlays floating above the terminal, driven from an IntelliJ-style icon activity rail and keyboard shortcuts.
+## Why Momenterm?
 
-## Install
+- **Stay in one window.** Keep terminal panes, repository files, diffs, history, and review notes together instead of bouncing between a terminal, IDE, browser, and review tool.
+- **Native terminal first.** The base workbench is a libghostty-backed native terminal with tabs, split panes, workspace-scoped sessions, and new tabs rooted at `~` by default.
+- **IDE-style review without opening an IDE.** F7/Shift+F7 navigate real changed blocks, diffs use IntelliJ/Darcula-style highlighting, and Files/Changes/History/Quick Open sit on top of the terminal as keyboard-driven overlays.
+- **Local by default.** Swift builds the Git diff, source listing, Git history, HTTP-request surface, viewed marks, review comments, and settings locally.
+- **Agent-aware.** Terminal OSC sequences for "agent waiting / done" surface as pane rings and workspace alerts, with `Cmd+Shift+U` to jump to the next unread pane.
+- **Useful outside Git too.** Non-Git folders still open as terminal-first workspaces; Files browses the folder and Changes shows guidance instead of failing silently.
+
+## Quick Install
+
+### Option 1: Download the DMG
 
 Prebuilt binaries are published on the [Releases](https://github.com/happy-nut/momenterm/releases) page.
 
-Momenterm is not yet code-signed or notarized, so macOS Gatekeeper flags it as coming from an "unidentified developer." To run a downloaded build:
+1. Download `Momenterm.dmg` from the latest release.
+2. Open the DMG and drag `Momenterm.app` to Applications.
+3. First launch: **right-click (Control-click) Momenterm → Open**, then confirm **Open**. macOS remembers this afterward.
 
-1. Download `Momenterm.dmg` from the latest release, open it, and drag Momenterm to Applications.
-2. On first launch, **right-click (Control-click) the app → Open**, then confirm **Open** in the dialog. macOS remembers the choice afterward.
-
-If the app still refuses to open, clear the quarantine attribute from a terminal:
+Momenterm is not yet code-signed or notarized, so macOS may show an "unidentified developer" warning. If the app still refuses to open:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Momenterm.app
 ```
 
-Prefer to build it yourself? See **Run** and **Package** below.
+### Option 2: Build and install locally
+
+Requires macOS 11 or later and the Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+git clone https://github.com/happy-nut/momenterm.git
+cd momenterm
+./scripts/install-app.sh
+open /Applications/Momenterm.app --args --repo /path/to/repo
+```
+
+On first build, `scripts/build.sh` downloads a pinned, checksum-verified libghostty binary into `.build/vendor`; no other setup is needed.
 
 ## Run
 
-Requires macOS 11 or later and the Xcode Command Line Tools (`xcode-select --install`) for the Swift toolchain. On first build, `scripts/build.sh` downloads a pinned, checksum-verified libghostty binary into `.build/vendor`; no other setup is needed.
+For local development, run from the checkout:
 
 ```bash
 swift run Momenterm --repo /path/to/repo
@@ -46,6 +60,15 @@ On machines where SwiftPM cannot find `xctest` from Command Line Tools, use the 
 ```
 
 Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder from the app.
+
+## What You Get
+
+- **Terminal workbench:** native tabs, split panes, per-workspace terminal state, shell integration, and compact pane controls.
+- **Changes:** local Git diff review with changed-block navigation, viewed marks, persistent comments, and IntelliJ-style line-number gutters.
+- **Files:** repository file tree, source preview, line-numbered code view, quick open, recent files, and find-in-files.
+- **History:** native Git history and commit diff inspection.
+- **HTTP requests:** IntelliJ `.http` request execution with environment-file support.
+- **Settings:** local preferences for review behavior, prompt merge text, theme, and code font size.
 
 ## Verify
 
