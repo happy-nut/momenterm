@@ -103,6 +103,7 @@ extension MainWindowController {
         activeTerminalId = nextPane.id
         rebuildTerminalTabs()
         rebuildWorkspaceButtons()
+        updateWorkspaceGitDetection()   // US-4: closing the last git pane reverts the rail to the dot.
         rebuildTerminalPanes()
         updateTerminalStatus()
         persistTerminalState()
@@ -128,6 +129,7 @@ extension MainWindowController {
         activeTerminalId = nextTab?.activePaneId ?? nextTab?.panes.first?.id
         rebuildTerminalTabs()
         rebuildWorkspaceButtons()
+        updateWorkspaceGitDetection()   // US-4: closing a git-bearing tab reverts the rail when no pane remains in a repo.
         rebuildTerminalPanes()
         updateTerminalStatus()
         persistTerminalState()
@@ -158,7 +160,9 @@ extension MainWindowController {
         createTerminalGroupForActiveScope()
     }
     private func createTerminalGroupForActiveScope() {
-        let cwd = activeWorkspaceURL() ?? currentTerminalDirectory()
+        // US-6: inherit the focused pane's live cwd (currentTerminalDirectory() already falls back to
+        // the workspace root, then ~/, when no pane is focused) rather than snapping to the workspace root.
+        let cwd = currentTerminalDirectory()
         spawnTerminal(
             name: displayName(for: cwd),
             cwd: cwd,
@@ -188,7 +192,8 @@ extension MainWindowController {
         let focusedPane = activeSession()
         let focusedPaneId = focusedPane?.id ?? activeTerminalId ?? tab.activePaneId ?? tab.panes.last?.id
         let splitInsideBelowGroup = splitVertically && tab.containsPaneInBelowSplit(focusedPaneId)
-        let paneCwd = activeWorkspaceURL() ?? currentTerminalDirectory()
+        // US-6: a split inherits the focused pane's live cwd, not the workspace root.
+        let paneCwd = currentTerminalDirectory()
         let initialSize = splitInsideBelowGroup
             ? estimatedTerminalSizeForFocusedSideSplit(focusedPane: focusedPane)
             : estimatedTerminalSizeForFocusedSplit(
@@ -837,6 +842,9 @@ extension MainWindowController {
         terminalTabs.filter { $0.workspaceId == workspaceId }
     }
     func currentTerminalDirectory() -> URL {
+        if let override = currentTerminalDirectoryOverrideForSmokeTest {
+            return override
+        }
         let scopedActiveTab = activeTab()
         if let activeTerminalId = activeTerminalId,
            let scopedActiveTab = scopedActiveTab,
@@ -1551,7 +1559,7 @@ extension MainWindowController {
         }
     }
     private func applyResolvedPaneStatus(
-        _ status: (cwd: URL?, branch: String?, dirty: Int, proc: String?, procActive: Bool),
+        _ status: (cwd: URL?, branch: String?, gitRoot: String?, dirty: Int, proc: String?, procActive: Bool),
         to pane: TerminalSession
     ) {
         let cwd = status.cwd ?? pane.cwd
@@ -1563,11 +1571,17 @@ extension MainWindowController {
         } else if path.hasPrefix(home + "/") {
             path = "~" + path.dropFirst(home.count)
         }
-        let signature = "\(path)|\(status.branch ?? "")|\(status.dirty)|\(status.proc ?? "")|\(status.procActive)"
+        let signature = "\(path)|\(status.branch ?? "")|\(status.gitRoot ?? "")|\(status.dirty)|\(status.proc ?? "")|\(status.procActive)"
         guard signature != pane.statusSignature else {
             return
         }
         pane.statusSignature = signature
+        // US-3/4: fold this pane's git root into its workspace's live detection and re-render the rail
+        // whenever it changes (cd into / out of a repo, or across repos).
+        if pane.gitRoot != status.gitRoot {
+            pane.gitRoot = status.gitRoot
+            updateWorkspaceGitDetection()
+        }
         pane.statusPathLabel?.stringValue = path
         pane.statusProcName = status.proc ?? ""
         pane.statusProcActive = status.procActive
@@ -1592,22 +1606,92 @@ extension MainWindowController {
     private static func resolvePaneStatus(
         pid: Int32,
         fallback: URL
-    ) -> (cwd: URL?, branch: String?, dirty: Int, proc: String?, procActive: Bool) {
+    ) -> (cwd: URL?, branch: String?, gitRoot: String?, dirty: Int, proc: String?, procActive: Bool) {
         let cwd = processCwd(pid: pid) ?? fallback
         var branch: String?
+        var gitRoot: String?
         var dirty = 0
         if let out = try? Shell.run("/usr/bin/env", ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd: cwd),
            out.status == 0 {
             let trimmed = out.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             branch = trimmed.isEmpty ? nil : trimmed
         }
-        if branch != nil,
-           let st = try? Shell.run("/usr/bin/env", ["git", "status", "--porcelain"], cwd: cwd),
-           st.status == 0 {
-            dirty = st.stdout.split(separator: "\n", omittingEmptySubsequences: true).count
+        if branch != nil {
+            // US-3/4: capture the repo root so the workspace rail can mark git detection and show the
+            // path on hover, independent of the workspace's own path.
+            if let root = try? Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-toplevel"], cwd: cwd),
+               root.status == 0 {
+                let trimmed = root.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                gitRoot = trimmed.isEmpty ? nil : trimmed
+            }
+            if let st = try? Shell.run("/usr/bin/env", ["git", "status", "--porcelain"], cwd: cwd),
+               st.status == 0 {
+                dirty = st.stdout.split(separator: "\n", omittingEmptySubsequences: true).count
+            }
         }
         let (proc, procActive) = foregroundProcess(shellPid: pid)
-        return (cwd, branch, dirty, proc, procActive)
+        return (cwd, branch, gitRoot, dirty, proc, procActive)
+    }
+    // US-3/4: re-resolve each workspace pane's git root off the main thread so the rail glyph tracks
+    // the terminal's CURRENT directory as the user cd's around. `refreshPaneStatus` only runs once at
+    // pane render (the old periodic per-pane status cadence was removed), so without this the rail
+    // would never react to a `cd` into or out of a repo. Cheap: one `git rev-parse --show-toplevel`
+    // per workspace pane (home terminals — workspaceId == nil — are skipped; they have no rail row).
+    func refreshWorkspaceGitDetection() {
+        guard !Self.statePersistenceDisabled, !workspaces.isEmpty else {
+            return
+        }
+        // Never repaint the rail out from under an in-progress inline rename — a detection-triggered
+        // rebuild mid-rename tears down the editable field. Detection catches up on the next tick.
+        guard renamingWorkspaceId == nil else {
+            return
+        }
+        let targets: [(id: Int, pid: Int32, fallback: URL)] = terminalTabs
+            .filter { $0.workspaceId != nil }
+            .flatMap { $0.panes }
+            .compactMap { pane in
+                guard let pid = ptyManager.runningRootPid(id: pane.id) else {
+                    return nil
+                }
+                return (pane.id, pid, pane.cwd)
+            }
+        // No live workspace panes: leave the last-known detection alone (transient pid-resolution
+        // failures shouldn't clear the rail — pane/tab close already recomputes detection, and a
+        // real `cd` out of a repo clears via the per-pane resolve below returning nil).
+        guard !targets.isEmpty else {
+            return
+        }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let resolved = targets.map { ($0.id, Self.resolveGitRoot(pid: $0.pid, fallback: $0.fallback)) }
+            DispatchQueue.main.async {
+                // Re-check on the main thread: a rename may have started while this resolve was in
+                // flight; don't repaint the rail out from under its editable field (see the guard above).
+                guard let self = self, self.renamingWorkspaceId == nil else {
+                    return
+                }
+                var changed = false
+                for (paneId, root) in resolved {
+                    if let pane = self.sessions.first(where: { $0.id == paneId }), pane.gitRoot != root {
+                        pane.gitRoot = root
+                        changed = true
+                    }
+                }
+                if changed {
+                    self.updateWorkspaceGitDetection()
+                }
+            }
+        }
+    }
+    // Just the repo root for a pane's live cwd (US-3/4). Deliberately lighter than resolvePaneStatus
+    // (no branch/dirty/foreground-process work) so the 2.5s rail-detection cadence stays cheap.
+    private static func resolveGitRoot(pid: Int32, fallback: URL) -> String? {
+        let cwd = processCwd(pid: pid) ?? fallback
+        guard let out = try? Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-toplevel"], cwd: cwd),
+              out.status == 0 else {
+            return nil
+        }
+        let trimmed = out.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
     private func schedulePtyDataFlush() {
         let pendingBytes = pendingPtyData.values.reduce(0) { total, chunks in

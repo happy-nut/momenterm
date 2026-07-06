@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func showFiles() {
-        focusedController()?.toggleFilesView()
+        focusedController()?.showFilesViewOnly()
     }
 
     @objc private func showHistory() {
@@ -154,12 +154,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         focusedController()?.openQuickOpen(mode: .recent)
     }
 
-    @objc private func goToDefinition() {
-        focusedController()?.goToDefinition()
+    @objc private func findUsages() {
+        focusedController()?.findUsagesUnderCursor()
     }
 
-    @objc private func jumpToSymbol() {
-        focusedController()?.jumpToSymbolUnderCursor()
+    @objc private func goToDeclaration() {
+        focusedController()?.goToDeclarationUnderCursor()
     }
 
     @objc private func navigateBack() {
@@ -287,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         reviewMenu.addItem(targetedItem("Changes", #selector(showChanges), "0", [.command]))
         reviewMenu.addItem(targetedItem("Files", #selector(showFiles), "1", [.command]))
         reviewMenu.addItem(targetedItem("History", #selector(showHistory), "9", [.command]))
-        reviewMenu.addItem(targetedItem("Toggle Raw/Rendered", #selector(toggleRawView), "R", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("Cycle File View Mode", #selector(toggleRawView), "R", [.command, .shift]))
         reviewMenu.addItem(NSMenuItem.separator())
         reviewMenu.addItem(targetedItem("Next Change", #selector(nextChange), functionKey(0xF70A), []))
         reviewMenu.addItem(targetedItem("Previous Change", #selector(previousChange), functionKey(0xF70A), [.shift]))
@@ -298,8 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         reviewMenu.addItem(targetedItem("Recent Files", #selector(recentFiles), "e", [.command]))
         reviewMenu.addItem(targetedItem("Go to Line", #selector(goToLine), "l", [.command]))
         reviewMenu.addItem(targetedItem("Copy File:Line", #selector(copyLocation), "k", [.command]))
-        reviewMenu.addItem(targetedItem("Go to Definition", #selector(goToDefinition), "b", [.command]))
-        reviewMenu.addItem(targetedItem("Jump to Symbol", #selector(jumpToSymbol), functionKey(0xF701), [.command]))
+        // Cmd+B / Cmd+↓ are owned by the window's key monitor (native panes) and the Monaco JS bridge
+        // (hybrid panes), so these carry no key equivalent — a menu equivalent would fire on the hybrid
+        // path before the web view sees the key. Shown here for discoverability; click still works.
+        reviewMenu.addItem(targetedItem("Find Usages", #selector(findUsages), ""))
+        reviewMenu.addItem(targetedItem("Go to Declaration", #selector(goToDeclaration), ""))
         reviewMenu.addItem(targetedItem("Navigate Back", #selector(navigateBack), "[", [.command]))
         reviewMenu.addItem(targetedItem("Navigate Forward", #selector(navigateForward), "]", [.command]))
         reviewMenu.addItem(targetedItem("Previous Source Tab", #selector(previousSourceTab), "[", [.command, .shift]))

@@ -520,8 +520,20 @@ enum MomentermDesign {
     enum Fonts {
         static let sidebar = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         static let sidebarSelected = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
-        static let code = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        static let diffCode = NSFont(name: "Monaco", size: 11.5) ?? NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        // The code + diff CONTENT font size is user-adjustable (Settings → 리뷰). `code` and
+        // `diffCode` resolve to the SAME size so the Files and Changes views match; the Monaco web
+        // views are sent this same value (codeFontSize) in their load payloads. `codeSmall` and the
+        // sidebar fonts are UI chrome and stay fixed.
+        static let codeFontSizeKey = "momenterm.code.fontSize"
+        static let defaultCodeFontSize: CGFloat = 12
+        static let codeFontSizeOptions: [CGFloat] = [11, 12, 13, 14, 16]
+        static var codeFontSize: CGFloat {
+            let stored = UserDefaults.standard.object(forKey: codeFontSizeKey) as? Double
+            let size = stored.map { CGFloat($0) } ?? defaultCodeFontSize
+            return min(max(size, 9), 22)
+        }
+        static var code: NSFont { NSFont(name: "Monaco", size: codeFontSize) ?? NSFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular) }
+        static var diffCode: NSFont { code }
         static let codeSmall = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         /// A single typographic token: size + weight + optional letter-spacing.

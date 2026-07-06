@@ -3,16 +3,13 @@ import AppKit
 // WorkspaceRail methods extracted from MainWindowController (refactor Phase 2 — move-only).
 extension MainWindowController {
     func workspaceShortcut() {
-        createNamedWorkspaceAtHome()
-    }
-    // US-15 goal #1: new workspaces are created at ~/ (no per-workspace fixed path), named via a
-    // dialog pre-filled with a random name. Each gets a fresh UUID id so multiple ~/ workspaces
-    // stay distinct (isolated terminals + memo/notes).
-    private func createNamedWorkspaceAtHome() {
-        // No modal dialog: create the workspace immediately with a random name, then drop an inline
-        // editable name field into the rail with focus so the user can rename it in place.
-        let workspaceId = createHomeWorkspace(named: randomWorkspaceName())
-        beginWorkspaceRename(id: workspaceId)
+        // US-1/US-2: a new workspace is created from the last-focused terminal's PWD (not ~/), so it
+        // only makes sense while the terminal is visible. If a Files/Changes/etc. overlay covers the
+        // terminal, ignore the request rather than create a workspace from a stale directory.
+        guard overlayMode == .hidden else {
+            return
+        }
+        createWorkspaceFromActiveTerminal(revealReview: false)
     }
     // Puts the rail workspace row into inline-edit mode: expands the rail, selects the row, and
     // focuses an editable name field (see configureExpandedWorkspaceButton / NativeInlineRenameField).
@@ -25,14 +22,10 @@ extension MainWindowController {
         if overlayMode != .hidden {
             hideOverlay()
         }
-        // Build the rail (and expand it if needed) with the create-field flag on, so the guard in
-        // rebuildWorkspaceButtons lets these rebuilds through and actually drops in the edit field.
-        isBuildingWorkspaceRenameField = true
         if !workspaceRailExpanded {
             setWorkspaceRailPickerVisible(true, animated: true)
         }
         rebuildWorkspaceButtons()
-        isBuildingWorkspaceRenameField = false
         focusRenamingWorkspaceField()
     }
     private func focusRenamingWorkspaceField() {
@@ -48,6 +41,8 @@ extension MainWindowController {
     }
     private func commitWorkspaceRename(id workspaceId: String, to newName: String) {
         renamingWorkspaceId = nil
+        pendingWorkspaceRenameText = nil
+        pendingWorkspaceRenameWasFocused = false
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             _ = renameWorkspace(id: workspaceId, to: trimmed)
@@ -58,6 +53,8 @@ extension MainWindowController {
     }
     private func cancelWorkspaceRename() {
         renamingWorkspaceId = nil
+        pendingWorkspaceRenameText = nil
+        pendingWorkspaceRenameWasFocused = false
         rebuildWorkspaceButtons()
         focusWorkspaceRailPicker()
     }
@@ -101,10 +98,11 @@ extension MainWindowController {
         focusWorkspaceRailPicker()
     }
     func forgetCurrentWorkspace() {
-        if workspaceRailExpanded, forgetSelectedWorkspacePickerItem() {
-            return
-        }
-        if overlayMode == .workspacePicker, forgetSelectedWorkspacePickerItem() {
+        // In the expanded rail / picker overlay the target is the highlighted row. Handle it here and
+        // return unconditionally — a cancelled confirmation must NOT fall through and then delete the
+        // active workspace instead.
+        if workspaceRailExpanded || overlayMode == .workspacePicker {
+            _ = forgetSelectedWorkspacePickerItem()
             return
         }
 
@@ -113,8 +111,26 @@ extension MainWindowController {
             showWorkspaceToast("No active workspace")
             return
         }
-
+        let name = workspaces.first(where: { $0.id == workspaceId })?.name ?? "workspace"
+        guard confirmWorkspaceDeletion(name: name) else {
+            return
+        }
         _ = forgetWorkspace(id: workspaceId, keepWorkspacePickerOpen: false)
+    }
+    // A "really delete this workspace?" confirmation for the destructive removals (Cmd+Backspace and
+    // the row ✕). Smokes set workspaceDeletionConfirmOverrideForSmokeTest to skip the modal.
+    private func confirmWorkspaceDeletion(name: String) -> Bool {
+        if let override = workspaceDeletionConfirmOverrideForSmokeTest {
+            return override
+        }
+        let alert = NSAlert()
+        alert.messageText = "‘\(name)’ 워크스페이스를 삭제할까요?"
+        alert.informativeText = "이 워크스페이스와 열려 있는 터미널 탭이 목록에서 제거됩니다. 디스크의 실제 파일과 git 저장소는 삭제되지 않습니다."
+        alert.alertStyle = .warning
+        let deleteButton = alert.addButton(withTitle: "삭제")
+        deleteButton.hasDestructiveAction = true
+        alert.addButton(withTitle: "취소")
+        return alert.runModal() == .alertFirstButtonReturn
     }
     @discardableResult
     private func forgetWorkspace(id workspaceId: String, keepWorkspacePickerOpen: Bool) -> Bool {
@@ -175,7 +191,11 @@ extension MainWindowController {
         else {
             return false
         }
-        return forgetWorkspace(id: workspaces[selectedWorkspacePickerIndex].id, keepWorkspacePickerOpen: true)
+        let workspace = workspaces[selectedWorkspacePickerIndex]
+        guard confirmWorkspaceDeletion(name: workspace.name) else {
+            return false
+        }
+        return forgetWorkspace(id: workspace.id, keepWorkspacePickerOpen: true)
     }
     func openWorkspaceFolderPicker() {
         let panel = NSOpenPanel()
@@ -309,6 +329,11 @@ extension MainWindowController {
     func workspacePath(forId id: String?) -> String? {
         workspace(forId: id).flatMap { normalizedWorkspacePath($0.path) }
     }
+    // US-5: the live-detected git root of the active workspace (nil when none of its panes is inside
+    // a repo). Used to redirect the review/diff target when the workspace path isn't itself a repo.
+    func activeWorkspaceDetectedGitRoot() -> String? {
+        workspace(forId: activeWorkspaceId)?.detectedGitRoot
+    }
     // Single source of truth for changing the active workspace. Keeps `activeWorkspaceId`
     // (identity, drives scope key + tab membership) and `activeWorkspacePath` (cwd) consistent.
     // Passing nil clears both (home).
@@ -394,16 +419,18 @@ extension MainWindowController {
         return container
     }
     func rebuildWorkspaceButtons() {
-        // Guard: a background repaint must not tear down an in-progress inline rename field.
-        // Removing the focused field from the view tree drops first responder, which fires
-        // NativeInlineRenameField's commit-on-focus-loss and collapses the edit back to a static
-        // label mid-type — the reported "press e, it enters edit then snaps back and can't be
-        // typed into" bug. renamingWorkspaceId marks an open rename; isBuildingWorkspaceRenameField
-        // is set only for the rebuild that creates the field, so creation still runs. Deferred
-        // repaints (workspace-status refresh, agent notifications) land on the next rebuild after
-        // the rename commits or cancels.
-        if renamingWorkspaceId != nil, !isBuildingWorkspaceRenameField {
-            return
+        // Preserve an in-progress inline rename across this repaint. Removing the field from the
+        // view tree fires NativeInlineRenameField.controlTextDidEndEditing, which would otherwise
+        // commit-on-focus-loss, clear renamingWorkspaceId, and collapse the row back to a static
+        // label mid-edit — the reported "press e, the field appears then snaps back and can't be
+        // typed into" bug (triggered by an async workspace-status refresh or agent notification
+        // repainting the rail right after edit mode opens). Stash the typed text, suppress that
+        // teardown commit, and re-seed (plus re-focus, if it was focused) the field below so the
+        // rename survives the rebuild instead of the rail freezing while a rename is open.
+        if renamingWorkspaceId != nil, let field = collectRenameFields(in: workspaceStack).first {
+            pendingWorkspaceRenameText = field.stringValue
+            pendingWorkspaceRenameWasFocused = field.currentEditor() != nil
+            field.suppressEndEditingCommit = true
         }
         workspaceStack.arrangedSubviews.forEach { view in
             workspaceStack.removeArrangedSubview(view)
@@ -418,7 +445,13 @@ extension MainWindowController {
             let active = workspace.id == activeWorkspaceId
             let pickerSelected = workspaceRailExpanded && index == selectedWorkspacePickerIndex
             let branch = workspaceBranchDisplayName(for: workspace)
-            let tooltip = branch.map { "\(workspace.name)\nBranch: \($0)" } ?? workspace.name
+            // US-3/4: when any pane in this workspace is inside a repo, the rail glyph switches from
+            // the plain dot to a branch mark and the hover tooltip gains the detected repo path.
+            let railSymbol = workspace.detectedGitRoot != nil ? "arrow.triangle.branch" : "circle.fill"
+            var tooltip = branch.map { "\(workspace.name)\nBranch: \($0)" } ?? workspace.name
+            if let gitRoot = workspace.detectedGitRoot {
+                tooltip += "\nGit: \((gitRoot as NSString).abbreviatingWithTildeInPath)"
+            }
             let button = NSButton(title: "", target: self, action: #selector(selectWorkspaceButton(_:)))
             // Identity: the button identifier is the workspace id (US-15), not the path, so two
             // ~/ workspaces get distinct, individually-clickable rows.
@@ -450,7 +483,7 @@ extension MainWindowController {
             button.layer?.backgroundColor = railBackground
             button.layer?.borderColor = railBorder
             button.layer?.borderWidth = railBorderWidth
-            if !workspaceRailExpanded, let circleImg = fixedRailSymbolImage(symbol: "circle.fill", label: workspace.name) {
+            if !workspaceRailExpanded, let circleImg = fixedRailSymbolImage(symbol: railSymbol, label: workspace.name) {
                 circleImg.size = NSSize(width: 8, height: 8)
                 button.image = circleImg
             } else {
@@ -459,14 +492,12 @@ extension MainWindowController {
             button.imageScaling = .scaleNone
             button.imagePosition = .imageOnly
             button.contentTintColor = workspace.color
-            // Hover tooltip advertises the row shortcuts. The expanded switcher is keyboard-driven
-            // (Enter/E/Backspace), so it spells those out; the collapsed rail just names the Cmd+P
-            // picker that opens it.
-            if workspaceRailExpanded {
-                button.toolTip = "\(tooltip)\nEnter: open · E: rename · Backspace: remove"
-            } else {
-                button.toolTip = tooltipText(label: "Select workspace: \(tooltip)", shortcut: "Cmd+P")
-            }
+            // Hover tooltip always names the Cmd+P picker; the expanded switcher additionally spells
+            // out its per-row keys (Enter/E/Cmd+Backspace) so they're discoverable on hover.
+            let selectLabel = workspaceRailExpanded
+                ? "Select workspace: \(tooltip)\nEnter: open · E: rename · Cmd+Backspace: remove"
+                : "Select workspace: \(tooltip)"
+            button.toolTip = tooltipText(label: selectLabel, shortcut: "Cmd+P")
             button.title = ""
             button.alignment = .left
             button.font = MomentermDesign.Fonts.sidebarSelected
@@ -483,6 +514,17 @@ extension MainWindowController {
                 addWorkspaceAgentAlertDot(to: button)
             }
             workspaceStack.addArrangedSubview(button)
+        }
+        // If this repaint recreated a rename field that was mid-edit, restore focus so typing
+        // continues. The stashed text was consumed as the field's seed in
+        // configureExpandedWorkspaceButton; clear it now that the field exists again.
+        if renamingWorkspaceId != nil, pendingWorkspaceRenameText != nil {
+            let shouldRefocus = pendingWorkspaceRenameWasFocused
+            pendingWorkspaceRenameText = nil
+            pendingWorkspaceRenameWasFocused = false
+            if shouldRefocus {
+                focusRenamingWorkspaceField()
+            }
         }
         refreshWorkspaceStatuses()
     }
@@ -516,6 +558,34 @@ extension MainWindowController {
         workspaces[index].listeningPorts = status.listeningPorts
         rebuildWorkspaceButtons()
     }
+    // US-3/4: recompute each workspace's live git detection from its panes' resolved git roots and
+    // repaint the rail only when something changed. A workspace "has git" when any pane under any of
+    // its tabs is inside a repo; the recorded root is that pane's `git rev-parse --show-toplevel`.
+    // Transient state (Workspace.detectedGitRoot) — re-derived at runtime, never persisted. Same-path
+    // sibling workspaces (US-15) resolve independently because tab→workspace membership is by id.
+    func updateWorkspaceGitDetection() {
+        var rootByWorkspace: [String: String] = [:]
+        for tab in terminalTabs {
+            guard let workspaceId = tab.workspaceId, rootByWorkspace[workspaceId] == nil else {
+                continue
+            }
+            for pane in tab.panes where !(pane.gitRoot ?? "").isEmpty {
+                rootByWorkspace[workspaceId] = pane.gitRoot
+                break
+            }
+        }
+        var changed = false
+        for index in workspaces.indices {
+            let detected = rootByWorkspace[workspaces[index].id]
+            if workspaces[index].detectedGitRoot != detected {
+                workspaces[index].detectedGitRoot = detected
+                changed = true
+            }
+        }
+        if changed {
+            rebuildWorkspaceButtons()
+        }
+    }
     // Compact secondary status line for the expanded rail row, e.g. "#123 open · :3000".
     // Returns nil when there is nothing beyond the branch to show.
     private func workspaceStatusSummary(for workspace: Workspace) -> String? {
@@ -531,7 +601,10 @@ extension MainWindowController {
     private func configureExpandedWorkspaceButton(_ button: NSButton, workspace: Workspace, branch: String?) {
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
-        let circleImg = fixedRailSymbolImage(symbol: "circle.fill", label: workspace.name)
+        // US-3/4: branch mark when a repo is detected under any pane, else the plain workspace dot.
+        // Same 8pt footprint either way so the glyph stays pinned as the rail expands/collapses.
+        let railSymbol = workspace.detectedGitRoot != nil ? "arrow.triangle.branch" : "circle.fill"
+        let circleImg = fixedRailSymbolImage(symbol: railSymbol, label: workspace.name)
         // Same 8pt dot as the collapsed rail. Matching the size (and the +8 leading inset below,
         // which lands the dot's center at the same x as the collapsed centered dot) keeps the
         // workspace dot visually pinned as the rail expands — it must not jump or resize.
@@ -542,9 +615,9 @@ extension MainWindowController {
         button.addSubview(icon)
 
         // Top-right ✕ button removes this specific workspace instance (US-15: by id, so same-path
-        // siblings are removed independently). Same effect as Backspace on the highlighted row; its
-        // own hover tooltip advertises the shortcut. Pinned in the corner and given its own click
-        // target so it doesn't trigger the row's select action.
+        // siblings are removed independently). Same effect as Cmd+Backspace on the highlighted row;
+        // its hover tooltip advertises the shortcut. Its own click target keeps it from triggering
+        // the row's select action.
         let closeButton = NSButton(title: "", target: self, action: #selector(closeWorkspaceButton(_:)))
         closeButton.identifier = NSUserInterfaceItemIdentifier(workspace.id)
         closeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -559,7 +632,7 @@ extension MainWindowController {
             closeButton.title = "✕"
             closeButton.font = MomentermDesign.Fonts.sidebar
         }
-        closeButton.toolTip = tooltipText(label: "Remove workspace: \(workspace.name)", shortcut: "Backspace")
+        closeButton.toolTip = tooltipText(label: "Remove workspace: \(workspace.name)", shortcut: "Cmd+Backspace")
         button.addSubview(closeButton)
 
         // While renaming this workspace, the name row is an inline editable field (Enter commits,
@@ -569,8 +642,10 @@ extension MainWindowController {
             let field = NativeInlineRenameField()
             field.translatesAutoresizingMaskIntoConstraints = false
             field.identifier = NSUserInterfaceItemIdentifier("workspace-rename-field")
+            // Seed with the in-progress text when a repaint recreated the field mid-edit (see
+            // rebuildWorkspaceButtons), otherwise the current name for a fresh rename.
             field.configureInline(
-                text: workspace.name,
+                text: pendingWorkspaceRenameText ?? workspace.name,
                 font: MomentermDesign.Fonts.sidebarSelected,
                 textColor: theme.primaryText,
                 backgroundColor: theme.panelBackground
@@ -667,6 +742,12 @@ extension MainWindowController {
     }
     func workspaceBranchName(for workspace: Workspace) -> String? {
         if let branch = service.branchName(from: URL(fileURLWithPath: workspace.path)), !branch.isEmpty {
+            return branch
+        }
+        // US-3/US-5: when the workspace path isn't itself a repo but a pane has cd'd into one, show the
+        // live-detected git dir's branch (e.g. a ~/ workspace whose terminal entered a project repo).
+        if let detected = workspace.detectedGitRoot,
+           let branch = service.branchName(from: URL(fileURLWithPath: detected)), !branch.isEmpty {
             return branch
         }
         guard let branch = workspace.branchName, !branch.isEmpty else {
@@ -842,13 +923,11 @@ extension MainWindowController {
         case 36, 76:
             openSelectedWorkspacePickerItem()
             return true
-        case 51:
-            // Backspace removes the highlighted workspace — mirrors the row's ✕ button. Safe while
-            // editing: handleShortcut returns early when renamingWorkspaceId != nil, so an inline
-            // rename keeps Backspace as a text edit and never reaches this handler.
-            _ = forgetSelectedWorkspacePickerItem()
-            return true
         default:
+            // Deletion is intentionally NOT bound to plain Backspace here: handleWorkspaceRailKey
+            // fires whenever the rail is expanded, even while the terminal is focused, so a bare
+            // Backspace must never delete a workspace by accident. Removal is Cmd+Backspace
+            // (forgetCurrentWorkspace) or the row's ✕ button.
             return false
         }
     }
@@ -939,17 +1018,66 @@ extension MainWindowController {
     func createWorkspaceFromActiveTerminal(revealReview: Bool) {
         let directory = currentTerminalDirectory()
         let duplicate = workspacePathExists(directory.path)
+        // US-7: creating another workspace at a path that already has a git-backed workspace asks
+        // (checkbox) whether to spin a linked worktree. Checked → worktree; unchecked → a same-path
+        // sibling (US-15) that shares the git dir but keeps independent memo/notes; cancel → nothing.
         if duplicate, service.gitRoot(from: directory) != nil {
-            do {
-                let linked = try service.createLinkedWorktree(from: directory)
-                openWorkspace(linked.url, revealReview: revealReview, attachActiveTab: false, announce: true)
-                showWorkspaceToast("Linked worktree: \(linked.branch)")
-            } catch {
-                showWorkspaceToast("Linked worktree failed: \(String(describing: error))")
+            switch promptDuplicateWorkspaceChoice(for: directory) {
+            case .worktree:
+                do {
+                    let linked = try service.createLinkedWorktree(from: directory)
+                    openWorkspace(linked.url, revealReview: revealReview, attachActiveTab: false, announce: true)
+                    showWorkspaceToast("Linked worktree: \(linked.branch)")
+                } catch {
+                    showWorkspaceToast("Linked worktree failed: \(String(describing: error))")
+                }
+            case .sibling:
+                createSamePathSiblingWorkspace(at: directory, revealReview: revealReview)
+            case .cancel:
+                break
             }
             return
         }
         openWorkspace(directory, revealReview: revealReview, attachActiveTab: true, announce: true)
+    }
+
+    enum DuplicateWorkspaceChoice { case worktree, sibling, cancel }
+    private func promptDuplicateWorkspaceChoice(for directory: URL) -> DuplicateWorkspaceChoice {
+        if let override = duplicateWorkspaceChoiceOverrideForSmokeTest {
+            return override
+        }
+        let alert = NSAlert()
+        alert.messageText = "이미 이 경로의 워크스페이스가 있습니다"
+        alert.informativeText = "\(directory.path)\n\n같은 경로에 또 하나의 워크스페이스를 만듭니다. git worktree를 생성하면 서로 다른 브랜치/작업 트리에서 독립적으로 작업할 수 있습니다."
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "git worktree 생성 후 진행"
+        alert.suppressionButton?.state = .off
+        alert.addButton(withTitle: "생성")
+        alert.addButton(withTitle: "취소")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return .cancel
+        }
+        return alert.suppressionButton?.state == .on ? .worktree : .sibling
+    }
+    // A fresh workspace instance at an already-registered path (US-15 sibling). Shares the filesystem
+    // path (and its git dir) with the existing workspace but gets its own id, so its terminals and
+    // workspace-scoped memo/notes are independent.
+    private func createSamePathSiblingWorkspace(at url: URL, revealReview: Bool) {
+        let standardized = url.standardizedFileURL
+        let colors = [theme.workspaceBlue, theme.workspaceGreen, theme.workspaceYellow, theme.workspacePink, theme.workspacePurple]
+        let icons = ["diamond.fill", "circle.hexagongrid.fill", "seal.fill", "bolt.fill", "square.grid.2x2.fill", "triangle.fill"]
+        let workspaceId = UUID().uuidString
+        let hash = abs(workspaceId.hashValue)
+        workspaces.append(Workspace(
+            id: workspaceId,
+            path: standardized.path,
+            name: displayName(for: standardized),
+            color: colors[hash % colors.count],
+            iconName: icons[hash % icons.count],
+            branchName: service.branchName(from: standardized)
+        ))
+        rebuildWorkspaceButtons()
+        openWorkspace(standardized, revealReview: revealReview, attachActiveTab: false, announce: true, workspaceId: workspaceId)
     }
     func workspacePathExists(_ path: String) -> Bool {
         let normalizedPath = normalizedWorkspacePath(path)
@@ -1038,43 +1166,125 @@ extension MainWindowController {
         scale.timingFunction = CAMediaTimingFunction(name: .easeOut)
         button.layer?.add(scale, forKey: "momenterm-workspace-created")
     }
+    // A compact "glass" toast: a blurred, rounded pill with a message-appropriate SF Symbol, a soft
+    // drop shadow, and a spring pop-in / fade-out. Anchored just right of the rail, bottom-left.
     func showWorkspaceToast(_ message: String) {
-        workspaceToastLabel?.removeFromSuperview()
+        workspaceToastContainer?.removeFromSuperview()
+
+        let (symbol, tint) = workspaceToastIconAndTint(for: message)
+
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
+        container.alphaValue = 0
+        container.shadow = NSShadow()
+        container.layer?.shadowColor = NSColor.black.withAlphaComponent(0.40).cgColor
+        container.layer?.shadowOpacity = 1
+        container.layer?.shadowRadius = 18
+        container.layer?.shadowOffset = CGSize(width: 0, height: -6)
+
+        let blur = NSVisualEffectView()
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        blur.material = .hudWindow
+        blur.blendingMode = .withinWindow
+        blur.state = .active
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 12
+        blur.layer?.masksToBounds = true
+        blur.layer?.borderWidth = 1
+        blur.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        container.addSubview(blur)
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13.5, weight: .semibold)
+        icon.contentTintColor = tint
+        blur.addSubview(icon)
+
         let label = NSTextField(labelWithString: message)
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        label.font = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
         label.textColor = theme.primaryText
-        label.alignment = .center
-        label.wantsLayer = true
-        label.layer?.backgroundColor = theme.panelBackground.withAlphaComponent(0.96).cgColor
-        label.layer?.borderColor = theme.accent.withAlphaComponent(0.65).cgColor
-        label.layer?.borderWidth = 1
-        label.layer?.cornerRadius = 8
-        label.alphaValue = 0
-        rootView.addSubview(label)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        blur.addSubview(label)
+
+        rootView.addSubview(container)
+        workspaceToastContainer = container
         workspaceToastLabel = label
 
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: railView.trailingAnchor, constant: 12),
-            label.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -16),
-            label.heightAnchor.constraint(equalToConstant: 30),
-            label.widthAnchor.constraint(greaterThanOrEqualToConstant: 210)
+            container.leadingAnchor.constraint(equalTo: railView.trailingAnchor, constant: 14),
+            container.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -18),
+            container.heightAnchor.constraint(equalToConstant: 38),
+            container.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
+
+            blur.topAnchor.constraint(equalTo: container.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            blur.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+
+            icon.leadingAnchor.constraint(equalTo: blur.leadingAnchor, constant: 13),
+            icon.centerYAnchor.constraint(equalTo: blur.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: blur.trailingAnchor, constant: -14),
+            label.centerYAnchor.constraint(equalTo: blur.centerYAnchor)
         ])
 
+        // Crisp rounded drop shadow needs the laid-out bounds.
+        rootView.layoutSubtreeIfNeeded()
+        container.layer?.shadowPath = CGPath(roundedRect: container.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+
+        // Spring pop-in (scale from 0.94, direction-agnostic) + fade.
+        let pop = CASpringAnimation(keyPath: "transform.scale")
+        pop.fromValue = 0.94
+        pop.toValue = 1.0
+        pop.damping = 13
+        pop.stiffness = 200
+        pop.mass = 0.8
+        pop.initialVelocity = 0
+        pop.duration = pop.settlingDuration
+        container.layer?.add(pop, forKey: "momenterm-toast-pop")
+
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.14
-            label.animator().alphaValue = 1
+            context.duration = 0.18
+            container.animator().alphaValue = 1
         } completionHandler: {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak label] in
-                guard let label = label else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak container] in
+                guard let container = container else {
+                    return
+                }
                 NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.22
-                    label.animator().alphaValue = 0
+                    context.duration = 0.28
+                    context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                    container.animator().alphaValue = 0
                 } completionHandler: {
-                    label.removeFromSuperview()
+                    container.removeFromSuperview()
                 }
             }
         }
+    }
+    private func workspaceToastIconAndTint(for message: String) -> (String, NSColor) {
+        let lower = message.lowercased()
+        if lower.contains("fail") || message.contains("실패") || message.contains("Maximum") {
+            return ("exclamationmark.triangle.fill", theme.stateAttention)
+        }
+        if lower.contains("forgot") || message.contains("삭제") || message.contains("제거") {
+            return ("trash.fill", theme.secondaryText)
+        }
+        if lower.contains("worktree") {
+            return ("arrow.triangle.branch", theme.accent)
+        }
+        if lower.contains("join") {
+            return ("arrow.right.circle.fill", theme.accent)
+        }
+        if lower.contains("creat") || message.contains("생성") {
+            return ("sparkles", theme.accent)
+        }
+        return ("checkmark.circle.fill", theme.accent)
     }
     func workspacePath(for session: TerminalSession) -> String? {
         terminalTabs.first { tab in
@@ -1241,11 +1451,6 @@ extension MainWindowController {
         image.isTemplate = true
         return image
     }
-    private func randomWorkspaceName() -> String {
-        let adjective = Self.workspaceNameAdjectives.randomElement() ?? "swift"
-        let noun = Self.workspaceNameNouns.randomElement() ?? "otter"
-        return "\(adjective)-\(noun)"
-    }
     func workspace(from value: JSONValue) -> Workspace? {
         guard let object = value.objectValue,
               let path = object["path"]?.stringValue,
@@ -1288,6 +1493,10 @@ extension MainWindowController {
         // The ✕ button identifier is the workspace id (US-15), so it removes exactly the instance it
         // sits on. Keep the expanded picker open so several workspaces can be pruned in a row.
         guard let id = sender.identifier?.rawValue else {
+            return
+        }
+        let name = workspaces.first(where: { $0.id == id })?.name ?? "workspace"
+        guard confirmWorkspaceDeletion(name: name) else {
             return
         }
         _ = forgetWorkspace(id: id, keepWorkspacePickerOpen: true)

@@ -1147,6 +1147,10 @@ final class NativeMarkdownMemoTextView: NSTextView {
 final class NativeInlineRenameField: NSTextField, NSTextFieldDelegate {
     var onCommit: ((String) -> Void)?
     var onCancel: (() -> Void)?
+    // Set by a programmatic teardown (a rail repaint recreating the row) so losing the field editor
+    // does NOT commit-on-focus-loss. Without this, an async rebuild during an open rename would
+    // commit the unchanged name and collapse the row back to a static label mid-edit.
+    var suppressEndEditingCommit = false
     private var finished = false
 
     func configureInline(text: String, font: NSFont, textColor: NSColor, backgroundColor: NSColor) {
@@ -1202,7 +1206,12 @@ final class NativeInlineRenameField: NSTextField, NSTextFieldDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
-        // Focus loss without Enter/Esc commits the current text. Idempotent via `finished`.
+        // A programmatic teardown during a rail repaint suppresses the commit so an in-progress
+        // rename survives the rebuild (the rebuild re-creates and re-focuses the field). A genuine
+        // focus loss (clicking away) still commits the current text. Idempotent via `finished`.
+        guard !suppressEndEditingCommit else {
+            return
+        }
         finish(commit: true)
     }
 }

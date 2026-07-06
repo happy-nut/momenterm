@@ -185,6 +185,45 @@ final class NativeReviewCore {
         return NativeSourceCollector(gitClient: gitClient).preview(path: normalized, root: root, changed: changed, changedLines: changedLines, vcs: vcs)
     }
 
+    // Locate a declaration of `word` via `git grep`, returning the first match's repo-relative path and
+    // 1-based line. Backs "Go to Declaration" (Cmd+↓) from the diff/file review cursor. Only bare
+    // identifiers are searched, so the value is safe to embed in the regex. Matches in files sharing
+    // `preferExtension` are tried first so a same-named symbol in another language doesn't win.
+    func findDeclaration(root requestedRoot: URL, word: String, preferExtension: String? = nil) -> (path: String, line: Int)? {
+        guard word.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil else {
+            return nil
+        }
+        guard let repo = try? gitClient.repoRoot(from: requestedRoot) else {
+            return nil
+        }
+        // Declaration keywords spanning the languages the review views highlight; the identifier must
+        // be preceded by one and followed by a non-identifier char, so call sites are excluded.
+        let keywords = "func|class|struct|enum|protocol|extension|typealias|actor|let|var|fun|def|function|const|type|interface|trait|impl"
+        let pattern = "(\(keywords))[[:space:]]+\(word)([^A-Za-z0-9_]|$)"
+        func firstHit(pathspec: String?) -> (path: String, line: Int)? {
+            var args = ["grep", "-n", "-E", "-I", "--no-color", "-e", pattern]
+            if let pathspec = pathspec {
+                args.append(contentsOf: ["--", pathspec])
+            }
+            // git grep exits non-zero (throwing here) when there is no match — treated as "not found".
+            guard let output = try? gitClient.run(root: repo, arguments: args) else {
+                return nil
+            }
+            for raw in output.split(separator: "\n", omittingEmptySubsequences: true) {
+                let parts = raw.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+                guard parts.count >= 2, let line = Int(parts[1]) else {
+                    continue
+                }
+                return (String(parts[0]), line)
+            }
+            return nil
+        }
+        if let ext = preferExtension, !ext.isEmpty, let hit = firstHit(pathspec: "*.\(ext)") {
+            return hit
+        }
+        return firstHit(pathspec: nil)
+    }
+
     func gitLog(root: URL, payload: JSONValue?) throws -> JSONValue {
         let repo: URL
         do {

@@ -5,9 +5,12 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;background:transparent;overflow:hidden}
-#editor{width:100%;height:100%;display:none}
+#root{display:flex;flex-direction:row;width:100%;height:100%}
+#editor{height:100%;flex:1 1 100%;display:none;min-width:0}
+#split{flex:0 0 1px;width:1px;background:var(--border,#3a3a3a);display:none}
+#preview{height:100%;flex:1 1 100%;display:none;min-width:0;position:relative}
 #md-view{
-  width:100%;height:100%;overflow-y:auto;padding:24px 32px;display:none;
+  width:100%;height:100%;overflow-y:auto;padding:24px 32px;
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   font-size:14px;line-height:1.7;
   color:var(--fg,#d4d4d4);background:var(--bg,#1e1e1e)
@@ -17,6 +20,10 @@ html,body{height:100%;background:transparent;overflow:hidden}
   background:var(--bg-dark,#141414)
 }
 #img-view img{max-width:100%;max-height:100%;object-fit:contain}
+/* Source-line caret: every top-level block carries a transparent left rail; the block matching
+   the current source line lights it with the accent and a faint tint. */
+.md-block{border-left:3px solid transparent;padding-left:11px;margin:0}
+.md-block.md-caret{border-left-color:var(--accent,#4da1f5);background:var(--caret-bg,rgba(77,161,245,.10))}
 #md-view h1,#md-view h2{border-bottom:1px solid var(--border,#3a3a3a);padding-bottom:.3em;margin-bottom:.6em;margin-top:1.2em}
 #md-view h1{font-size:1.8em}#md-view h2{font-size:1.4em}
 #md-view h3,#md-view h4,#md-view h5,#md-view h6{margin:.8em 0 .4em;font-weight:600}
@@ -36,23 +43,46 @@ html,body{height:100%;background:transparent;overflow:hidden}
 #md-view a:hover{text-decoration:underline}
 #md-view li.task-list-item{list-style:none;margin-left:-1.4em}
 #md-view input[type=checkbox]{margin-right:6px}
+#md-view .plain-view{margin:0;padding:0;background:none;font-family:'SF Mono',Menlo,Monaco,monospace;font-size:12px;white-space:pre;line-height:1.6}
 </style>
+<!-- Load marked eagerly, BEFORE Monaco's AMD loader ever defines `define`. marked's UMD attaches
+     to `window` only when no AMD `define` is present; if Monaco loads first (raw/side mode), marked
+     registers as an anonymous AMD module instead and `window.marked` stays undefined — which blanked
+     the rendered/side markdown preview. Loading it here guarantees the global. -->
+<script src="./marked.min.js"></script>
 </head>
 <body>
-<div id="editor"></div>
-<div id="md-view"></div>
-<div id="img-view"><img id="img-el" alt=""></div>
+<div id="root">
+  <div id="editor"></div>
+  <div id="split"></div>
+  <div id="preview">
+    <div id="md-view"></div>
+    <div id="img-view"><img id="img-el" alt=""></div>
+  </div>
+</div>
 
 <script>
 'use strict';
-var _editor=null,_markedLoaded=false,_monacoLoaded=false,_pendingLoad=null;
+var _editor=null,_markedLoaded=false,_monacoLoaded=false;
+var _pendingMonaco=null,_pendingMarked=null;
+// Current file state (last loadFile).
+var _content='',_lang='',_rawLang='',_viewMode='raw',_rendered=null,_isImage=false,_fontSize=11.5;
+// Source-line caret state for the rendered/side preview.
+var _blockLines=[],_currentLine=1,_suppressMonacoSync=false;
 
 window.addEventListener('message',function(e){
   var msg=e.data;
   if(!msg||!msg.type)return;
   if(msg.type==='loadFile')loadFile(msg);
   else if(msg.type==='setTheme')applyTheme(msg.theme);
+  else if(msg.type==='setFontSize')setFontSize(msg.fontSize);
 });
+
+function setFontSize(size){
+  size=+size; if(!size)return;
+  _fontSize=size;
+  if(_editor)_editor.updateOptions({fontSize:_fontSize});
+}
 
 function applyTheme(t){
   if(!t)return;
@@ -67,89 +97,257 @@ function applyTheme(t){
   if(window.monaco&&_editor&&t.monacoTheme)monaco.editor.setTheme(t.monacoTheme);
 }
 
-function show(id){
-  ['editor','md-view','img-view'].forEach(function(x){
-    document.getElementById(x).style.display=x===id?(id==='img-view'?'flex':'block'):'none';
-  });
+// ---- layout -------------------------------------------------------------
+
+function el(id){return document.getElementById(id);}
+
+function applyLayout(){
+  var showEditor=(_viewMode==='raw'||_viewMode==='side');
+  var showPreview=(_viewMode==='rendered'||_viewMode==='side');
+  el('editor').style.display=showEditor?'block':'none';
+  el('editor').style.flexBasis=(_viewMode==='side')?'50%':'100%';
+  el('preview').style.display=showPreview?'block':'none';
+  el('preview').style.flexBasis=(_viewMode==='side')?'50%':'100%';
+  el('split').style.display=(_viewMode==='side')?'block':'none';
+  // Inside the preview column, show the image for image-backed files, else the markdown/plain view.
+  var imgBacked=!!_rendered;
+  el('img-view').style.display=(showPreview&&imgBacked)?'flex':'none';
+  el('md-view').style.display=(showPreview&&!imgBacked)?'block':'none';
+  if(_editor&&showEditor){ try{_editor.layout();}catch(e){} }
 }
+
+// ---- loading ------------------------------------------------------------
 
 function loadFile(msg){
-  var content=msg.content||'';
-  var lang=(msg.language||'').toLowerCase();
-  var isImg=!!msg.isImage;
+  _content=msg.content||'';
+  _lang=(msg.language||'').toLowerCase();
+  _rawLang=(msg.rawLanguage||_lang||'').toLowerCase();
+  _viewMode=msg.viewMode||'raw';
+  _rendered=msg.rendered||null;
+  _isImage=!!msg.isImage;
+  if(msg.fontSize)_fontSize=+msg.fontSize;
+  if(_editor)_editor.updateOptions({fontSize:_fontSize});
   if(msg.theme)applyTheme(msg.theme);
+  _currentLine=1;
 
-  if(isImg){
-    show('img-view');
-    document.getElementById('img-el').src=content;
+  // Pure image (no raw text): just show it, ignore modes.
+  if(_isImage){
+    _rendered=_content; _viewMode='rendered';
+    el('img-el').src=_content;
+    applyLayout();
     return;
   }
-  var isMd=lang==='markdown'||lang==='md';
-  if(isMd){
-    show('md-view');
-    renderMarkdown(content);
-    return;
+
+  // Editor pane (raw source) is needed for raw and side.
+  if(_viewMode==='raw'||_viewMode==='side'){
+    ensureMonaco(function(){ setEditor(_content,_rawLang); applyLayout(); });
   }
-  show('editor');
-  renderCode(content,lang);
+  // Preview pane is needed for rendered and side.
+  if(_viewMode==='rendered'||_viewMode==='side'){
+    if(_rendered){ el('img-el').src=_rendered; applyLayout(); }
+    else if(_lang==='markdown'||_lang==='md'){ ensureMarked(function(){ renderMarkdownBlocks(_content); applyLayout(); }); }
+    else { renderPlain(_content); applyLayout(); }
+  }
+  applyLayout();
 }
 
-function renderMarkdown(content){
-  var el=document.getElementById('md-view');
-  if(_markedLoaded){el.innerHTML=marked.parse(content);return;}
-  _pendingLoad={type:'md',content:content};
+function ensureMonaco(cb){
+  if(_monacoLoaded){cb();return;}
+  _pendingMonaco=cb;
+  if(document.getElementById('__monaco_loader')){return;}
   var s=document.createElement('script');
-  s.src='./marked.min.js';
-  s.onerror=function(){el.innerHTML='<pre style="color:#f57c7c;padding:12px">Failed to load markdown renderer.</pre>';};
-  s.onload=function(){
-    _markedLoaded=true;
-    if(_pendingLoad&&_pendingLoad.type==='md'){
-      el.innerHTML=marked.parse(_pendingLoad.content);
-      _pendingLoad=null;
-    }
-  };
-  document.head.appendChild(s);
-}
-
-function renderCode(content,lang){
-  if(_monacoLoaded){updateMonaco(content,lang);return;}
-  _pendingLoad={type:'code',content:content,lang:lang};
-  var s=document.createElement('script');
+  s.id='__monaco_loader';
   s.src='./vs/loader.js';
-  s.onerror=function(){
-    var el=document.getElementById('editor');el.style.display='block';
-    el.textContent=_pendingLoad?_pendingLoad.content:'';_pendingLoad=null;
+  s.onerror=function(){ /* fall back to plain text in the editor div */
+    el('editor').textContent=_content; _monacoLoaded=false;
+    var cb2=_pendingMonaco;_pendingMonaco=null;if(cb2)cb2();
   };
   s.onload=function(){
     require.config({paths:{vs:'./vs'}});
     require(['vs/editor/editor.main'],function(){
       _monacoLoaded=true;
-      var p=_pendingLoad;
-      _pendingLoad=null;
-      if(p&&p.type==='code'){
-        _editor=monaco.editor.create(document.getElementById('editor'),{
-          value:p.content,language:mapLang(p.lang),
-          readOnly:true,theme:'vs-dark',
-          minimap:{enabled:false},scrollBeyondLastLine:false,
-          fontSize:11.5,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
-          lineNumbers:'on',automaticLayout:true,wordWrap:'off',
-          contextmenu:false,overviewRulerLanes:0,
-          scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}
-        });
-        _editor.focus();
-      }
+      var cb2=_pendingMonaco;_pendingMonaco=null;if(cb2)cb2();
     });
   };
   document.head.appendChild(s);
 }
 
-function updateMonaco(content,lang){
-  if(!_editor){renderCode(content,lang);return;}
+function ensureMarked(cb){
+  // marked is loaded eagerly in <head> (before Monaco's AMD loader), so the global is normally
+  // ready. Fall back to a lazy load with `define` temporarily hidden so its UMD still attaches to
+  // the global even if Monaco's loader already defined `define`.
+  if(typeof marked!=='undefined'){_markedLoaded=true;cb();return;}
+  if(_markedLoaded){cb();return;}
+  _pendingMarked=cb;
+  if(document.getElementById('__marked_loader')){return;}
+  var savedDefine=window.define;
+  window.define=undefined;
+  var s=document.createElement('script');
+  s.id='__marked_loader';
+  s.src='./marked.min.js';
+  s.onerror=function(){
+    window.define=savedDefine;
+    el('md-view').innerHTML='<pre style="color:#f57c7c;padding:12px">Failed to load markdown renderer.</pre>';
+    var cb2=_pendingMarked;_pendingMarked=null;if(cb2)cb2();
+  };
+  s.onload=function(){
+    window.define=savedDefine;
+    _markedLoaded=true;
+    var cb2=_pendingMarked;_pendingMarked=null;if(cb2)cb2();
+  };
+  document.head.appendChild(s);
+}
+
+// ---- editor (raw source) ------------------------------------------------
+
+function setEditor(content,lang){
+  if(!_editor){
+    _editor=monaco.editor.create(el('editor'),{
+      value:content,language:mapLang(lang),
+      readOnly:true,theme:'vs-dark',
+      minimap:{enabled:false},scrollBeyondLastLine:false,
+      fontSize:_fontSize,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
+      lineNumbers:'on',automaticLayout:true,wordWrap:'off',
+      contextmenu:false,overviewRulerLanes:0,
+      scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}
+    });
+    _editor.onDidChangeCursorPosition(function(ev){
+      if(_suppressMonacoSync||_viewMode==='raw')return;
+      _currentLine=ev.position.lineNumber;
+      highlightCurrentBlock();
+      postCursorLine();
+    });
+    _editor.focus();
+    return;
+  }
   var old=_editor.getModel();
   var m=monaco.editor.createModel(content,mapLang(lang));
   _editor.setModel(m);
   if(old)old.dispose();
 }
+
+// ---- markdown preview with source-line blocks ---------------------------
+
+function renderMarkdownBlocks(content){
+  var view=el('md-view');
+  view.innerHTML='';
+  _blockLines=[];
+  // Strip a leading YAML front-matter block (--- … ---) so it isn't rendered as body text (matching
+  // GitHub / VS Code / Obsidian). Keep its line count as an offset so the source-line caret still
+  // maps to the raw editor's line numbers, which include the front matter.
+  var lineOffset=0;
+  var fm=content.match(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+  if(fm){
+    lineOffset=(fm[0].match(/\n/g)||[]).length;
+    content=content.slice(fm[0].length);
+  }
+  var tokens;
+  try{ tokens=marked.lexer(content); }
+  catch(e){ view.innerHTML=marked.parse(content); return; }
+  var line=1+lineOffset;
+  for(var i=0;i<tokens.length;i++){
+    var tok=tokens[i];
+    var startLine=line;
+    var raw=tok.raw||'';
+    line+=(raw.match(/\n/g)||[]).length;
+    if(tok.type==='space')continue;
+    var div=document.createElement('div');
+    div.className='md-block';
+    div.setAttribute('data-line',String(startLine));
+    try{
+      var single=[tok]; single.links=tokens.links||{};
+      div.innerHTML=marked.parser(single);
+    }catch(e2){ div.textContent=raw; }
+    view.appendChild(div);
+    _blockLines.push({el:div,line:startLine});
+  }
+  highlightCurrentBlock();
+}
+
+function renderPlain(content){
+  var view=el('md-view');
+  _blockLines=[];
+  var pre=document.createElement('pre');
+  pre.className='plain-view';
+  pre.textContent=content;
+  view.innerHTML='';
+  view.appendChild(pre);
+}
+
+function currentBlockIndex(){
+  var idx=0;
+  for(var i=0;i<_blockLines.length;i++){ if(_blockLines[i].line<=_currentLine)idx=i; else break; }
+  return idx;
+}
+
+function highlightCurrentBlock(){
+  if(!_blockLines.length)return;
+  var idx=currentBlockIndex();
+  for(var i=0;i<_blockLines.length;i++){ _blockLines[i].el.classList.toggle('md-caret',i===idx); }
+  var target=_blockLines[idx].el;
+  if(target.scrollIntoViewIfNeeded)target.scrollIntoViewIfNeeded();
+  else target.scrollIntoView({block:'nearest'});
+}
+
+function movePreviewCaret(delta){
+  if(!_blockLines.length)return;
+  var idx=Math.min(Math.max(currentBlockIndex()+delta,0),_blockLines.length-1);
+  _currentLine=_blockLines[idx].line;
+  highlightCurrentBlock();
+  postCursorLine();
+  if(_viewMode==='side'&&_editor){
+    _suppressMonacoSync=true;
+    _editor.setPosition({lineNumber:_currentLine,column:1});
+    _editor.revealLineInCenterIfOutsideViewport(_currentLine);
+    _suppressMonacoSync=false;
+  }
+}
+
+function postCursorLine(){
+  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.sourceCursorLine){
+    window.webkit.messageHandlers.sourceCursorLine.postMessage({line:_currentLine});
+  }
+}
+
+function postToNative(name,payload){
+  try{
+    if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers[name]){
+      window.webkit.messageHandlers[name].postMessage(payload||{});
+    }
+  }catch(_){}
+}
+function editorWordAtCursor(){
+  if(!_editor)return '';
+  var pos=_editor.getPosition();if(!pos)return '';
+  var model=_editor.getModel();if(!model)return '';
+  var w=model.getWordAtPosition(pos);
+  return (w&&w.word)?w.word:'';
+}
+// Code-navigation shortcuts on the raw source editor (Cmd+B find usages, Cmd+↓ go to declaration).
+// Only fire when Monaco holds focus (raw/side modes); the native key monitor covers the other panes.
+document.addEventListener('keydown',function(e){
+  if(!_editor||!_editor.hasTextFocus||!_editor.hasTextFocus())return;
+  if(e.metaKey&&(e.key==='b'||e.key==='B')){
+    var wb=editorWordAtCursor();
+    if(wb)postToNative('findUsages',{word:wb});
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.metaKey&&(e.key==='ArrowDown'||e.keyCode===40)){
+    var wd=editorWordAtCursor();
+    if(wd)postToNative('goToDeclaration',{word:wd});
+    e.preventDefault();e.stopPropagation();return;
+  }
+},true);
+
+// Arrow keys drive the preview caret in rendered mode, and in side mode when Monaco isn't focused.
+window.addEventListener('keydown',function(e){
+  if(_viewMode==='raw')return;
+  if(el('md-view').style.display==='none')return;
+  if(!_blockLines.length)return;
+  if(_viewMode==='side'&&_editor&&_editor.hasTextFocus&&_editor.hasTextFocus())return;
+  if(e.key==='ArrowDown'){ movePreviewCaret(1); e.preventDefault(); }
+  else if(e.key==='ArrowUp'){ movePreviewCaret(-1); e.preventDefault(); }
+});
 
 var LANG={
   swift:'swift',js:'javascript',javascript:'javascript',jsx:'javascript',
@@ -165,6 +363,7 @@ var LANG={
   sql:'sql',rb:'ruby',ruby:'ruby',php:'php',
   r:'r',dart:'dart',lua:'lua',
   dockerfile:'dockerfile',makefile:'makefile',
+  markdown:'markdown',md:'markdown',
   txt:'plaintext',text:'plaintext',log:'plaintext',csv:'plaintext',tsv:'plaintext'
 };
 function mapLang(l){return LANG[l]||'plaintext';}

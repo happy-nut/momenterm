@@ -14,6 +14,7 @@ swiftc \
   "$ROOT/Sources/Momenterm/NativeReviewTypes.swift" \
   "$ROOT/Sources/Momenterm/UnifiedDiffParser.swift" \
   "$ROOT/Sources/Momenterm/NativeSyntaxHighlighting.swift" \
+  "$ROOT/Sources/Momenterm/NativeGitPorcelain.swift" \
   "$ROOT/Sources/Momenterm/NativeSourceCollector.swift" \
   "$ROOT/Sources/Momenterm/NativeHttpEnvironmentReader.swift" \
   "$ROOT/Sources/Momenterm/NativeReviewCore.swift" \

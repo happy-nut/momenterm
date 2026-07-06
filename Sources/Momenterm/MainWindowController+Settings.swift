@@ -3,7 +3,54 @@ import AppKit
 // Settings methods extracted from MainWindowController (refactor Phase 2 — move-only).
 extension MainWindowController {
     func openSettings() {
+        // Already open (e.g. a second Cmd+,): keep the existing underlay snapshot untouched.
+        if overlayMode == .settings {
+            return
+        }
+        // Layered settings: when a review panel (Files/Changes) is open, float Settings ON TOP of a
+        // dimmed snapshot of it and return there on close — instead of replacing it. From the terminal
+        // (no panel open) Settings opens on its own as before.
+        if (overlayMode == .files || overlayMode == .changes), !overlayView.isHidden {
+            captureSettingsUnderlay()
+            settingsReturnMode = overlayMode
+        } else {
+            settingsReturnMode = .hidden
+            settingsUnderlayImageView.isHidden = true
+        }
         showOverlay(.settings)
+    }
+    // Snapshot the currently-open review overlay into the underlay image so it stays visible (dimmed)
+    // behind the Settings modal. Frame is set in rootView coordinates so it holds the panel's docked
+    // position while the Settings modal shrinks to its centered card.
+    private func captureSettingsUnderlay() {
+        rootView.layoutSubtreeIfNeeded()
+        let bounds = overlayView.bounds
+        guard bounds.width > 1, bounds.height > 1,
+              let rep = overlayView.bitmapImageRepForCachingDisplay(in: bounds) else {
+            settingsUnderlayImageView.isHidden = true
+            return
+        }
+        overlayView.cacheDisplay(in: bounds, to: rep)
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(rep)
+        settingsUnderlayImageView.image = image
+        settingsUnderlayImageView.frame = overlayView.convert(bounds, to: rootView)
+        settingsUnderlayImageView.isHidden = false
+    }
+    // Close Settings: if it was floating over a review panel, return there; otherwise fall back to the
+    // normal overlay dismiss. Clears the snapshot either way.
+    func dismissSettingsLayer() -> Bool {
+        guard overlayMode == .settings else {
+            return false
+        }
+        settingsUnderlayImageView.isHidden = true
+        let returnMode = settingsReturnMode
+        settingsReturnMode = .hidden
+        if returnMode == .files || returnMode == .changes {
+            showOverlay(returnMode)
+            return true
+        }
+        return false
     }
     func setSettingsContentVisible(_ visible: Bool) {
         overlayDiffSplitView.isHidden = visible
@@ -115,6 +162,16 @@ extension MainWindowController {
                 settingsSection(
                     title: "리뷰",
                     rows: [
+                        settingsSegmentedRow(
+                            title: "코드 글씨 크기",
+                            detail: "Changes(diff)와 Files 뷰의 코드 글씨 크기를 통일합니다. 즉시 적용됩니다.",
+                            labels: MomentermDesign.Fonts.codeFontSizeOptions.map { "\(Int($0))" },
+                            selectedIndex: MomentermDesign.Fonts.codeFontSizeOptions.firstIndex(of: MomentermDesign.Fonts.codeFontSize)
+                                ?? MomentermDesign.Fonts.codeFontSizeOptions.firstIndex(of: MomentermDesign.Fonts.defaultCodeFontSize)
+                                ?? 1,
+                            identifier: "settings-code-fontsize",
+                            action: #selector(selectCodeFontSizeSetting(_:))
+                        ),
                         settingsToggleRow(title: "공백 무시", detail: "Git whitespace 변경을 무시한 diff로 다시 렌더링합니다.", isOn: ignoreWhitespace, action: #selector(toggleIgnoreWhitespaceSetting(_:))),
                         settingsInfoRow(title: "새로고침", value: "Every 1.5 seconds", detail: "큰 diff 로딩이 겹치지 않도록 refresh를 병합합니다.")
                     ]
@@ -307,12 +364,19 @@ extension MainWindowController {
     }
     private func settingsToggleRow(title: String, detail: String, isOn: Bool, action: Selector) -> NSView {
         let row = settingsRowBase(title: title, detail: detail)
-        let checkbox = NSButton(checkboxWithTitle: "", target: self, action: action)
-        checkbox.state = isOn ? .on : .off
-        checkbox.contentTintColor = theme.primaryText
-        checkbox.translatesAutoresizingMaskIntoConstraints = false
-        checkbox.widthAnchor.constraint(equalToConstant: 32).isActive = true
-        row.addArrangedSubview(checkbox)
+        let toggle = NativeSettingsToggle()
+        toggle.target = self
+        toggle.action = action
+        toggle.configure(
+            isOn: isOn,
+            onColor: theme.accent,
+            offColor: theme.secondaryText.withAlphaComponent(0.28),
+            knobColor: NSColor.white.withAlphaComponent(0.95)
+        )
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        toggle.widthAnchor.constraint(equalToConstant: NativeSettingsToggle.controlSize.width).isActive = true
+        toggle.heightAnchor.constraint(equalToConstant: NativeSettingsToggle.controlSize.height).isActive = true
+        row.addArrangedSubview(toggle)
         return row
     }
     private func settingsPromptTextRow(kind: String, title: String, detail: String, rows: Int) -> NSView {
@@ -405,6 +469,9 @@ extension MainWindowController {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 18
+        // Consistent inner padding so text/controls never touch the card edge, and a matched
+        // vertical inset for a calmer rhythm.
+        row.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
         row.translatesAutoresizingMaskIntoConstraints = false
         row.heightAnchor.constraint(greaterThanOrEqualToConstant: MomentermDesign.Metrics.settingsRowHeight).isActive = true
         row.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
@@ -412,52 +479,115 @@ extension MainWindowController {
         let labels = NSStackView()
         labels.orientation = .vertical
         labels.alignment = .leading
-        labels.spacing = 5
+        labels.spacing = 3
         let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.font = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
         titleLabel.textColor = theme.primaryText
         let detailLabel = NSTextField(wrappingLabelWithString: detail)
         detailLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
         detailLabel.textColor = theme.secondaryText
         detailLabel.lineBreakMode = .byWordWrapping
+        detailLabel.preferredMaxLayoutWidth = 340
         labels.addArrangedSubview(titleLabel)
         labels.addArrangedSubview(detailLabel)
         labels.translatesAutoresizingMaskIntoConstraints = false
-        labels.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        labels.widthAnchor.constraint(equalToConstant: 340).isActive = true
         row.addArrangedSubview(labels)
+
+        // A growing spacer so every trailing control (value / toggle / segmented) right-aligns to
+        // the same edge — a consistent control column instead of ragged widths.
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(spacer)
         return row
     }
     private func settingsDivider() -> NSView {
+        // Inset hairline (aligned with the row's inner padding) instead of an edge-to-edge line —
+        // the macOS System Settings look, and softer than the old panel-border color.
+        let container = NSView()
+        container.identifier = NSUserInterfaceItemIdentifier("settings-row-divider")
+        container.translatesAutoresizingMaskIntoConstraints = false
         let line = NSView()
-        line.identifier = NSUserInterfaceItemIdentifier("settings-row-divider")
         line.translatesAutoresizingMaskIntoConstraints = false
         line.wantsLayer = true
-        line.layer?.backgroundColor = theme.panelBorder.withAlphaComponent(0.55).cgColor
-        line.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
-        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        return line
+        line.layer?.backgroundColor = theme.separator.withAlphaComponent(0.7).cgColor
+        container.addSubview(line)
+        NSLayoutConstraint.activate([
+            container.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth),
+            container.heightAnchor.constraint(equalToConstant: 1),
+            line.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            line.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            line.topAnchor.constraint(equalTo: container.topAnchor),
+            line.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        return container
     }
-    private func settingsSidebarSearchField() -> NSSearchField {
+    private func settingsSidebarSearchField() -> NSView {
+        let width = MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2
+        // A themed, inset search bar instead of the stock white-bezel NSSearchField (which read as a
+        // jarring light pill on the dark sidebar). A borderless field sits in a rounded, subtly
+        // darkened container with our own magnifier glyph.
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
+        container.layer?.cornerRadius = 9
+        container.layer?.borderWidth = 1
+        container.layer?.borderColor = theme.separator.cgColor
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "검색")
+        icon.image?.isTemplate = true
+        icon.contentTintColor = theme.tertiaryText
+        icon.imageScaling = .scaleProportionallyDown
+
         let search = NSSearchField()
         search.identifier = NSUserInterfaceItemIdentifier("settings-sidebar-search")
         search.placeholderString = "검색"
-        search.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        search.font = NSFont.systemFont(ofSize: 13.5, weight: .regular)
         search.textColor = theme.primaryText
         search.focusRingType = .none
-        search.translatesAutoresizingMaskIntoConstraints = false
+        search.isBordered = false
+        search.isBezeled = false
+        search.drawsBackground = false
         search.toolTip = "설정 검색"
-        search.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2).isActive = true
-        search.heightAnchor.constraint(equalToConstant: 36).isActive = true
-        return search
+        search.translatesAutoresizingMaskIntoConstraints = false
+        if let cell = search.cell as? NSSearchFieldCell {
+            // We draw our own glyph on the left, so drop the field's built-in search/clear buttons.
+            cell.searchButtonCell = nil
+            cell.cancelButtonCell = nil
+        }
+
+        container.addSubview(icon)
+        container.addSubview(search)
+        NSLayoutConstraint.activate([
+            container.widthAnchor.constraint(equalToConstant: width),
+            container.heightAnchor.constraint(equalToConstant: 38),
+            icon.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 14),
+            icon.heightAnchor.constraint(equalToConstant: 14),
+            search.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
+            search.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            search.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+        ])
+        return container
     }
     private func settingsSidebarGroupLabel(_ title: String) -> NSView {
         let label = NSTextField(labelWithString: title)
         label.identifier = NSUserInterfaceItemIdentifier("settings-sidebar-group")
-        label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        label.textColor = theme.secondaryText
+        // A quiet, tracked eyebrow above the category list — clearer hierarchy than a plain label.
+        label.attributedStringValue = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: theme.tertiaryText,
+            .kern: 0.7
+        ])
         label.translatesAutoresizingMaskIntoConstraints = false
         label.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2).isActive = true
-        label.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        label.heightAnchor.constraint(equalToConstant: 24).isActive = true
         return label
     }
     private func settingsSidebarItem(title: String, icon: String, shortcut: String, selected: Bool, category: SettingsCategory? = nil) -> NSView {
@@ -469,37 +599,48 @@ extension MainWindowController {
         button.toolTip = tooltipText(label: title, shortcut: shortcut)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.wantsLayer = true
-        button.layer?.cornerRadius = 9
-        // Selected item: a soft accent fill only — no loud gold outline (macOS / Linear style).
-        button.layer?.backgroundColor = selected ? theme.accent.withAlphaComponent(0.16).cgColor : NSColor.clear.cgColor
+        button.layer?.cornerRadius = 8
+        // Selected item: a soft accent wash plus a left accent indicator bar and an accent-tinted
+        // icon — a cleaner, more modern read than a flat gold fill.
+        button.layer?.backgroundColor = selected ? theme.accent.withAlphaComponent(0.12).cgColor : NSColor.clear.cgColor
         button.layer?.borderWidth = 0
+
+        let accentBar = NSView()
+        accentBar.translatesAutoresizingMaskIntoConstraints = false
+        accentBar.wantsLayer = true
+        accentBar.layer?.backgroundColor = (selected ? theme.accent : NSColor.clear).cgColor
+        accentBar.layer?.cornerRadius = 1.5
 
         let imageView = NSImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
         imageView.image = NSImage(systemSymbolName: icon, accessibilityDescription: title)
             ?? NSImage(systemSymbolName: "circle", accessibilityDescription: title)
         imageView.image?.isTemplate = true
-        imageView.contentTintColor = selected ? theme.primaryText : theme.secondaryText
+        imageView.contentTintColor = selected ? theme.accent : theme.secondaryText
         imageView.imageScaling = .scaleProportionallyDown
 
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: 15, weight: selected ? .semibold : .medium)
+        titleLabel.font = NSFont.systemFont(ofSize: 14.5, weight: selected ? .semibold : .medium)
         titleLabel.textColor = selected ? theme.primaryText : theme.secondaryText
         titleLabel.lineBreakMode = .byTruncatingTail
 
         let shortcutLabel = NSTextField(labelWithString: shortcut)
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
-        shortcutLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        shortcutLabel.textColor = theme.secondaryText.withAlphaComponent(0.88)
+        shortcutLabel.font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        shortcutLabel.textColor = theme.tertiaryText
         shortcutLabel.alignment = .right
         shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        [imageView, titleLabel, shortcutLabel].forEach { button.addSubview($0) }
+        [accentBar, imageView, titleLabel, shortcutLabel].forEach { button.addSubview($0) }
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2),
             button.heightAnchor.constraint(equalToConstant: 44),
-            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 14),
+            accentBar.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 3),
+            accentBar.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            accentBar.widthAnchor.constraint(equalToConstant: 3),
+            accentBar.heightAnchor.constraint(equalToConstant: 18),
+            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 16),
             imageView.centerYAnchor.constraint(equalTo: button.centerYAnchor),
             imageView.widthAnchor.constraint(equalToConstant: 18),
             imageView.heightAnchor.constraint(equalToConstant: 18),
@@ -560,35 +701,85 @@ extension MainWindowController {
         selectedSettingsCategory = category
         populateSettingsOverlay()
     }
-    @objc private func toggleIgnoreWhitespaceSetting(_ sender: NSButton) {
-        setIgnoreWhitespace(sender.state == .on)
+    @objc private func toggleIgnoreWhitespaceSetting(_ sender: NativeSettingsToggle) {
+        setIgnoreWhitespace(sender.isOn)
         populateSettingsOverlay()
     }
-    @objc private func toggleTerminalDensitySetting(_ sender: NSButton) {
-        terminalComfortableDensity = sender.state == .on
+    @objc private func selectCodeFontSizeSetting(_ sender: NativeSettingsSegmented) {
+        let options = MomentermDesign.Fonts.codeFontSizeOptions
+        let index = min(max(sender.selectedSegment, 0), options.count - 1)
+        UserDefaults.standard.set(Double(options[index]), forKey: MomentermDesign.Fonts.codeFontSizeKey)
+        applyCodeFontSize()
+        populateSettingsOverlay()
+    }
+    // Push the current code font size to every code surface: the Monaco web views live (setFontSize
+    // keeps scroll position) and the native code panes (reset the base font + re-render the on-screen
+    // diff/file so content-baked fonts update). Files and Changes then share the one size.
+    func applyCodeFontSize() {
+        let size = Double(MomentermDesign.Fonts.codeFontSize)
+        diffHybridView.postJSON(["type": "setFontSize", "fontSize": size])
+        fileHybridView.postJSON(["type": "setFontSize", "fontSize": size])
+        let codeFont = MomentermDesign.Fonts.code
+        for view in [codePane.oldPaneCodeView, codePane.newPaneCodeView] {
+            view.font = codeFont
+            var attrs = view.typingAttributes
+            attrs[.font] = codeFont
+            view.typingAttributes = attrs
+        }
+        switch overlayMode {
+        case .changes:
+            let files = activeChangesDiffFiles
+            if diffHybridView.isHidden, files.indices.contains(selectedDiffIndex) {
+                renderDiffFile(files[selectedDiffIndex])
+            }
+        case .files:
+            if fileHybridView.isHidden,
+               let document = activeFilesDocument(),
+               document.sourceFiles.indices.contains(selectedSourceIndex) {
+                renderSourceFile(document.sourceFiles[selectedSourceIndex])
+            }
+        default:
+            break
+        }
+    }
+    @objc private func toggleTerminalDensitySetting(_ sender: NativeSettingsToggle) {
+        terminalComfortableDensity = sender.isOn
         UserDefaults.standard.set(terminalComfortableDensity, forKey: "momenterm.density.comfortable")
         rebuildTerminalPanes()
         populateSettingsOverlay()
     }
     private func settingsSegmentedRow(title: String, detail: String, labels: [String], selectedIndex: Int, identifier: String, action: Selector) -> NSView {
         let row = settingsRowBase(title: title, detail: detail)
-        let segmented = NSSegmentedControl(labels: labels, trackingMode: .selectOne, target: self, action: action)
+        let segmented = NativeSettingsSegmented()
         segmented.identifier = NSUserInterfaceItemIdentifier(identifier)
-        segmented.selectedSegment = min(max(selectedIndex, 0), labels.count - 1)
+        segmented.target = self
+        segmented.action = action
+        segmented.configure(
+            labels: labels,
+            selectedIndex: selectedIndex,
+            trackColor: theme.panelBackground,
+            borderColor: theme.separator,
+            accent: theme.accent,
+            selectedText: NSColor.white,
+            normalText: theme.secondaryText
+        )
         segmented.translatesAutoresizingMaskIntoConstraints = false
+        let perSegment: CGFloat = labels.count > 3 ? 42 : 54
+        segmented.widthAnchor.constraint(equalToConstant: CGFloat(labels.count) * perSegment + 6).isActive = true
+        segmented.heightAnchor.constraint(equalToConstant: 30).isActive = true
         row.addArrangedSubview(segmented)
         return row
     }
-    @objc private func selectTerminalCaretStyleSetting(_ sender: NSSegmentedControl) {
+    @objc private func selectTerminalCaretStyleSetting(_ sender: NativeSettingsSegmented) {
         let index = min(max(sender.selectedSegment, 0), Self.terminalCaretStyles.count - 1)
         UserDefaults.standard.set(Self.terminalCaretStyles[index], forKey: "momenterm.terminal.cursorStyle")
         populateSettingsOverlay()
     }
-    @objc private func toggleTerminalCaretBlinkSetting(_ sender: NSButton) {
-        UserDefaults.standard.set(sender.state == .on, forKey: "momenterm.terminal.cursorBlink")
+    @objc private func toggleTerminalCaretBlinkSetting(_ sender: NativeSettingsToggle) {
+        UserDefaults.standard.set(sender.isOn, forKey: "momenterm.terminal.cursorBlink")
         populateSettingsOverlay()
     }
-    @objc private func selectTerminalDimSetting(_ sender: NSSegmentedControl) {
+    @objc private func selectTerminalDimSetting(_ sender: NativeSettingsSegmented) {
         let index = min(max(sender.selectedSegment, 0), Self.terminalDimLevels.count - 1)
         terminalUnfocusedDim = Self.terminalDimLevels[index]
         UserDefaults.standard.set(Double(terminalUnfocusedDim), forKey: "momenterm.terminal.unfocusedDim")

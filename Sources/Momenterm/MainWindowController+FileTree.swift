@@ -264,6 +264,28 @@ extension MainWindowController {
         ensureSelectedSidebarRowVisible(identifier: selectedIdentifier)
         return true
     }
+    // Point the tree sidebar at `path` — expand its ancestor folders so the row survives the collapse
+    // filter, then select it — so the sidebar follows programmatic navigation (Find-in-Files open, Go to
+    // Declaration) instead of lingering on the previously opened file. Returns true when the file is in
+    // the listing. Callers repopulate/scroll the sidebar afterward.
+    @discardableResult
+    func selectFileInTree(path: String) -> Bool {
+        guard let document = activeFilesDocument(),
+              let index = document.sourceFiles.firstIndex(where: { $0.path == path }) else {
+            return false
+        }
+        let parts = path.split(separator: "/").map(String.init)
+        if parts.count > 1 {
+            var prefix: [String] = []
+            for part in parts.dropLast() {
+                prefix.append(part)
+                expandFileTreeFolder(prefix.joined(separator: "/"), focusSidebarAfterLoad: false)
+            }
+        }
+        selectedSourceIndex = index
+        fileTreeModel.selectedIdentifier = "source:\(index)"
+        return true
+    }
     func renderSourceFile(_ file: SourceFile, preferredLine: Int? = nil, focus: Bool = false) {
         if file.language == "folder" {
             // Folders never take over the code pane: it keeps showing the last opened file. Arrowing onto
@@ -288,15 +310,34 @@ extension MainWindowController {
         // A file is "renderable" when it has a form distinct from its raw source:
         // Markdown, CSV/TSV, and SVG all render (formatted text / table / image) and
         // also have raw text the user can switch to. Other images have no raw text.
-        let canToggleRaw = sourceFileSupportsRawToggle(renderedFile)
-        updateSourceRawToggle(canToggle: canToggleRaw)
-        let showRaw = canToggleRaw && sourceRawMode
-        let modeSuffix = canToggleRaw ? (showRaw ? "  |  raw" : "  |  rendered") : ""
+        let canToggle = sourceFileSupportsRawToggle(renderedFile)
+        updateSourceViewModeButtons(canToggle: canToggle)
+        let mode: SourceViewMode = canToggle ? sourceViewMode : .raw
+        let modeSuffix = canToggle ? "  |  \(mode.rawValue)" : ""
         overlaySubtitleLabel.stringValue = "\(renderedFile.path)  |  \(formatBytes(renderedFile.size))\(modeSuffix)"
-        if showRaw {
-            let rawLanguage = rawPreviewLanguage(for: renderedFile.language)
-            showHybridFilePane()
-            fileHybridView.postJSON(["type": "loadFile", "content": renderedFile.content, "language": rawLanguage, "isImage": false])
+        // Renderable files (Markdown / CSV / TSV / SVG) present in raw / side / rendered. The hybrid
+        // web view lays all three out and draws the source-line cursor; a native code-pane fallback
+        // covers environments without bundled web views (e.g. smokes).
+        if canToggle {
+            if hybridWebViewsAvailable {
+                showHybridFilePane()
+                var payload: [String: Any] = [
+                    "type": "loadFile",
+                    "content": renderedFile.content,
+                    "language": renderedFile.language,
+                    "rawLanguage": rawPreviewLanguage(for: renderedFile.language),
+                    "viewMode": mode.rawValue,
+                    "fontSize": Double(MomentermDesign.Fonts.codeFontSize),
+                    "isImage": false
+                ]
+                if !renderedFile.image.isEmpty {
+                    // SVG's rendered form is an image, not derivable from the source text.
+                    payload["rendered"] = renderedFile.image
+                }
+                fileHybridView.postJSON(payload)
+            } else {
+                renderRenderableSourceFileNatively(renderedFile, mode: mode, preferredLine: preferredLine, focus: focus)
+            }
             refreshInlineReviewCommentBoxes()
             return
         }
@@ -313,14 +354,8 @@ extension MainWindowController {
             return
         }
         if renderedFile.embedded {
-            // Markdown and CSV/TSV rendered forms go to the JS hybrid web view;
-            // raw mode for these is handled above and returns early.
-            if renderedFile.language == "markdown" || renderedFile.language == "csv" || renderedFile.language == "tsv" {
-                showHybridFilePane()
-                fileHybridView.postJSON(["type": "loadFile", "content": renderedFile.content, "language": renderedFile.language, "isImage": false])
-                refreshInlineReviewCommentBoxes()
-                return
-            }
+            // Renderable files (Markdown / CSV / TSV / SVG) returned above; this path is the plain
+            // syntax-highlighted view for ordinary embedded source.
             let rendered = NativeSyntaxHighlighter.highlight(renderedFile.content, language: renderedFile.language, theme: theme)
             codePane.setOldContent(rendered)
         } else {
@@ -333,6 +368,46 @@ extension MainWindowController {
         codePane.scrollNewToTop()
         placeCodeCursor(in: codePane.oldPaneCodeView, preferredLine: renderedCursorLine, focus: focus)
         refreshInlineReviewCommentBoxes()
+    }
+    // Native fallback for renderable files when the hybrid web view isn't available (e.g. smokes):
+    // present raw / side / rendered with the code pane(s). The native Markdown renderer is
+    // line-aligned (source line N → rendered line N), so the review cursor lands on the same line
+    // in every mode — the caret stays visible in rendered and side, as required.
+    private func renderRenderableSourceFileNatively(_ file: SourceFile, mode: SourceViewMode, preferredLine: Int?, focus: Bool) {
+        let line = preferredLine ?? file.changedLines.first ?? 1
+        let rawAttributed = NativeSyntaxHighlighter.highlight(file.content, language: rawPreviewLanguage(for: file.language), theme: theme)
+        switch mode {
+        case .raw:
+            setSingleCodePaneVisible(true)
+            codePane.setOldContent(rawAttributed)
+            codePane.setNewContent(styledText("", color: theme.primaryText))
+        case .rendered:
+            if file.language == "svg", let image = nativeImage(fromDataURL: file.image) {
+                showNativeImagePane()
+                renderImagePreview(image)
+                codePane.setOldString("")
+                codePane.setNewString("")
+                return
+            }
+            setSingleCodePaneVisible(true)
+            codePane.setOldContent(nativeRenderedAttributed(for: file))
+            codePane.setNewContent(styledText("", color: theme.primaryText))
+        case .side:
+            setSingleCodePaneVisible(false)
+            codePane.setOldContent(rawAttributed)
+            codePane.setNewContent(nativeRenderedAttributed(for: file))
+        }
+        codePane.scrollOldToTop()
+        codePane.scrollNewToTop()
+        placeCodeCursor(in: codePane.oldPaneCodeView, preferredLine: line, focus: focus)
+    }
+    // Native rendered form: Markdown → line-aligned attributed text (so review lines still map),
+    // CSV/TSV/SVG → syntax-highlighted content (the web view draws the richer table/image form).
+    private func nativeRenderedAttributed(for file: SourceFile) -> NSAttributedString {
+        if file.language == "markdown" {
+            return NativeMarkdownRenderer.render(file.content, theme: theme)
+        }
+        return NativeSyntaxHighlighter.highlight(file.content, language: file.language, theme: theme)
     }
     // A renderable file whose rendered form differs from its raw source and whose
     // raw text is available: Markdown, CSV/TSV (embedded with content), and SVG
@@ -351,14 +426,33 @@ extension MainWindowController {
             return false
         }
     }
-    func sourceRawModeForSmokeTest() -> Bool {
-        sourceRawMode
+    func sourceViewModeForSmokeTest() -> String {
+        sourceViewMode.rawValue
     }
-    func sourceRawToggleVisibleForSmokeTest() -> Bool {
-        !sourceRawToggleButton.isHidden
+    func sourceViewModeButtonsVisibleForSmokeTest() -> Bool {
+        !sourceViewModeButtonStack.isHidden
     }
-    func sourceRawToggleTitleForSmokeTest() -> String {
-        sourceRawToggleButton.title
+    func sourceViewModeButtonCountForSmokeTest() -> Int {
+        sourceViewModeButtonStack.arrangedSubviews.count
+    }
+    // The accent-tinted (active) mode button, resolved the same way the header renders it.
+    func activeSourceViewModeButtonForSmokeTest() -> String? {
+        let entries: [(NSButton, SourceViewMode)] = [
+            (sourceViewModeRawButton, .raw),
+            (sourceViewModeSideButton, .side),
+            (sourceViewModeRenderedButton, .rendered)
+        ]
+        return entries.first { $0.0.contentTintColor == theme.accent }?.1.rawValue
+    }
+    func setSourceViewModeForSmokeTest(_ mode: String) {
+        guard let parsed = SourceViewMode(rawValue: mode) else {
+            return
+        }
+        setSourceViewMode(parsed)
+    }
+    // Side mode shows the two-pane code view (new pane un-hidden) in the native fallback.
+    func fileSideBySideVisibleForSmokeTest() -> Bool {
+        !codePane.newPaneCodeView.isHiddenOrHasHiddenAncestor
     }
     private func renderHttpSourceFile(_ file: SourceFile) {
         let parsed = NativeHttpRequestParser.parse(file.content)
@@ -570,6 +664,13 @@ extension MainWindowController {
     }
     func preferredFileListingDirectory() -> URL {
         if let activeWorkspaceURL = activeWorkspaceURL() {
+            // US-3/US-5: when the workspace path isn't itself a repo but a pane has cd'd into one,
+            // open Files on the detected git dir — the project the terminal is actually working in —
+            // rather than the (often ~/) workspace path.
+            if let detected = activeWorkspaceDetectedGitRoot(),
+               service.gitRoot(from: activeWorkspaceURL) == nil {
+                return URL(fileURLWithPath: detected)
+            }
             return activeWorkspaceURL
         }
         return currentTerminalDirectory()

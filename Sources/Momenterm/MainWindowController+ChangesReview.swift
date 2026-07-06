@@ -865,29 +865,185 @@ extension MainWindowController {
         let diffLanguage = languageForPath(file.newPath.isEmpty ? file.oldPath : file.newPath)
         var oldLines: [String] = []
         var newLines: [String] = []
+        // 1-based line, in the reconstructed modified content, where each hunk begins — so the native
+        // side can place Monaco's (blinking) review cursor on the selected hunk.
+        var hunkModifiedStartLines: [Int] = []
+        // Parallel to newLines: the real file (new) line number of each reconstructed modified line, so
+        // review comments (stored by file line) map to/from Monaco's line numbers.
+        var modifiedFileLines: [Int] = []
         for hunk in file.hunks {
+            hunkModifiedStartLines.append(newLines.count + 1)
             for line in hunk.lines {
                 switch line.kind {
                 case .context:
                     oldLines.append(line.text)
                     newLines.append(line.text)
+                    modifiedFileLines.append(line.newNumber ?? (modifiedFileLines.last ?? 0) + 1)
                 case .deletion:
                     oldLines.append(line.text)
                 case .addition:
                     newLines.append(line.text)
+                    modifiedFileLines.append(line.newNumber ?? (modifiedFileLines.last ?? 0) + 1)
                 case .meta:
                     break
                 }
             }
         }
-        diffHybridView.postJSON([
-            "type": "loadDiff",
-            "original": oldLines.joined(separator: "\n"),
-            "modified": newLines.joined(separator: "\n"),
-            "language": diffLanguage
-        ])
+        hybridModifiedFileLines = modifiedFileLines
+        hybridReviewFilePath = selectedFilePath()
+        // Reload Monaco only when the file's content actually changed (a different file, or a live
+        // reload). Plain hunk navigation keeps the same content, so we skip the model recreation and
+        // just move the cursor — otherwise every F7 would flash the whole diff and reset the caret.
+        let originalContent = oldLines.joined(separator: "\n")
+        let modifiedContent = newLines.joined(separator: "\n")
+        let signature = "\(file.oldPath)|\(file.newPath)|\(originalContent.hashValue)|\(modifiedContent.hashValue)"
+        if lastHybridDiffSignature != signature {
+            lastHybridDiffSignature = signature
+            diffHybridView.postJSON([
+                "type": "loadDiff",
+                "original": originalContent,
+                "modified": modifiedContent,
+                "language": diffLanguage,
+                "fontSize": Double(MomentermDesign.Fonts.codeFontSize),
+                // IntelliJ "modified" (changed on both sides) blue, matching the native diff pane so the
+                // hybrid diff reclassifies Monaco's add-green/delete-red the same way.
+                "modifiedLineBackground": theme.modifiedBackground.hexString(fallback: "#2B3A52"),
+                "modifiedTokenBackground": theme.modifiedText.hexString(fallback: "#6897BB")
+            ])
+        }
         showHybridDiffPane()
+        // Place Monaco's review cursor on the selected hunk (it blinks + moves with arrows natively),
+        // then, when F7 has paused at the file's last hunk, show the fading "one more F7" hint.
+        let cursorLine = hunkModifiedStartLines.indices.contains(selectedDiffHunkIndex)
+            ? hunkModifiedStartLines[selectedDiffHunkIndex]
+            : max(1, newLines.count)
+        diffHybridView.postJSON(["type": "setReviewCursor", "line": cursorLine])
+        if awaitingNextFileAfterLastHunk {
+            diffHybridView.postJSON([
+                "type": "showLastHunkHint",
+                "text": "이 파일의 마지막 변경입니다 · F7 한 번 더 → 다음 파일"
+            ])
+        }
+        sendHybridReviewComments()
         refreshInlineReviewCommentBoxes()
+    }
+
+    // MARK: - Hybrid (Monaco) review comments (Shift+? / Shift+> · caret selection · delete)
+
+    // Send the current file's comments to Monaco (mapped to its modified-editor line numbers), with the
+    // caret-selected one flagged. Monaco renders them as read-only view zones below each line.
+    func sendHybridReviewComments() {
+        guard hybridWebViewsAvailable, overlayMode == .changes, let path = hybridReviewFilePath else {
+            return
+        }
+        var payload: [[String: Any]] = []
+        for (index, note) in reviewNotes.enumerated() where note.path == path {
+            guard let monacoLine = hybridMonacoLine(forFileLine: note.line ?? 1) else {
+                continue
+            }
+            payload.append([
+                "id": index,
+                "line": monacoLine,
+                "kind": note.kind,
+                "text": note.text,
+                "selected": selectedReviewNoteIndex == index
+            ])
+        }
+        // Ship the palette so the Monaco view-zone box mirrors the native NativeInlineReviewCommentBox
+        // (radius 6, panelBackground fill, panelBorder / accent selection, kind-colored title).
+        diffHybridView.postJSON([
+            "type": "setComments",
+            "comments": payload,
+            "theme": [
+                "boxBackground": theme.panelBackground.hexString(fallback: "#262628"),
+                "boxBorder": theme.panelBorder.hexString(fallback: "#3A3A3A"),
+                "selectedBorder": theme.accent.hexString(fallback: "#4A9D5B"),
+                "questionAccent": theme.secondaryAccent.hexString(fallback: "#C8A24A"),
+                "changeAccent": theme.accent.hexString(fallback: "#4A9D5B"),
+                "bodyText": theme.primaryText.hexString(fallback: "#E6E6E6")
+            ]
+        ])
+    }
+    private func hybridFileLine(forMonacoLine monacoLine: Int) -> Int? {
+        let idx = monacoLine - 1
+        guard hybridModifiedFileLines.indices.contains(idx) else {
+            return nil
+        }
+        return hybridModifiedFileLines[idx]
+    }
+    private func hybridMonacoLine(forFileLine fileLine: Int) -> Int? {
+        hybridModifiedFileLines.firstIndex(of: fileLine).map { $0 + 1 }
+    }
+    // Shift+? / Shift+> in the Monaco diff → add a question/change comment at the caret's file line.
+    // Text is entered via a small native prompt so Monaco stays a read-only display surface.
+    func addHybridReviewComment(kind: String, monacoLine: Int) {
+        guard let path = hybridReviewFilePath, !path.isEmpty,
+              let fileLine = hybridFileLine(forMonacoLine: monacoLine) else {
+            return
+        }
+        guard let text = promptReviewCommentText(kind: kind), !text.isEmpty else {
+            diffHybridView.postJSON(["type": "focusReview"])
+            return
+        }
+        reviewNotes.append(ReviewNote(kind: kind, path: path, line: fileLine, text: text))
+        selectedReviewNoteIndex = reviewNotes.count - 1
+        sendHybridReviewComments()
+        populateMergedPromptSidePanelIfVisible()
+        diffHybridView.postJSON(["type": "focusReview"])
+    }
+    // Caret moved → select the comment (if any) on the caret's file line so Backspace can target it.
+    func selectHybridReviewCommentAtCursor(monacoLine: Int) {
+        hybridReviewCursorLine = monacoLine
+        guard let path = hybridReviewFilePath, let fileLine = hybridFileLine(forMonacoLine: monacoLine) else {
+            return
+        }
+        let match = reviewNotes.firstIndex { $0.path == path && ($0.line ?? 1) == fileLine }
+        guard match != selectedReviewNoteIndex else {
+            return
+        }
+        selectedReviewNoteIndex = match
+        sendHybridReviewComments()
+    }
+    // Backspace on a caret-selected comment → confirm once, then remove.
+    func deleteHybridReviewCommentAtCursor(monacoLine: Int) {
+        guard let path = hybridReviewFilePath, let fileLine = hybridFileLine(forMonacoLine: monacoLine),
+              let index = reviewNotes.firstIndex(where: { $0.path == path && ($0.line ?? 1) == fileLine }) else {
+            return
+        }
+        guard confirmReviewCommentDeletion() else {
+            diffHybridView.postJSON(["type": "focusReview"])
+            return
+        }
+        reviewNotes.remove(at: index)
+        selectedReviewNoteIndex = nil
+        sendHybridReviewComments()
+        populateMergedPromptSidePanelIfVisible()
+        diffHybridView.postJSON(["type": "focusReview"])
+    }
+    private func promptReviewCommentText(kind: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = kind == "question" ? "질문 코멘트" : "수정 코멘트"
+        alert.informativeText = "이 변경에 남길 코멘트를 입력하세요."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.placeholderString = kind == "question" ? "무엇이 궁금한가요?" : "무엇을 바꿔야 하나요?"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "추가")
+        alert.addButton(withTitle: "취소")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return nil
+        }
+        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private func confirmReviewCommentDeletion() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "코멘트를 삭제할까요?"
+        alert.informativeText = "선택한 리뷰 코멘트를 제거합니다."
+        alert.alertStyle = .warning
+        let delete = alert.addButton(withTitle: "삭제")
+        delete.hasDestructiveAction = true
+        alert.addButton(withTitle: "취소")
+        return alert.runModal() == .alertFirstButtonReturn
     }
     private func configureDiffEditorChrome(for file: DiffFile) {
         configureDiffEditorChromeVisibility(true)
@@ -920,7 +1076,9 @@ extension MainWindowController {
         placeCodeCursor(in: codePane.oldPaneCodeView, location: location, focus: false)
         let newLine = hunk?.lines.first(where: { $0.newNumber != nil })?.newNumber ?? selectedLineNumber()
         let newLocation = renderedCodeLineLocation(in: codePane.newPaneString, preferredLine: newLine)
-        placeCodeCursor(in: codePane.newPaneCodeView, location: newLocation, focus: overlayMode == .changes)
+        // With Monaco showing the diff, the native pane is hidden and Monaco holds the review cursor —
+        // don't let the hidden native view steal keyboard focus from it.
+        placeCodeCursor(in: codePane.newPaneCodeView, location: newLocation, focus: overlayMode == .changes && !hybridWebViewsAvailable)
     }
     // The language used to syntax-highlight a file's RAW source. SVG is XML; the
     // rendered languages keep their own highlighting; everything else is passed
@@ -1024,10 +1182,13 @@ extension MainWindowController {
         countsStack.toolTip = diffSidebarStatsText(additions: row.additions, deletions: row.deletions).string
         countsStack.addArrangedSubview(additionsLabel)
         countsStack.addArrangedSubview(deletionsLabel)
+        // Stats are secondary to the file name: kept just wide enough for a 4-digit ±count so the name
+        // gets the room it needs (the row truncates the name in the middle, and the full path is in the
+        // tooltip). Fixed widths keep the two labels from shifting as counts change across refreshes.
         NSLayoutConstraint.activate([
-            additionsLabel.widthAnchor.constraint(equalToConstant: 53),
-            deletionsLabel.widthAnchor.constraint(equalToConstant: 43),
-            countsStack.widthAnchor.constraint(equalToConstant: 99)
+            additionsLabel.widthAnchor.constraint(equalToConstant: 40),
+            deletionsLabel.widthAnchor.constraint(equalToConstant: 36),
+            countsStack.widthAnchor.constraint(equalToConstant: 79)
         ])
 
         // The diff sidebar is the shared file row as a FLAT list (depth 0, changed files only, no

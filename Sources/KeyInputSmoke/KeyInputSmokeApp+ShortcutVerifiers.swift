@@ -97,11 +97,35 @@ extension KeyInputSmokeApp {
             fail("file tree sidebar spacing, icon size, or indentation was too loose for the compact Files view")
             return
         }
+        // Renderable files (Markdown / CSV / SVG) open in RAW by default and expose three view-mode
+        // icons (raw / side / rendered). Raw shows the source markers; rendered strips them. (Smokes
+        // run without bundled web views, so this exercises the native code-pane fallback.)
         guard controller.previewSourceFileForSmokeTest("docs/note.md"),
-              controller.markdownPreviewIsRenderedForSmokeTest() else {
-            fail("markdown file preview did not render native Markdown; text=\(controller.reviewOverlayTextForSmokeTest())")
+              controller.sourceViewModeButtonsVisibleForSmokeTest(),
+              controller.sourceViewModeButtonCountForSmokeTest() == 3,
+              controller.sourceViewModeForSmokeTest() == "raw",
+              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title"),
+              controller.reviewOverlayTextForSmokeTest().contains("**bold**") else {
+            fail("markdown preview did not open in raw with three view-mode buttons; mode=\(controller.sourceViewModeForSmokeTest()) buttons=\(controller.sourceViewModeButtonCountForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
             return
         }
+        controller.setSourceViewModeForSmokeTest("rendered")
+        guard controller.sourceViewModeForSmokeTest() == "rendered",
+              controller.activeSourceViewModeButtonForSmokeTest() == "rendered",
+              controller.reviewOverlayTextForSmokeTest().contains("Rendered Title"),
+              !controller.reviewOverlayTextForSmokeTest().contains("**bold**") else {
+            fail("markdown rendered mode did not strip source markers; active=\(String(describing: controller.activeSourceViewModeButtonForSmokeTest())) text=\(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
+        controller.setSourceViewModeForSmokeTest("side")
+        guard controller.sourceViewModeForSmokeTest() == "side",
+              controller.fileSideBySideVisibleForSmokeTest(),
+              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title") else {
+            fail("markdown side mode did not show the two-pane source+preview; side=\(controller.fileSideBySideVisibleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
+        controller.setSourceViewModeForSmokeTest("raw")
+
         guard controller.expandFileTreeFolderForSmokeTest("assets"),
               controller.previewSourceFileForSmokeTest("assets/pixel.png"),
               controller.imagePreviewIsVisibleForSmokeTest() else {
@@ -109,58 +133,39 @@ extension KeyInputSmokeApp {
             return
         }
         guard controller.previewSourceFileForSmokeTest("docs/table.csv"),
-              controller.csvPreviewIsRenderedForSmokeTest() else {
-            fail("CSV file preview did not render a native table preview; text=\(controller.reviewOverlayTextForSmokeTest())")
+              controller.sourceViewModeButtonsVisibleForSmokeTest(),
+              controller.sourceViewModeForSmokeTest() == "raw",
+              controller.reviewOverlayTextForSmokeTest().contains("name,count") else {
+            fail("CSV preview did not open in raw with its source; mode=\(controller.sourceViewModeForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
             return
         }
+        // SVG opens raw (XML source, not the image). Rendered switches to the native image view.
         guard controller.previewSourceFileForSmokeTest("assets/vector.svg"),
+              controller.sourceViewModeForSmokeTest() == "raw",
+              !controller.imagePreviewIsVisibleForSmokeTest() else {
+            fail("SVG preview did not open in raw (XML source); image=\(controller.imagePreviewIsVisibleForSmokeTest()) mode=\(controller.sourceViewModeForSmokeTest())")
+            return
+        }
+        controller.setSourceViewModeForSmokeTest("rendered")
+        guard controller.sourceViewModeForSmokeTest() == "rendered",
               controller.imagePreviewIsVisibleForSmokeTest() else {
-            fail("SVG file preview did not render a native image view")
+            fail("SVG rendered mode did not show the native image view; image=\(controller.imagePreviewIsVisibleForSmokeTest())")
             return
         }
-        // US-14: rendered files (SVG here) expose a raw/rendered toggle (icon-only button).
-        // In rendered mode the image pane is visible and sourceRawMode is false.
-        // Toggling switches to WKWebView (Monaco shows SVG XML source); toggling back restores the image.
-        guard controller.sourceRawToggleVisibleForSmokeTest(),
-              !controller.sourceRawModeForSmokeTest() else {
-            fail("SVG rendered preview did not expose a Raw toggle; visible=\(controller.sourceRawToggleVisibleForSmokeTest()) rawMode=\(controller.sourceRawModeForSmokeTest())")
+        // ⌥1 / ⌥3 mirror the raw / rendered buttons (physical keyCodes 18 / 20, dodging ¡™£).
+        sendShortcut("1", keyCode: 18, modifiers: [.option])
+        guard controller.sourceViewModeForSmokeTest() == "raw",
+              !controller.imagePreviewIsVisibleForSmokeTest() else {
+            fail("⌥1 did not switch the file view to raw; mode=\(controller.sourceViewModeForSmokeTest())")
             return
         }
-        controller.toggleSourceRawMode()
-        guard controller.sourceRawModeForSmokeTest(),
-              !controller.imagePreviewIsVisibleForSmokeTest(),
-              controller.markdownPreviewIsRenderedForSmokeTest() else {
-            fail("SVG raw toggle did not switch to WKWebView source view; rawMode=\(controller.sourceRawModeForSmokeTest())")
-            return
-        }
-        controller.toggleSourceRawMode()
-        guard !controller.sourceRawModeForSmokeTest(),
+        sendShortcut("3", keyCode: 20, modifiers: [.option])
+        guard controller.sourceViewModeForSmokeTest() == "rendered",
               controller.imagePreviewIsVisibleForSmokeTest() else {
-            fail("SVG raw toggle did not restore the rendered image view; rawMode=\(controller.sourceRawModeForSmokeTest())")
+            fail("⌥3 did not switch the file view to rendered; mode=\(controller.sourceViewModeForSmokeTest())")
             return
         }
-        // US-14: Markdown raw toggle shows the unrendered source (heading marker and
-        // bold/inline-code markers become visible again).
-        guard controller.previewSourceFileForSmokeTest("docs/note.md"),
-              controller.markdownPreviewIsRenderedForSmokeTest(),
-              controller.sourceRawToggleVisibleForSmokeTest() else {
-            fail("Markdown preview did not expose a raw toggle before switching to raw; visible=\(controller.sourceRawToggleVisibleForSmokeTest())")
-            return
-        }
-        controller.toggleSourceRawMode()
-        // Markdown raw/rendered toggle: raw mode activates and the hybrid panel stays visible
-        // (raw source is now sent to Monaco via WKWebView, so codePane text is not used).
-        guard controller.sourceRawModeForSmokeTest(),
-              controller.markdownPreviewIsRenderedForSmokeTest() else {
-            fail("Markdown raw toggle did not activate raw mode; rawMode=\(controller.sourceRawModeForSmokeTest())")
-            return
-        }
-        controller.toggleSourceRawMode()
-        guard !controller.sourceRawModeForSmokeTest(),
-              controller.markdownPreviewIsRenderedForSmokeTest() else {
-            fail("Markdown raw toggle did not restore rendered mode")
-            return
-        }
+        controller.setSourceViewModeForSmokeTest("raw")
         guard !FileManager.default.fileExists(atPath: repoIcon.path)
                 || (controller.previewSourceFileForSmokeTest("assets/icon.icns") && controller.imagePreviewIsVisibleForSmokeTest()) else {
             fail("ICNS file preview did not render a native image view")
@@ -269,13 +274,20 @@ extension KeyInputSmokeApp {
         }
 
         controller.resetWorkspaceSelectionForSmokeTest()
+        // US-2: New Workspace (Cmd+N) is ignored while an overlay covers the terminal, so return to the
+        // terminal first. US-1: it then adopts the focused terminal's pwd — pin it deterministically.
+        controller.hideOverlayForSmokeTest()
+        let shortcutSource = makeTempDirectory(name: "momenterm-cmd-n-source")
+        let shortcutSourcePath = shortcutSource.standardizedFileURL.path
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(shortcutSource)
         let shortcutWorkspaceCount = controller.workspaceCountForSmokeTest()
         sendShortcut("n", keyCode: 45, modifiers: [.command])
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
         guard let workspacePath = controller.activeWorkspacePathForSmokeTest(),
+              workspacePath == shortcutSourcePath,
               controller.activeTerminalWorkspacePathForSmokeTest() == workspacePath,
               controller.workspaceCountForSmokeTest() == shortcutWorkspaceCount + 1 else {
-            fail("Cmd+N did not create and attach the current terminal workspace")
+            fail("Cmd+N did not create and attach a workspace at the focused terminal pwd (US-1); active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") expected=\(shortcutSourcePath) tabWS=\(controller.activeTerminalWorkspacePathForSmokeTest() ?? "nil") count=\(controller.workspaceCountForSmokeTest())")
             return
         }
         guard controller.workspaceFeedbackIsVisibleForSmokeTest() else {
@@ -284,11 +296,13 @@ extension KeyInputSmokeApp {
         }
 
         controller.splitTerminalPane()
+        // US-6: the split inherits the focused terminal cwd (here pinned to the workspace path).
         guard controller.activeTerminalCwdForSmokeTest() == workspacePath,
               controller.activeTerminalWorkspacePathForSmokeTest() == workspacePath else {
-            fail("new terminal pane inside workspace did not start at workspace path")
+            fail("new terminal pane inside workspace did not inherit the focused terminal cwd; cwd=\(controller.activeTerminalCwdForSmokeTest() ?? "nil") expected=\(workspacePath)")
             return
         }
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(nil)
         let firstWorkspaceTabCount = controller.workspaceTerminalTabCountForSmokeTest(workspacePath)
         guard firstWorkspaceTabCount == controller.visibleTerminalTabCountForSmokeTest() else {
             fail("workspace terminal pane groups are not scoped to active workspace before switching: visible=\(controller.visibleTerminalTabCountForSmokeTest()) workspace=\(firstWorkspaceTabCount)")
@@ -611,24 +625,36 @@ extension KeyInputSmokeApp {
             return
         }
         guard controller.changesDiffUsesReadableMonacoAndSingleScrollerForSmokeTest() else {
-            fail("Changes diff view did not use slightly smaller Monaco diff text with one right-side vertical scrollbar")
+            fail("Changes diff view did not use readable Monaco diff text with one right-side vertical scrollbar")
             return
         }
         guard controller.changesDiffOmitsInlineChangeMarkersForSmokeTest() else {
             fail("Changes diff view still rendered status badges or inline +/- change markers")
             return
         }
+        // The diagnostics above left focus in the diff code pane. Cmd+0 with the code cursor focused
+        // returns focus to the change list (like the first Esc), not a toggle-close — the panel stays
+        // open. Only a subsequent Cmd+0, with the change list focused, toggles it closed.
         sendShortcut("0", keyCode: 29, modifiers: [.command])
-        guard waitUntil("Cmd+0 close Changes", timeout: 2, condition: {
+        guard waitUntil("Cmd+0 from diff returns to change list", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Changes"
+                && !controller.overlayIsHiddenForSmokeTest()
+                && controller.changesSidebarIsFirstResponderForSmokeTest()
+        }) else {
+            fail("Cmd+0 with the diff code cursor focused did not return focus to the change list; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) sidebar=\(controller.changesSidebarIsFirstResponderForSmokeTest())")
+            return
+        }
+        sendShortcut("0", keyCode: 29, modifiers: [.command])
+        guard waitUntil("Cmd+0 from change list closes Changes", timeout: 2, condition: {
             controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
         }) else {
-            fail("Second Cmd+0 did not toggle the Changes overlay closed; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
+            fail("Cmd+0 from the change list did not toggle the Changes overlay closed; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
             return
         }
         sendShortcut("0", keyCode: 29, modifiers: [.command])
         guard controller.overlayTitleForSmokeTest() == "Changes",
               controller.changesSidebarIsFirstResponderForSmokeTest() else {
-            fail("Third Cmd+0 did not reopen Changes overlay with focus in the change list; title=\(controller.overlayTitleForSmokeTest())")
+            fail("Cmd+0 did not reopen Changes overlay with focus in the change list; title=\(controller.overlayTitleForSmokeTest())")
             return
         }
         // Reported bug: while the change list holds focus, Down/Up must move the file selection and
@@ -660,6 +686,23 @@ extension KeyInputSmokeApp {
         }
         guard controller.reviewCodePanesShowCursorForSmokeTest() else {
             fail("Diff and file views did not keep a visible code cursor for review comments")
+            return
+        }
+
+        // Cmd+0 from the diff code cursor returns focus to the change list (like the first Esc), not
+        // a toggle-close. Re-enter the code cursor afterwards for the two-stage Esc checks below.
+        sendShortcut("0", keyCode: 29, modifiers: [.command])
+        guard waitUntil("Cmd+0 from diff focuses change list", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Changes"
+                && controller.changesSidebarIsFirstResponderForSmokeTest()
+                && !controller.changesDiffCodePaneHasVisibleCursorForSmokeTest()
+        }) else {
+            fail("Cmd+0 from the diff code cursor did not return focus to the change list; title=\(controller.overlayTitleForSmokeTest()) sidebar=\(controller.changesSidebarIsFirstResponderForSmokeTest()) cursor=\(controller.changesDiffCodePaneHasVisibleCursorForSmokeTest())")
+            return
+        }
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard controller.changesDiffCodePaneHasVisibleCursorForSmokeTest() else {
+            fail("re-entering the diff after Cmd+0 focus return did not restore the code cursor")
             return
         }
 
@@ -699,27 +742,35 @@ extension KeyInputSmokeApp {
             return
         }
         let fileListingLoadsAfterFirstCmd1 = controller.fileListingLoadCountForSmokeTest()
+        // Cmd+1 is open-only, NOT a toggle: pressing it again while Files is already open is a no-op
+        // — the panel stays open, no new listing load, and the sidebar keeps focus. Files is closed
+        // with Esc (below), never by re-pressing Cmd+1.
         sendShortcut("1", keyCode: 18, modifiers: [.command])
-        guard controller.fileListingLoadCountForSmokeTest() == fileListingLoadsAfterFirstCmd1 else {
-            fail("repeated Cmd+1 started another file listing load; before=\(fileListingLoadsBeforeCmd1) first=\(fileListingLoadsAfterFirstCmd1) second=\(controller.fileListingLoadCountForSmokeTest())")
+        guard controller.overlayTitleForSmokeTest() == "Files",
+              !controller.overlayIsHiddenForSmokeTest(),
+              controller.fileListingLoadCountForSmokeTest() == fileListingLoadsAfterFirstCmd1 else {
+            fail("repeated Cmd+1 was not a no-op (it must not toggle closed or reload); title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) loads=\(controller.fileListingLoadCountForSmokeTest()) first=\(fileListingLoadsAfterFirstCmd1)")
             return
         }
-        guard waitUntil("Cmd+1 close Files", timeout: 2, condition: {
+        // From the sidebar, Esc closes the Files panel.
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("Esc closes Files", timeout: 2, condition: {
             controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
         }) else {
-            fail("Second Cmd+1 did not toggle the Files overlay closed; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
+            fail("Esc from the Files sidebar did not close the panel; hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
             return
         }
+        // Cmd+1 reopens the cached overlay (no new load) and focuses the sidebar.
         sendShortcut("1", keyCode: 18, modifiers: [.command])
         guard controller.overlayTitleForSmokeTest() == "Files",
               controller.fileListingLoadCountForSmokeTest() == fileListingLoadsAfterFirstCmd1 else {
-            fail("Third Cmd+1 did not reopen cached Files overlay without another load; title=\(controller.overlayTitleForSmokeTest()) loads=\(controller.fileListingLoadCountForSmokeTest()) first=\(fileListingLoadsAfterFirstCmd1)")
+            fail("Cmd+1 did not reopen cached Files overlay without another load; title=\(controller.overlayTitleForSmokeTest()) loads=\(controller.fileListingLoadCountForSmokeTest()) first=\(fileListingLoadsAfterFirstCmd1)")
             return
         }
-        guard waitUntil("Third Cmd+1 sidebar focus", timeout: 2, condition: {
+        guard waitUntil("reopen Files sidebar focus", timeout: 2, condition: {
             controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
         }) else {
-            fail("Third Cmd+1 did not focus the file tree sidebar after reopening Files; firstResponder=\(controller.firstResponderDiagnosticsForSmokeTest())")
+            fail("Cmd+1 did not focus the file tree sidebar after reopening Files; firstResponder=\(controller.firstResponderDiagnosticsForSmokeTest())")
             return
         }
 
@@ -767,11 +818,16 @@ extension KeyInputSmokeApp {
         }
         controller.setHttpClientTransportForSmokeTest(nil)
         let fileListingLoadsAfterHTTP = controller.fileListingLoadCountForSmokeTest()
-        sendShortcut("1", keyCode: 18, modifiers: [.command])
-        guard waitUntil("Cmd+1 close Files after HTTP", timeout: 2, condition: {
+        // Cmd+1 is open-only, so close via Esc. Two-stage: from the code cursor the first Esc returns
+        // to the sidebar and a second closes; two presses cover either starting focus.
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        if !controller.overlayIsHiddenForSmokeTest() {
+            sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        }
+        guard waitUntil("Esc closes Files after HTTP", timeout: 2, condition: {
             controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
         }) else {
-            fail("Cmd+1 after running an HTTP request did not toggle the Files overlay closed")
+            fail("Esc after running an HTTP request did not close the Files overlay; hidden=\(controller.overlayIsHiddenForSmokeTest())")
             return
         }
         sendShortcut("1", keyCode: 18, modifiers: [.command])
@@ -868,16 +924,31 @@ extension KeyInputSmokeApp {
             fail("re-entering the file preview after two-stage Esc did not focus the file view code pane")
             return
         }
+        // Cmd+1 from the file view code pane returns focus to the file tree sidebar (open-only, and
+        // never a toggle-close — the panel stays open).
         sendShortcut("1", keyCode: 18, modifiers: [.command])
-        guard waitUntil("Cmd+1 close Files from code pane", timeout: 2, condition: {
+        guard waitUntil("Cmd+1 from code pane focuses sidebar", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Files"
+                && !controller.overlayIsHiddenForSmokeTest()
+                && controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
+        }) else {
+            fail("Cmd+1 from the file view code pane did not return focus to the file tree sidebar; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) sidebar=\(controller.fileOverlaySidebarIsFirstResponderForSmokeTest())")
+            return
+        }
+        // Close with Esc from the sidebar.
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        if !controller.overlayIsHiddenForSmokeTest() {
+            sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        }
+        guard waitUntil("Esc closes Files from code pane", timeout: 2, condition: {
             controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
         }) else {
-            fail("Cmd+1 from file view did not toggle the Files overlay closed")
+            fail("Esc did not close the Files overlay from the code pane; hidden=\(controller.overlayIsHiddenForSmokeTest())")
             return
         }
         sendShortcut("1", keyCode: 18, modifiers: [.command])
         guard controller.fileOverlaySidebarIsFirstResponderForSmokeTest() else {
-            fail("Cmd+1 after closing from file view did not reopen Files with focus in the file tree sidebar")
+            fail("Cmd+1 after closing did not reopen Files with focus in the file tree sidebar")
             return
         }
         let sourceCount = controller.sourceFileCountForSmokeTest()
@@ -1532,5 +1603,178 @@ extension KeyInputSmokeApp {
             return
         }
         controller.closeMemoAndFocusTerminalForSmokeTest()
+    }
+
+    // US-8: the workspace-lifecycle flow is a core user path, so every story ships with this
+    // regression guard. Drives the REAL controller: create-from-PWD, overlay-visibility gate, live
+    // git detection glyph/tooltip, split cwd inheritance, detected-git-dir review target, and the
+    // duplicate-path worktree/sibling confirm.
+    func verifyWorkspaceLifecycle(_ controller: MainWindowController) {
+        // Start from the terminal (a prior verifier may leave an overlay up): US-1/US-2 gate creation
+        // on overlay visibility, so an open overlay would otherwise make Cmd+N a no-op.
+        controller.hideOverlayForSmokeTest()
+        controller.resetWorkspaceSelectionForSmokeTest()
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(nil)
+        controller.setDuplicateWorkspaceChoiceForSmokeTest("")
+
+        func makeRepo(_ name: String) -> URL {
+            let repo = makeTempDirectory(name: name)
+            try? "hello\n".write(to: repo.appendingPathComponent("readme.md"), atomically: true, encoding: .utf8)
+            _ = run(["git", "init"], cwd: repo)
+            _ = run(["git", "config", "user.email", "smoke@example.com"], cwd: repo)
+            _ = run(["git", "config", "user.name", "Smoke"], cwd: repo)
+            _ = run(["git", "add", "."], cwd: repo)
+            _ = run(["git", "commit", "-m", "initial"], cwd: repo)
+            return repo
+        }
+
+        let repo = makeRepo("momenterm-ws-repo")
+        let repoPath = repo.standardizedFileURL.path
+        guard run(["git", "rev-parse", "--show-toplevel"], cwd: repo) else {
+            fail("workspace-lifecycle: git fixture repo was not created")
+            return
+        }
+
+        // ---- US-1: New workspace uses the last-focused terminal's PWD ----
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(repo)
+        let baseCount = controller.workspaceCountForSmokeTest()
+        controller.invokeWorkspaceShortcutForSmokeTest()
+        guard waitUntil("US-1 workspace at terminal PWD", timeout: 3, condition: {
+            controller.activeWorkspacePathForSmokeTest() == repoPath
+                && controller.workspaceCountForSmokeTest() == baseCount + 1
+        }) else {
+            fail("US-1: New Workspace did not adopt the focused terminal PWD; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") count=\(controller.workspaceCountForSmokeTest()) expected=\(baseCount + 1)")
+            return
+        }
+        guard let ws1 = controller.activeWorkspaceIdForSmokeTest() else {
+            fail("US-1: created workspace has no active id")
+            return
+        }
+
+        // ---- US-2: ignore create while an overlay covers the terminal ----
+        controller.openFilesViewForSmokeTest(from: repo)
+        guard !controller.overlayIsHiddenForSmokeTest() else {
+            fail("US-2: Files overlay did not open, cannot test the create guard")
+            return
+        }
+        let countWhileOverlayUp = controller.workspaceCountForSmokeTest()
+        controller.invokeWorkspaceShortcutForSmokeTest()
+        guard controller.workspaceCountForSmokeTest() == countWhileOverlayUp else {
+            fail("US-2: New Workspace was NOT ignored while an overlay covered the terminal; count went \(countWhileOverlayUp)→\(controller.workspaceCountForSmokeTest())")
+            return
+        }
+        controller.hideOverlayForSmokeTest()
+
+        // ---- US-3: a pane inside the repo marks the rail (branch glyph + path on hover) ----
+        controller.setActivePaneGitRootForSmokeTest(repoPath)
+        guard controller.workspaceDetectedGitRootForSmokeTest(id: ws1) == repoPath,
+              controller.workspaceRailGlyphSymbolForSmokeTest(id: ws1) == "arrow.triangle.branch" else {
+            fail("US-3: rail did not mark git detection; detected=\(controller.workspaceDetectedGitRootForSmokeTest(id: ws1) ?? "nil") glyph=\(controller.workspaceRailGlyphSymbolForSmokeTest(id: ws1) ?? "nil")")
+            return
+        }
+        guard (controller.workspaceRailTooltipForSmokeTest(id: ws1) ?? "").contains(repoPath) else {
+            fail("US-3: rendered rail tooltip did not surface the detected repo path; tooltip=\(controller.workspaceRailTooltipForSmokeTest(id: ws1) ?? "nil")")
+            return
+        }
+
+        // ---- US-4: leaving the repo reverts the rail to the dot ----
+        controller.setActivePaneGitRootForSmokeTest(nil)
+        guard controller.workspaceDetectedGitRootForSmokeTest(id: ws1) == nil,
+              controller.workspaceRailGlyphSymbolForSmokeTest(id: ws1) == "circle.fill" else {
+            fail("US-4: rail did not revert to the dot after the pane left the repo; detected=\(controller.workspaceDetectedGitRootForSmokeTest(id: ws1) ?? "nil") glyph=\(controller.workspaceRailGlyphSymbolForSmokeTest(id: ws1) ?? "nil")")
+            return
+        }
+
+        // ---- US-5 (target): a workspace whose OWN path isn't a repo but a pane cd'd into a child
+        // repo builds the review against that detected git dir ----
+        let parent = makeTempDirectory(name: "momenterm-ws-parent")
+        let parentPath = parent.standardizedFileURL.path
+        let child = parent.appendingPathComponent("inner", isDirectory: true)
+        try? FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+        try? "x\n".write(to: child.appendingPathComponent("f.txt"), atomically: true, encoding: .utf8)
+        _ = run(["git", "init"], cwd: child)
+        _ = run(["git", "config", "user.email", "smoke@example.com"], cwd: child)
+        _ = run(["git", "config", "user.name", "Smoke"], cwd: child)
+        _ = run(["git", "add", "."], cwd: child)
+        _ = run(["git", "commit", "-m", "initial"], cwd: child)
+        let childPath = child.standardizedFileURL.path
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(parent)
+        controller.invokeWorkspaceShortcutForSmokeTest()
+        guard waitUntil("US-5 non-git workspace", timeout: 3, condition: {
+            controller.activeWorkspacePathForSmokeTest() == parentPath
+        }), controller.activeWorkspaceIdForSmokeTest() != nil else {
+            fail("US-5: workspace at the non-git parent was not created; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil")")
+            return
+        }
+        guard controller.reviewBuildRootForSmokeTest() == parentPath else {
+            fail("US-5: before detection the review target should be the workspace path; buildRoot=\(controller.reviewBuildRootForSmokeTest() ?? "nil")")
+            return
+        }
+        controller.setActivePaneGitRootForSmokeTest(childPath)
+        guard controller.reviewBuildRootForSmokeTest() == childPath else {
+            fail("US-5: review/diff did not retarget the detected child git dir; buildRoot=\(controller.reviewBuildRootForSmokeTest() ?? "nil") expected=\(childPath)")
+            return
+        }
+
+        // ---- US-6: a split inherits the focused pane's cwd, not the workspace root ----
+        controller.activateWorkspaceForSmokeTest(id: ws1)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        let sub = repo.appendingPathComponent("src", isDirectory: true)
+        try? FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let subPath = sub.standardizedFileURL.path
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(sub)
+        let panesBefore = controller.terminalPaneCountForSmokeTest()
+        controller.splitTerminalPaneForSmokeTest()
+        guard waitUntil("US-6 split inherits cwd", timeout: 3, condition: {
+            controller.terminalPaneCountForSmokeTest() == panesBefore + 1
+                && controller.latestTerminalPaneCwdForSmokeTest() == subPath
+        }) else {
+            fail("US-6: split did not inherit the focused pane cwd; panes=\(controller.terminalPaneCountForSmokeTest()) (was \(panesBefore)) latest=\(controller.latestTerminalPaneCwdForSmokeTest() ?? "nil") expected=\(subPath)")
+            return
+        }
+
+        // ---- US-7: duplicate-path + git → worktree checkbox confirm ----
+        // (a) Unchecked → a same-path sibling workspace (distinct id, same path).
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(repo)
+        controller.setDuplicateWorkspaceChoiceForSmokeTest("sibling")
+        let siblingsBefore = controller.workspaceCountAtPathForSmokeTest(repoPath)
+        controller.createWorkspaceFromActiveTerminalForSmokeTest()
+        guard waitUntil("US-7 same-path sibling", timeout: 3, condition: {
+            controller.workspaceCountAtPathForSmokeTest(repoPath) == siblingsBefore + 1
+                && controller.activeWorkspacePathForSmokeTest() == repoPath
+        }), let ws2 = controller.activeWorkspaceIdForSmokeTest(), ws2 != ws1 else {
+            fail("US-7 (unchecked): a same-path sibling workspace was not created; atPath=\(controller.workspaceCountAtPathForSmokeTest(repoPath)) expected=\(siblingsBefore + 1) active=\(controller.activeWorkspaceIdForSmokeTest() ?? "nil") ws1=\(ws1)")
+            return
+        }
+
+        // US-5 (independence): the two same-git-dir workspaces keep isolated memos.
+        controller.activateWorkspaceForSmokeTest(id: ws1)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.15))
+        guard controller.setMemoTextForSmokeTest("repo-A memo") else {
+            fail("US-5: workspace A did not accept its scoped memo")
+            return
+        }
+        controller.activateWorkspaceForSmokeTest(id: ws2)
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.15))
+        guard !controller.memoTextForSmokeTest().contains("repo-A memo") else {
+            fail("US-5: the same-git-dir sibling leaked workspace A's memo (per-id scope not isolated); memo=\(controller.memoTextForSmokeTest())")
+            return
+        }
+
+        // (b) Checked → a linked git worktree workspace at a NEW path (≠ the repo root).
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(repo)
+        controller.setDuplicateWorkspaceChoiceForSmokeTest("worktree")
+        let countBeforeWorktree = controller.workspaceCountForSmokeTest()
+        controller.createWorkspaceFromActiveTerminalForSmokeTest()
+        guard waitUntil("US-7 linked worktree", timeout: 5, condition: {
+            controller.workspaceCountForSmokeTest() == countBeforeWorktree + 1
+                && (controller.activeWorkspacePathForSmokeTest() ?? repoPath) != repoPath
+        }) else {
+            fail("US-7 (checked): a linked worktree workspace was not created; count=\(controller.workspaceCountForSmokeTest()) expected=\(countBeforeWorktree + 1) active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil")")
+            return
+        }
+
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(nil)
+        controller.setDuplicateWorkspaceChoiceForSmokeTest("")
     }
 }

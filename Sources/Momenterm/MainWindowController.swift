@@ -186,6 +186,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         weak var statusProcLabel: NSTextField?
         weak var statusClockLabel: NSTextField?
         var statusResolvedCwd: URL?
+        // US-3/4: the git top-level path this pane's live cwd resolves into, or nil when the pane is
+        // not inside a repo. Aggregated per workspace into Workspace.detectedGitRoot to drive the rail.
+        var gitRoot: String?
         var statusSignature = ""
         var statusProcName = ""
         var statusProcActive = false
@@ -330,6 +333,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         var prState: String?
         var listeningPorts: [Int]
         var lastNotification: String?
+        // Live git detection (US-3/4): the git root path found under any of this workspace's
+        // terminal panes, or nil when no pane is inside a repo. Transient — recomputed from pane
+        // cwds at runtime and deliberately NOT persisted (see jsonValue()).
+        var detectedGitRoot: String?
 
         init(
             id: String,
@@ -341,7 +348,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             prNumber: Int? = nil,
             prState: String? = nil,
             listeningPorts: [Int] = [],
-            lastNotification: String? = nil
+            lastNotification: String? = nil,
+            detectedGitRoot: String? = nil
         ) {
             self.id = id
             self.path = path
@@ -353,6 +361,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             self.prState = prState
             self.listeningPorts = listeningPorts
             self.lastNotification = lastNotification
+            self.detectedGitRoot = detectedGitRoot
         }
 
         func jsonValue() -> JSONValue {
@@ -456,6 +465,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var mergedPromptPendingSendText: String?
     var terminalWriteObserverForSmokeTest: ((Int, String) -> Void)?
     var terminalBellNotificationObserverForSmokeTest: ((String, String, String?) -> Void)?
+    // When set, currentTerminalDirectory() returns this instead of the live pane cwd, so the headless
+    // smoke can drive create/split from a chosen "focused terminal" pwd (US-1/2/6/7).
+    var currentTerminalDirectoryOverrideForSmokeTest: URL?
+    // Set by smokes to bypass the modal worktree-confirm NSAlert (which would hang a headless run) and
+    // drive either branch of US-7 (worktree/sibling/cancel) deterministically.
+    var duplicateWorkspaceChoiceOverrideForSmokeTest: DuplicateWorkspaceChoice?
+    // Set by smokes to bypass the "really delete this workspace?" confirmation NSAlert. nil in the app
+    // (a real dialog is shown); true/false in smokes to auto-confirm/-cancel without a modal.
+    var workspaceDeletionConfirmOverrideForSmokeTest: Bool?
     var lastShortcutTraceForSmokeTest = ""
     var nextTerminalTabId = 0
     var pendingPtyData: [Int: [Data]] = [:]
@@ -480,6 +498,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var selectedDiffIndex = 0
     var selectedDiffHunkIndex = 0
     var awaitingNextFileAfterLastHunk = false
+    // Last line Monaco's review cursor reported (1-based, in the reconstructed modified content).
+    // Kept so comment placement/selection can follow the caret once hybrid comments land (Phase 2).
+    var hybridReviewCursorLine = 1
+    // Content signature of the diff last pushed to Monaco, so plain hunk navigation (same content)
+    // skips the model reload and only moves the caret.
+    var lastHybridDiffSignature: String?
+    // Map from Monaco modified-editor line (1-based index) to the real file line number, and the file
+    // path the current Monaco diff belongs to — so review comments (stored by file line) round-trip.
+    var hybridModifiedFileLines: [Int] = []
+    var hybridReviewFilePath: String?
     // When viewing a git-history commit's diff, the Changes view renders these files (the
     // commit's diff) instead of the working-tree document. nil = normal working-tree Changes.
     var historyDiffOverride: [DiffFile]?
@@ -491,22 +519,33 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return currentDocument?.diffFiles ?? []
     }
     var selectedSourceIndex = 0
-    // When true the file view shows the raw source text of a renderable file
-    // (Markdown / CSV / TSV / SVG) instead of its rendered form. Toggled via
-    // #selector(toggleSourceRawMode) and the header "Raw"/"Rendered" button.
-    var sourceRawMode = false
+    // How the file view presents a renderable file (Markdown / CSV / TSV / SVG):
+    //   .raw      — source text only (Monaco / native code pane, has a caret)
+    //   .side     — source + rendered preview side by side
+    //   .rendered — rendered preview only (still shows a source-line caret)
+    // Default is .raw. Switched via ⌥1/⌥2/⌥3, the three header icons, and ⇧⌘R (cycle).
+    enum SourceViewMode: String {
+        case raw
+        case side
+        case rendered
+    }
+    var sourceViewMode: SourceViewMode = .raw
+    // Last source line reported by the rendered/side preview's caret (1-based). Lets review-comment
+    // placement reuse the line the preview cursor is on, mirroring the native code pane.
+    var sourcePreviewCursorLine = 1
     var selectedHistoryIndex = 0
     var selectedQuickOpenIndex = 0
     var selectedWorkspacePickerIndex = 0
     // When set, the expanded rail renders an inline editable name field for this workspace instead of
     // a label (US: create/rename without a modal dialog).
     var renamingWorkspaceId: String?
-    // Set only for the single rebuildWorkspaceButtons() pass that *creates* the inline rename
-    // field (from beginWorkspaceRename). It lets rebuildWorkspaceButtons skip *background* repaints
-    // (workspace-status refresh, agent OSC notifications) while a rename is open — those would
-    // otherwise tear the focused field out of the view tree and fire commit-on-focus-loss, snapping
-    // the edit back to a static label mid-type.
-    var isBuildingWorkspaceRenameField = false
+    // Carries an in-progress inline rename across a rail repaint so a background rebuild (workspace-
+    // status refresh, agent OSC notification) doesn't lose the typed text or first-responder state.
+    // rebuildWorkspaceButtons stashes the field's text/focus here before teardown and re-seeds (and
+    // re-focuses) the recreated field, instead of the field committing-on-focus-loss and collapsing
+    // back to a static label mid-type.
+    var pendingWorkspaceRenameText: String?
+    var pendingWorkspaceRenameWasFocused = false
     // True while a terminal pane header shows its inline rename field.
     var renamingTerminalPaneActive = false
     var lastSidebarFocusDiagnostic = ""
@@ -585,6 +624,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let railBottomStack = NSStackView()
     let workspaceStack = NativeWorkspaceRailListView()
     weak var workspaceToastLabel: NSTextField?
+    // The whole toast card (blur + icon + label); removed as a unit. workspaceToastLabel points at the
+    // message label inside it (kept for smoke-test text/position assertions).
+    weak var workspaceToastContainer: NSView?
     var lastTerminalSpawnError: String?
     let terminalView = NSView()
     let terminalTabStack = NSStackView()
@@ -592,6 +634,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let terminalPaneSplitView = MomentermBalancedSplitView()
     let overlayView = NSView()
     let overlayBackdrop = MomentermOverlayBackdrop()
+    // Layered settings: a dimmed snapshot of the Files/Changes panel that was open when Settings was
+    // launched, drawn behind the Settings modal so it visibly floats on top instead of replacing it.
+    // Cleared and returned to when Settings closes. `settingsReturnMode` remembers which panel to restore.
+    let settingsUnderlayImageView = NSImageView()
+    var settingsReturnMode: OverlayMode = .hidden
     let memoSidePanel = NSView()
     let mergedPromptSidePanel = NSView()
     let mergedPromptTitleLabel = NSTextField(labelWithString: "")
@@ -611,9 +658,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var mergedPromptEnterOverlayViews: [Int: NSView] = [:]
     let overlayTitleLabel = NSTextField(labelWithString: "")
     let overlaySubtitleLabel = NSTextField(labelWithString: "")
-    // Header toggle shown only in the file view for renderable files (Markdown /
-    // CSV / TSV / SVG): switches between the rendered preview and the raw source.
-    let sourceRawToggleButton = NSButton(title: "", target: nil, action: nil)
+    // Header segmented control shown only in the file view for renderable files (Markdown /
+    // CSV / TSV / SVG): switches between raw source, side-by-side, and rendered preview. The
+    // active mode's button is tinted; ⌥1/⌥2/⌥3 mirror the three buttons.
+    let sourceViewModeRawButton = NSButton(title: "", target: nil, action: nil)
+    let sourceViewModeSideButton = NSButton(title: "", target: nil, action: nil)
+    let sourceViewModeRenderedButton = NSButton(title: "", target: nil, action: nil)
+    let sourceViewModeButtonStack = NSStackView()
     let overlaySidebarStack = NSStackView()
     weak var overlaySidebarScrollView: NSScrollView?
     let overlayBodySplitView = NSSplitView()
@@ -876,6 +927,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         openFilesView()
     }
 
+    // Cmd+1 opens the Files view; it is NOT a toggle. When the Files panel is already the active
+    // overlay this is a no-op (the panel is closed with Esc from the sidebar, not by re-pressing).
+    func showFilesViewOnly() {
+        if overlayMode == .files,
+           !overlayView.isHidden,
+           memoSidePanel.isHidden,
+           !isMergedPromptSidePanelActive() {
+            return
+        }
+        openFilesView()
+    }
+
 
 
 
@@ -975,6 +1038,93 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             end += 1
         }
         return ns.substring(with: NSRange(location: start, length: end - start))
+    }
+
+    // Cmd+↓ from the native review code pane: resolve the identifier under the cursor and jump to its
+    // declaration. The Monaco diff/file panes bridge the same intent through the "goToDeclaration" handler.
+    func goToDeclarationUnderCursor() {
+        guard overlayMode == .files || overlayMode == .changes else {
+            return
+        }
+        let host = activeInlineReviewCodeView()
+        let location = host.reviewCursorLocation ?? host.selectedRange().location
+        guard let word = identifierWord(in: host.string, at: location), word.count >= 2 else {
+            showShortcutStatus("Put the cursor on an identifier, then Cmd+↓.", title: "Go to declaration")
+            return
+        }
+        goToDeclaration(forWord: word)
+    }
+
+    // Search the active workspace for a declaration of `word` and open the first match at its line.
+    // Shared by the native code pane (goToDeclarationUnderCursor) and the Monaco panes' JS bridge.
+    func goToDeclaration(forWord word: String) {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else {
+            showShortcutStatus("Put the cursor on an identifier, then Cmd+↓.", title: "Go to declaration")
+            return
+        }
+        guard let rootPath = activeWorkspaceDetectedGitRoot() ?? activeWorkspaceURL()?.path else {
+            showShortcutStatus("선언을 검색할 git 워크스페이스가 없습니다: \(trimmed)", title: "Go to declaration")
+            return
+        }
+        let rootURL = URL(fileURLWithPath: rootPath)
+        guard let hit = service.findDeclaration(root: rootURL, word: trimmed, preferExtension: declarationSearchExtension()) else {
+            showShortcutStatus("선언을 찾지 못했습니다: \(trimmed)", title: "Go to declaration")
+            return
+        }
+        openSourceFileAtLine(gitRoot: rootURL, relativePath: hit.path, line: hit.line)
+    }
+
+    // The current review file's extension, so declaration search prefers same-language matches.
+    private func declarationSearchExtension() -> String? {
+        let path = (overlayMode == .changes ? (hybridReviewFilePath ?? selectedFilePath()) : selectedFilePath())
+        guard let path = path else {
+            return nil
+        }
+        let ext = (path as NSString).pathExtension
+        return ext.isEmpty ? nil : ext
+    }
+
+    // Render an arbitrary repo file in the Files view at `line`, cursor placed there. The normal file /
+    // diff views only render the workspace's listed/changed files, so a declaration living in an unlisted
+    // file is loaded ad-hoc here — this is the "open any file at a line" path go-to-declaration needs.
+    func openSourceFileAtLine(gitRoot: URL, relativePath: String, line: Int) {
+        guard let preview = service.filePreview(root: gitRoot, path: relativePath) else {
+            showShortcutStatus("파일을 열 수 없습니다: \(relativePath)", title: "Go to declaration")
+            return
+        }
+        if overlayMode != .files {
+            showOverlay(.files)
+        }
+        // When the file is in the listing, move the tree selection to it and rebuild the sidebar so it
+        // follows + scrolls into view; then render the ad-hoc preview at the declaration line (this
+        // overrides the code pane populateFilesOverlay just drew — both synchronous, no flash).
+        if selectFileInTree(path: relativePath) {
+            populateFilesOverlay()
+        }
+        pushCursorHistory(relativePath)
+        renderSourceFile(preview, preferredLine: line, focus: true)
+    }
+
+    // Parse the JS bridge payloads the Monaco panes post for the two code-navigation shortcuts.
+    private func hybridBridgeWord(_ body: Any) -> String? {
+        guard let dict = body as? [String: Any], let word = dict["word"] as? String else {
+            return nil
+        }
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count >= 2 ? trimmed : nil
+    }
+    func handleHybridFindUsages(_ body: Any) {
+        guard let word = hybridBridgeWord(body) else {
+            return
+        }
+        openQuickOpen(mode: .content, initialQuery: word)
+    }
+    func handleHybridGoToDeclaration(_ body: Any) {
+        guard let word = hybridBridgeWord(body) else {
+            return
+        }
+        goToDeclaration(forWord: word)
     }
 
     func goToDefinition() {
@@ -1118,7 +1268,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlayView.layer?.borderColor = theme.panelBorder.cgColor
         overlayTitleLabel.textColor = theme.primaryText
         overlaySubtitleLabel.textColor = theme.tertiaryText
-        sourceRawToggleButton.contentTintColor = theme.secondaryText
+        for button in [sourceViewModeRawButton, sourceViewModeSideButton, sourceViewModeRenderedButton] {
+            button.contentTintColor = theme.secondaryText
+        }
         overlayContentView.layer?.backgroundColor = theme.panelBackground.cgColor
         diffEditorChromeView.layer?.backgroundColor = theme.codeHeaderBackground.cgColor
         diffEditorPathLabel.textColor = theme.primaryText
@@ -1165,12 +1317,33 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         overlayView.layer?.cornerRadius = 8
         overlayView.isHidden = true
         // Click-blocking modal backdrop, added BEFORE the panel so the panel sits above it.
+        // Settings underlay sits BELOW the backdrop (added first) so the dim scrim darkens it and the
+        // Settings modal floats above. It's a static snapshot with an explicit frame (set at capture),
+        // so no constraints — just autoresize with the window.
+        settingsUnderlayImageView.isHidden = true
+        settingsUnderlayImageView.imageScaling = .scaleAxesIndependently
+        settingsUnderlayImageView.autoresizingMask = [.width, .height]
+        settingsUnderlayImageView.wantsLayer = true
+        // Panel-colored backing so regions the snapshot can't capture (a Monaco/WKWebView diff renders
+        // out of process) read as a dimmed panel rather than a transparent hole behind the modal.
+        settingsUnderlayImageView.layer?.backgroundColor = theme.panelBackground.cgColor
+        rootView.addSubview(settingsUnderlayImageView)
+
         // Covers the whole content so clicks outside a floating panel don't reach the
         // terminal; clicking the backdrop dismisses the overlay.
         overlayBackdrop.translatesAutoresizingMaskIntoConstraints = false
         overlayBackdrop.isHidden = true
         overlayBackdrop.onClick = { [weak self] in
-            self?.closeOverlayAction()
+            guard let self = self else {
+                return
+            }
+            // Settings is a deliberate, form-like panel — a stray click (even one that slips past the
+            // card onto the backdrop) must not discard it. It closes only via Esc or the ✕ button.
+            // Other floating overlays (pickers, palette) still dismiss on an outside click.
+            if self.overlayMode == .settings {
+                return
+            }
+            self.closeOverlayAction()
         }
         rootView.addSubview(overlayBackdrop)
         NSLayoutConstraint.activate([
@@ -1200,17 +1373,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         close.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(close)
 
-        sourceRawToggleButton.translatesAutoresizingMaskIntoConstraints = false
-        sourceRawToggleButton.bezelStyle = .regularSquare
-        sourceRawToggleButton.isBordered = false
-        sourceRawToggleButton.imageScaling = .scaleNone
-        sourceRawToggleButton.controlSize = .small
-        sourceRawToggleButton.target = self
-        sourceRawToggleButton.action = #selector(toggleSourceRawModeAction)
-        sourceRawToggleButton.isHidden = true
-        sourceRawToggleButton.setContentHuggingPriority(.required, for: .horizontal)
-        sourceRawToggleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        header.addSubview(sourceRawToggleButton)
+        func configureSourceViewModeButton(_ button: NSButton, symbol: String, fallback: String, label: String, shortcut: String, mode: SourceViewMode) {
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.bezelStyle = .regularSquare
+            button.isBordered = false
+            button.imageScaling = .scaleProportionallyDown
+            button.controlSize = .small
+            button.wantsLayer = true
+            button.layer?.cornerRadius = 4
+            button.target = self
+            button.action = #selector(setSourceViewModeAction(_:))
+            button.identifier = NSUserInterfaceItemIdentifier(mode.rawValue)
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            button.imagePosition = .imageOnly
+            if button.image == nil {
+                button.title = fallback
+                button.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            }
+            button.toolTip = tooltipText(label: label, shortcut: shortcut)
+            button.setContentHuggingPriority(.required, for: .horizontal)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.iconButtonSize),
+                button.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.iconButtonSize)
+            ])
+        }
+        configureSourceViewModeButton(sourceViewModeRawButton, symbol: "chevron.left.slash.chevron.right", fallback: "Raw", label: "Raw source", shortcut: "⌥1", mode: .raw)
+        configureSourceViewModeButton(sourceViewModeSideButton, symbol: "rectangle.split.2x1", fallback: "Side", label: "Side by side", shortcut: "⌥2", mode: .side)
+        configureSourceViewModeButton(sourceViewModeRenderedButton, symbol: "doc.richtext", fallback: "View", label: "Rendered", shortcut: "⌥3", mode: .rendered)
+        sourceViewModeButtonStack.translatesAutoresizingMaskIntoConstraints = false
+        sourceViewModeButtonStack.orientation = .horizontal
+        sourceViewModeButtonStack.spacing = 2
+        sourceViewModeButtonStack.setViews([sourceViewModeRawButton, sourceViewModeSideButton, sourceViewModeRenderedButton], in: .leading)
+        sourceViewModeButtonStack.isHidden = true
+        sourceViewModeButtonStack.setContentHuggingPriority(.required, for: .horizontal)
+        sourceViewModeButtonStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        header.addSubview(sourceViewModeButtonStack)
 
         // Hairline under the overlay header: one consistent divider so every overlay
         // (diff / files / history / settings) has the same chrome rhythm separating
@@ -1336,12 +1534,62 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         fileHybridView.onDidFinishLoad = { [weak self] in self?.reapplyMinimalScrollbarStyles() }
         overlayContentView.addSubview(fileHybridView)
         fileHybridView.loadFromBundle(htmlFile: "code-viewer.html")
+        // The rendered/side source-line caret posts its line back so review-comment placement can
+        // reuse the same source line the native code pane uses.
+        fileHybridView.registerMessageHandler(name: "sourceCursorLine") { [weak self] body in
+            guard let self = self, let dict = body as? [String: Any] else { return }
+            if let line = dict["line"] as? Int {
+                self.sourcePreviewCursorLine = max(1, line)
+            } else if let line = dict["line"] as? Double {
+                self.sourcePreviewCursorLine = max(1, Int(line))
+            }
+        }
+        // Cmd+B / Cmd+↓ over a renderable file's Monaco source editor bridge the identifier under the
+        // cursor to the same find-usages / go-to-declaration paths the native code pane uses.
+        fileHybridView.registerMessageHandler(name: "findUsages") { [weak self] body in
+            self?.handleHybridFindUsages(body)
+        }
+        fileHybridView.registerMessageHandler(name: "goToDeclaration") { [weak self] body in
+            self?.handleHybridGoToDeclaration(body)
+        }
 
         diffHybridView.translatesAutoresizingMaskIntoConstraints = false
         diffHybridView.isHidden = true
         diffHybridView.onDidFinishLoad = { [weak self] in self?.reapplyMinimalScrollbarStyles() }
         overlayContentView.addSubview(diffHybridView)
         diffHybridView.loadFromBundle(htmlFile: "diff-viewer.html")
+        // Monaco holds keyboard focus for the blinking review cursor, so the diff view forwards the
+        // review shortcuts it can't own (hunk/file nav, leaving/deleting comments) back to the native
+        // review model, and reports cursor moves so comment selection can follow the caret.
+        diffHybridView.registerMessageHandler(name: "reviewNavigate") { [weak self] body in
+            guard let self = self, let dict = body as? [String: Any] else { return }
+            let delta = (dict["delta"] as? Int) ?? Int((dict["delta"] as? Double) ?? 1)
+            self.selectReviewTarget(delta: delta >= 0 ? 1 : -1)
+        }
+        diffHybridView.registerMessageHandler(name: "reviewCursorMoved") { [weak self] body in
+            guard let self = self, let dict = body as? [String: Any] else { return }
+            let line = (dict["line"] as? Int) ?? Int((dict["line"] as? Double) ?? 1)
+            self.selectHybridReviewCommentAtCursor(monacoLine: max(1, line))
+        }
+        diffHybridView.registerMessageHandler(name: "reviewComment") { [weak self] body in
+            guard let self = self, let dict = body as? [String: Any] else { return }
+            let kind = (dict["kind"] as? String) ?? "question"
+            let line = (dict["line"] as? Int) ?? Int((dict["line"] as? Double) ?? 1)
+            self.addHybridReviewComment(kind: kind, monacoLine: max(1, line))
+        }
+        diffHybridView.registerMessageHandler(name: "reviewDeleteComment") { [weak self] body in
+            guard let self = self, let dict = body as? [String: Any] else { return }
+            let line = (dict["line"] as? Int) ?? Int((dict["line"] as? Double) ?? 1)
+            self.deleteHybridReviewCommentAtCursor(monacoLine: max(1, line))
+        }
+        // Cmd+B / Cmd+↓ over the Monaco diff bridge the symbol under the cursor to find-usages /
+        // go-to-declaration (Monaco owns focus, so these never reach the Swift key monitor).
+        diffHybridView.registerMessageHandler(name: "findUsages") { [weak self] body in
+            self?.handleHybridFindUsages(body)
+        }
+        diffHybridView.registerMessageHandler(name: "goToDeclaration") { [weak self] body in
+            self?.handleHybridGoToDeclaration(body)
+        }
 
         historyGraphWebView.translatesAutoresizingMaskIntoConstraints = false
         historyGraphWebView.isHidden = true
@@ -1513,11 +1761,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             overlayTitleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
             overlaySubtitleLabel.leadingAnchor.constraint(equalTo: overlayTitleLabel.trailingAnchor, constant: 12),
-            overlaySubtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: sourceRawToggleButton.leadingAnchor, constant: -10),
+            overlaySubtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: sourceViewModeButtonStack.leadingAnchor, constant: -10),
             overlaySubtitleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
-            sourceRawToggleButton.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -10),
-            sourceRawToggleButton.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
+            sourceViewModeButtonStack.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -10),
+            sourceViewModeButtonStack.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
             close.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding),
             close.centerYAnchor.constraint(equalTo: header.centerYAnchor),
@@ -1710,6 +1958,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             return true
         }
 
+        // File view: ⌥1/⌥2/⌥3 pick raw / side / rendered, mirroring the three header icons. Gated on
+        // the mode buttons being visible (a renderable file). Physical keyCodes 18/19/20 dodge the
+        // ¡™£ characters Option+number produces. Skipped for non-renderable files so the terminal /
+        // other panes keep those keys.
+        if overlayMode == .files, option, !command, !control, !shift, !sourceViewModeButtonStack.isHidden {
+            switch event.keyCode {
+            case 18:
+                setSourceViewMode(.raw)
+                return true
+            case 19:
+                setSourceViewMode(.side)
+                return true
+            case 20:
+                setSourceViewMode(.rendered)
+                return true
+            default:
+                break
+            }
+        }
+
         if !memoSidePanel.isHidden, !command, !control, !option, !shift, (lowerKey == "\u{1b}" || event.keyCode == 53) {
             hideMemoPanel(focusTerminalAfterClose: true)
             return true
@@ -1758,6 +2026,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
                 toggleViewedForSelectedFile()
                 return true
             }
+        }
+
+        // Find Usages (Cmd+B) / Go to Declaration (Cmd+↓) in the review panels are handled BEFORE the
+        // editable-text early return: the review code pane reads as an editable text view, so otherwise
+        // these fall through to the (stale) menu equivalents and fire Go-to-Definition instead. When the
+        // Monaco hybrid view holds focus, pass the event through so its JS keydown bridge uses the Monaco
+        // cursor rather than the hidden native one.
+        if command, !control, !option, !shift, (overlayMode == .files || overlayMode == .changes),
+           (lowerKey == "b" || event.keyCode == 125) {
+            let hybridFocused = (!diffHybridView.isHidden && firstResponderIsOrDescends(from: diffHybridView))
+                || (!fileHybridView.isHidden && firstResponderIsOrDescends(from: fileHybridView))
+            if hybridFocused {
+                return false
+            }
+            if lowerKey == "b" {
+                findUsagesUnderCursor()
+            } else {
+                goToDeclarationUnderCursor()
+            }
+            return true
         }
 
         if isEditableTextInputFocused() {
@@ -1905,10 +2193,22 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         if !option, !shift {
             switch lowerKey {
             case "0":
-                toggleChangesView()
+                // When the diff code cursor is focused, Cmd+0 returns focus to the change list (like
+                // the first Esc); otherwise it toggles the Changes panel open/closed.
+                if overlayMode == .changes, overlayCodeCursorIsFocused() {
+                    returnFocusFromOverlayPreviewToSidebar()
+                } else {
+                    toggleChangesView()
+                }
                 return true
             case "1":
-                toggleFilesView()
+                // Cmd+1 opens Files (open-only, never a toggle-close; closed with Esc). When the
+                // file code cursor is focused, it returns focus to the file tree sidebar.
+                if overlayMode == .files, overlayCodeCursorIsFocused() {
+                    returnFocusFromOverlayPreviewToSidebar()
+                } else {
+                    showFilesViewOnly()
+                }
                 return true
             case "9":
                 toggleHistory()
@@ -1981,10 +2281,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             }
         }
 
-        if !option, !shift, key == String(UnicodeScalar(0xF701)!) {
-            jumpToSymbolUnderCursor()
-            return true
-        }
         if !shift, !control, (command || option), event.keyCode == 36 {
             runContextualAction()
             return true
@@ -2061,6 +2357,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
             pageOverlay(delta: 1)
             return true
         case 123:
+            // Left arrow collapses the selected expanded folder in the file tree (IntelliJ-style), so
+            // folders close with either Enter or ←. toggleFileTreeFolder keeps the sidebar focused, so
+            // up/down keep navigating afterwards. On a file / collapsed folder / other overlay it keeps
+            // its original job of moving focus into the old code pane.
+            if overlayMode == .files,
+               let row = fileTreeModel.selectedRow(),
+               row.isFolder,
+               fileTreeModel.expandedFolders.contains(row.path) {
+                toggleFileTreeFolder(row.path)
+                return true
+            }
             codePane.focusOldPane(in: window)
             return true
         case 124:
@@ -2552,6 +2859,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
 
     func showOverlay(_ mode: OverlayMode) {
+        // Any switch to a non-Settings overlay (or restoring the review panel) drops the Settings
+        // underlay snapshot. openSettings() sets it up right before calling showOverlay(.settings),
+        // so that one path is excluded.
+        if mode != .settings {
+            settingsUnderlayImageView.isHidden = true
+            settingsReturnMode = .hidden
+        }
         if mode != .workspacePicker {
             setWorkspaceRailPickerVisible(false, animated: false)
         }
@@ -2591,6 +2905,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     func hideOverlay() {
         clearInlineReviewCommentViews()
+        settingsUnderlayImageView.isHidden = true
+        settingsReturnMode = .hidden
         overlayMode = .hidden
         overlayView.isHidden = true
         overlayBackdrop.isHidden = true
@@ -2794,8 +3110,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         guard overlayMode == .files || overlayMode == .changes else {
             return false
         }
-        return codePane.isOldPaneFirstResponder(in: window)
-            || codePane.isNewPaneFirstResponder(in: window)
+        if codePane.isOldPaneFirstResponder(in: window) || codePane.isNewPaneFirstResponder(in: window) {
+            return true
+        }
+        // Renderable files and diffs render into the Monaco hybrid web view. Treat its focus like the
+        // native code pane so the first Esc returns focus to the sidebar (keeping the panel open),
+        // and only a second Esc — from the sidebar — closes it.
+        if overlayMode == .files, !fileHybridView.isHidden, firstResponderIsOrDescends(from: fileHybridView) {
+            return true
+        }
+        if overlayMode == .changes, !diffHybridView.isHidden, firstResponderIsOrDescends(from: diffHybridView) {
+            return true
+        }
+        return false
     }
 
 
@@ -3278,8 +3605,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         guard let document = currentDocument else {
             return
         }
-        if let index = document.sourceFiles.firstIndex(where: { $0.path == path }) {
-            selectedSourceIndex = index
+        if document.sourceFiles.contains(where: { $0.path == path }) {
+            // Move the tree selection to the target so the sidebar follows (expand ancestors + select);
+            // showOverlay(.files) → populateFilesOverlay then renders it and scrolls its row into view.
+            selectFileInTree(path: path)
             pushCursorHistory(path)
             showOverlay(.files)
             return
@@ -3486,37 +3815,64 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
 
 
-    func updateSourceRawToggle(canToggle: Bool) {
-        sourceRawToggleButton.isHidden = !canToggle
+    func updateSourceViewModeButtons(canToggle: Bool) {
+        sourceViewModeButtonStack.isHidden = !canToggle
         guard canToggle else {
             return
         }
-        // Icon toggle: in rendered mode the button offers the raw-source glyph, in raw mode the
-        // rendered-document glyph. Both symbols ship in macOS 11 (the deployment target). ⇧⌘R
-        // (menu: Toggle Raw/Rendered) toggles the same state.
-        let symbol = sourceRawMode ? "doc.richtext" : "chevron.left.slash.chevron.right"
-        let label = sourceRawMode ? "Show the rendered preview" : "Show the raw source text"
-        sourceRawToggleButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-        sourceRawToggleButton.imagePosition = .imageOnly
-        sourceRawToggleButton.toolTip = "\(label) (⇧⌘R)"
+        // Tint the active mode's button with the accent and give it a subtle filled background;
+        // the other two stay quiet. All three glyphs ship in macOS 11 (the deployment target).
+        let entries: [(NSButton, SourceViewMode)] = [
+            (sourceViewModeRawButton, .raw),
+            (sourceViewModeSideButton, .side),
+            (sourceViewModeRenderedButton, .rendered)
+        ]
+        for (button, mode) in entries {
+            let active = mode == sourceViewMode
+            button.contentTintColor = active ? theme.accent : theme.secondaryText
+            button.layer?.backgroundColor = active ? theme.selectionBackground.cgColor : NSColor.clear.cgColor
+        }
     }
 
-    @objc func toggleSourceRawModeAction() {
-        toggleSourceRawMode()
+    @objc func setSourceViewModeAction(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue, let mode = SourceViewMode(rawValue: raw) else {
+            return
+        }
+        setSourceViewMode(mode)
     }
 
-    // Flip between rendered and raw source for the current file view file. No-op
-    // outside the file view; re-renders the selected source so the pane, subtitle,
-    // and toggle button reflect the new mode.
-    func toggleSourceRawMode() {
+    // Set the file-view presentation mode (raw / side / rendered) and re-render the selected file.
+    // No-op outside the file view. Shared by the three header buttons, ⌥1/⌥2/⌥3, and the ⇧⌘R cycle.
+    func setSourceViewMode(_ mode: SourceViewMode) {
         guard overlayMode == .files,
               let document = activeFilesDocument(),
-              document.sourceFiles.indices.contains(selectedSourceIndex)
+              document.sourceFiles.indices.contains(selectedSourceIndex),
+              mode != sourceViewMode
         else {
             return
         }
-        sourceRawMode.toggle()
+        sourceViewMode = mode
         renderSourceFile(document.sourceFiles[selectedSourceIndex])
+    }
+
+    @objc func toggleSourceRawModeAction() {
+        cycleSourceViewMode()
+    }
+
+    // Kept under the old name/selector so the menu item and existing callers keep working:
+    // ⇧⌘R now cycles raw → side → rendered → raw instead of a two-state flip.
+    func toggleSourceRawMode() {
+        cycleSourceViewMode()
+    }
+
+    func cycleSourceViewMode() {
+        let next: SourceViewMode
+        switch sourceViewMode {
+        case .raw: next = .side
+        case .side: next = .rendered
+        case .rendered: next = .raw
+        }
+        setSourceViewMode(next)
     }
 
 
@@ -3793,6 +4149,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
 
 
+    // US-5: choose the directory the review/diff builds against. Normally the workspace root, but when
+    // that root isn't itself inside a repo and a pane under the workspace has cd'd into one, target the
+    // detected git dir so the prompt bundle operates on the found repo.
+    func reviewBuildRoot(for requestedRoot: URL, detectedGitRoot: String?) -> URL {
+        if let detectedGitRoot = detectedGitRoot, service.gitRoot(from: requestedRoot) == nil {
+            return URL(fileURLWithPath: detectedGitRoot)
+        }
+        return requestedRoot
+    }
     func loadDocument(forceReload: Bool) {
         guard let root = root else {
             currentDocument = nil
@@ -3814,11 +4179,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         }
 
         isLoadingDocument = true
+        let detectedGitRoot = activeWorkspaceDetectedGitRoot()
         DispatchQueue.global(qos: .userInitiated).async {
             let requestedRoot = root
+            // US-5: when the active workspace's own path isn't inside a repo but a pane under it has
+            // cd'd into one, build the review against that detected git dir so the prompt bundle and
+            // diff operate on the found repo. The reload-identity guard below still uses requestedRoot.
+            let buildRoot = self.reviewBuildRoot(for: requestedRoot, detectedGitRoot: detectedGitRoot)
             let result: Result<ReviewDocument, Error>
             do {
-                result = .success(try self.service.build(root: requestedRoot, ignoreWhitespace: self.ignoreWhitespace))
+                result = .success(try self.service.build(root: buildRoot, ignoreWhitespace: self.ignoreWhitespace))
             } catch {
                 result = .failure(error)
             }
@@ -3883,8 +4253,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         // pane every 2.5s; leaving it off removes that subprocess overhead entirely.
         statusClockTimer?.invalidate()
         statusClockTimer = nil
+        // US-3/4: keep a light per-pane git-root re-poll on the (reused) paneStatusTimer so the
+        // workspace rail marks/unmarks git as the terminal cd's around. This resolves only
+        // `git rev-parse --show-toplevel` per workspace pane — none of the old branch/dirty/lsof work.
         paneStatusTimer?.invalidate()
-        paneStatusTimer = nil
+        paneStatusTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
+            self?.refreshWorkspaceGitDetection()
+        }
     }
 
     private static let statusClockFormatter: DateFormatter = {
@@ -4326,19 +4701,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // US-15: new workspaces are created at ~/ with a memorable random name (adjective-noun)
     // that pre-fills the create dialog. Kept deterministic-shape (two words) so the picker
     // rows stay readable and unique enough at a glance.
-    static let workspaceNameAdjectives = [
-        "amber", "brisk", "calm", "clever", "cosmic", "crimson", "dapper", "eager",
-        "fuzzy", "gentle", "golden", "hidden", "jolly", "keen", "lucky", "mellow",
-        "nimble", "polar", "quiet", "rapid", "silver", "sunny", "swift", "tidy",
-        "vivid", "witty", "zesty"
-    ]
-    static let workspaceNameNouns = [
-        "otter", "falcon", "harbor", "meadow", "comet", "willow", "cedar", "ember",
-        "canyon", "lagoon", "summit", "orchard", "beacon", "delta", "grove", "pixel",
-        "quartz", "ripple", "tundra", "voyage", "cobalt", "maple", "nebula", "prairie"
-    ]
-
-
     // Shared name-entry dialog for creating (prefilled with a random name) and renaming
     // (prefilled with the current name) a workspace. Mirrors renameTerminalPane()'s
     // NSAlert + accessory NSTextField style. Returns the trimmed, length-capped value, or
@@ -4406,6 +4768,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
 
     @objc func closeOverlayAction() {
+        // Settings floating over a review panel returns to that panel rather than closing everything.
+        if dismissSettingsLayer() {
+            return
+        }
         hideOverlay()
         focusTerminal()
     }

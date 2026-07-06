@@ -9,6 +9,11 @@ html,body,#editor{height:100%;background:#1e1e1e;overflow:hidden}
   display:flex;align-items:center;justify-content:center;
   height:100%;color:#666;font-family:-apple-system,sans-serif;font-size:13px;
 }
+/* IntelliJ shows lines present on BOTH sides but changed in blue (not add-green / delete-red). Monaco
+   has no such state, so we overlay it: a whole-line blue on the modified block, a stronger blue on the
+   actually-changed tokens. Colors come from the native theme (matching the native diff pane exactly). */
+.mtm-modified-line{background-color:var(--mtm-mod-line,#2B3A52)!important;}
+.mtm-modified-token{background-color:var(--mtm-mod-token,rgba(104,151,187,0.42))!important;border-radius:2px;}
 </style>
 </head>
 <body>
@@ -17,7 +22,7 @@ html,body,#editor{height:100%;background:#1e1e1e;overflow:hidden}
 
 <script>
 'use strict';
-var _diffEditor=null,_loaded=false,_pending=null;
+var _diffEditor=null,_loaded=false,_pending=null,_fontSize=11.5;
 
 // Surface any hard failure on-screen instead of silently sitting on "Loading diff…".
 window.onerror=function(message,source,lineno,colno){
@@ -33,17 +38,295 @@ window.MonacoEnvironment={getWorkerUrl:function(){
   return 'data:text/javascript;charset=utf-8,'+encodeURIComponent('self.onmessage=function(){};');
 }};
 
+// Review layer: the native side owns hunk/file navigation (it computes the target line and the
+// "last hunk in file" pause), then tells Monaco where to place its blinking cursor. Arrow keys move
+// the cursor natively inside the read-only modified editor. Cursor moves are reported back so the
+// native side can select/deselect the inline comment on that line.
+var _reviewLine=1,_suppressCursorReport=false,_lastHunkHintNode=null;
+
 window.addEventListener('message',function(e){
   var msg=e.data;
   if(!msg||!msg.type)return;
   if(msg.type==='loadDiff')loadDiff(msg);
+  else if(msg.type==='setFontSize')setFontSize(msg.fontSize);
+  else if(msg.type==='setReviewCursor')setReviewCursor(msg.line);
+  else if(msg.type==='focusReview')focusReview();
+  else if(msg.type==='showLastHunkHint')showLastHunkHint(msg.text);
+  else if(msg.type==='setComments')renderComments(msg.comments||[],msg.theme);
 });
+
+// The comment view zone reproduces the native NativeInlineReviewCommentBox: 6px radius, panelBackground
+// fill, a 1px panelBorder that thickens to a 2px accent when the caret selects it, and a kind-colored
+// "Question" / "Change request" title above the body. Colors arrive from the native theme (setComments),
+// cached so plain re-renders (selection changes) keep them without another palette round-trip.
+var _commentZoneIds=[],_commentTheme=null;
+function renderComments(comments,theme){
+  if(theme)_commentTheme=theme;
+  var t=_commentTheme||{};
+  var bg=t.boxBackground||'#262628',border=t.boxBorder||'#3a3a3a',selBorder=t.selectedBorder||'#4a9d5b';
+  var qAccent=t.questionAccent||'#c8a24a',cAccent=t.changeAccent||'#4a9d5b',bodyColor=t.bodyText||'#e6e6e6';
+  var ed=modifiedEditor();if(!ed)return;
+  ed.changeViewZones(function(accessor){
+    _commentZoneIds.forEach(function(id){accessor.removeZone(id);});
+    _commentZoneIds=[];
+    comments.forEach(function(c){
+      var isQ=c.kind==='question';
+      var accent=isQ?qAccent:cAccent;
+      var box=document.createElement('div');
+      box.style.cssText='margin:3px 10px 8px 44px;border-radius:6px;overflow:hidden;'+
+        'background:'+bg+';border:'+(c.selected?('2px solid '+selBorder):('1px solid '+border))+';'+
+        'box-shadow:0 2px 8px rgba(0,0,0,0.28);font:13px -apple-system,sans-serif;';
+      var head=document.createElement('div');
+      head.style.cssText='padding:7px 10px 0;font:600 12px -apple-system,sans-serif;color:'+accent+';';
+      head.textContent=isQ?'Question':'Change request';
+      var body=document.createElement('div');
+      body.style.cssText='padding:3px 10px 8px;white-space:pre-wrap;line-height:1.42;color:'+bodyColor+';';
+      body.textContent=c.text||'';
+      box.appendChild(head);box.appendChild(body);
+      var wrap=document.createElement('div');wrap.appendChild(box);
+      var id=accessor.addZone({
+        afterLineNumber:Math.max(0,+c.line||1),
+        heightInPx:Math.max(48,30+(String(c.text||'').split('\n').length)*18),
+        domNode:wrap
+      });
+      _commentZoneIds.push(id);
+    });
+  });
+}
+
+function postToNative(name,payload){
+  try{
+    if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers[name]){
+      window.webkit.messageHandlers[name].postMessage(payload||{});
+    }
+  }catch(_){}
+}
+
+function modifiedEditor(){return _diffEditor?_diffEditor.getModifiedEditor():null;}
+
+// Code-navigation shortcuts (Cmd+B find usages, Cmd+↓ go to declaration) read the identifier under
+// whichever split pane holds focus, then bridge it to the native side. Monaco owns keyboard focus so
+// these never reach the app's Swift key monitor — they must be caught here.
+function focusedDiffEditor(){
+  if(!_diffEditor)return null;
+  var o=_diffEditor.getOriginalEditor(),m=_diffEditor.getModifiedEditor();
+  if(o&&o.hasTextFocus&&o.hasTextFocus())return o;
+  return m;
+}
+function wordAtCursor(ed){
+  if(!ed)return '';
+  var pos=ed.getPosition();if(!pos)return '';
+  var model=ed.getModel();if(!model)return '';
+  var w=model.getWordAtPosition(pos);
+  return (w&&w.word)?w.word:'';
+}
+
+function setReviewCursor(line){
+  // Remember the target even if the editor hasn't finished its async load yet; it's re-applied from
+  // the load callback so the very first navigation isn't dropped.
+  _reviewLine=Math.max(1,+line||1);
+  var ed=modifiedEditor();if(!ed)return;
+  _suppressCursorReport=true;
+  ed.setPosition({lineNumber:_reviewLine,column:1});
+  ed.revealLineInCenter(_reviewLine);
+  ed.focus();
+  _suppressCursorReport=false;
+}
+
+function focusReview(){
+  var ed=modifiedEditor();if(!ed)return;
+  ed.focus();
+  ed.setPosition({lineNumber:_reviewLine,column:1});
+}
+
+function showLastHunkHint(text){
+  var host=document.getElementById('editor');if(!host)return;
+  if(_lastHunkHintNode&&_lastHunkHintNode.parentNode)_lastHunkHintNode.parentNode.removeChild(_lastHunkHintNode);
+  var ed=modifiedEditor();
+  var top='50%';
+  if(ed){
+    try{
+      var t=ed.getTopForLineNumber(_reviewLine);
+      var st=ed.getScrollTop();
+      top=Math.max(8,(t-st)+ed.getOption(monaco.editor.EditorOption.lineHeight)+4)+'px';
+    }catch(_){}
+  }
+  var n=document.createElement('div');
+  n.textContent=text||'이 파일의 마지막 변경입니다 · F7 한 번 더 → 다음 파일';
+  n.style.cssText='position:absolute;left:50%;top:'+top+';transform:translateX(-50%);'+
+    'background:rgba(30,30,30,0.94);color:#e6e6e6;border:1px solid rgba(255,255,255,0.12);'+
+    'border-radius:9px;padding:7px 13px;font:600 12px -apple-system,sans-serif;'+
+    'box-shadow:0 6px 20px rgba(0,0,0,0.4);z-index:50;pointer-events:none;'+
+    'opacity:0;transition:opacity 0.18s ease';
+  host.appendChild(n);
+  _lastHunkHintNode=n;
+  requestAnimationFrame(function(){n.style.opacity='1';});
+  setTimeout(function(){
+    if(n!==_lastHunkHintNode)return;
+    n.style.opacity='0';
+    setTimeout(function(){if(n.parentNode)n.parentNode.removeChild(n);if(n===_lastHunkHintNode)_lastHunkHintNode=null;},220);
+  },1900);
+}
+
+function setFontSize(size){
+  size=+size; if(!size)return;
+  _fontSize=size;
+  if(_diffEditor)_diffEditor.updateOptions({fontSize:_fontSize});
+}
+
+// IntelliJ Darcula, matching the native panes' syntax + diff palette so the hybrid diff reads the same
+// as the rest of the app (keyword #CC7832, string #6A8759, number #6897BB, comment #808080, annotation
+// #BBB529 on #1A1A1A / #A9B7C6; diff add #294436, delete #4A2D2D — green/red backgrounds).
+var _themeDefined=false;
+function defineDarculaTheme(){
+  if(_themeDefined||typeof monaco==='undefined')return;
+  _themeDefined=true;
+  monaco.editor.defineTheme('momenterm-darcula',{
+    base:'vs-dark',inherit:true,
+    rules:[
+      {token:'',foreground:'A9B7C6'},
+      {token:'keyword',foreground:'CC7832'},
+      {token:'keyword.control',foreground:'CC7832'},
+      {token:'storage',foreground:'CC7832'},
+      {token:'storage.type',foreground:'CC7832'},
+      {token:'keyword.operator',foreground:'A9B7C6'},
+      {token:'string',foreground:'6A8759'},
+      {token:'string.escape',foreground:'CC7832'},
+      {token:'number',foreground:'6897BB'},
+      {token:'constant',foreground:'6897BB'},
+      {token:'constant.numeric',foreground:'6897BB'},
+      {token:'constant.language',foreground:'CC7832'},
+      {token:'comment',foreground:'808080',fontStyle:'italic'},
+      {token:'annotation',foreground:'BBB529'},
+      {token:'metatag',foreground:'BBB529'},
+      {token:'meta.tag',foreground:'BBB529'},
+      {token:'attribute.name',foreground:'BBB529'},
+      {token:'attribute.value',foreground:'6A8759'},
+      {token:'tag',foreground:'CC7832'},
+      {token:'type',foreground:'A9B7C6'},
+      {token:'type.identifier',foreground:'A9B7C6'},
+      {token:'identifier',foreground:'A9B7C6'},
+      {token:'delimiter',foreground:'A9B7C6'},
+      {token:'function',foreground:'FFC66D'},
+      {token:'variable',foreground:'A9B7C6'}
+    ],
+    colors:{
+      'editor.background':'#1A1A1A',
+      'editor.foreground':'#A9B7C6',
+      'editorLineNumber.foreground':'#606366',
+      'editorLineNumber.activeForeground':'#A4A3A3',
+      'editorCursor.foreground':'#FFD369',
+      'editor.selectionBackground':'#214283',
+      'editor.lineHighlightBackground':'#26262A',
+      'editorGutter.background':'#1A1A1A',
+      'diffEditor.insertedTextBackground':'#29443655',
+      'diffEditor.removedTextBackground':'#4A2D2D66',
+      'diffEditor.insertedLineBackground':'#2944364D',
+      'diffEditor.removedLineBackground':'#4A2D2D4D',
+      'diffEditor.diagonalFill':'#242424',
+      'diffEditorGutter.insertedLineBackground':'#2944364D',
+      'diffEditorGutter.removedLineBackground':'#4A2D2D4D'
+    }
+  });
+}
+
+function hexToRgba(hex,a){
+  hex=(hex||'').replace('#','');
+  if(hex.length!==6)return 'rgba(104,151,187,'+a+')';
+  var r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
+  if(isNaN(r)||isNaN(g)||isNaN(b))return 'rgba(104,151,187,'+a+')';
+  return 'rgba('+r+','+g+','+b+','+a+')';
+}
+// The blue "modified" background/token colors come from the native theme so the hybrid diff matches
+// the native diff pane. Applied as CSS variables the decoration classes read.
+function applyModifiedDiffColors(msg){
+  var root=document.documentElement.style;
+  root.setProperty('--mtm-mod-line',msg.modifiedLineBackground||'#2B3A52');
+  root.setProperty('--mtm-mod-token',hexToRgba(msg.modifiedTokenBackground||'#6897BB',0.42));
+}
+// Reclassify Monaco's add(green)/delete(red) diff into IntelliJ's add/delete/modify: a block that
+// changed on BOTH sides is "modified" → paint it blue on each pane, with a stronger blue on the
+// changed tokens. Pure additions/deletions keep Monaco's green/red. Recomputed on every diff update.
+var _origDecorations=[],_modDecorations=[],_modToOrig={};
+// IntelliJ shows a SINGLE shared gutter in the center with BOTH the original and new line numbers.
+// Monaco side-by-side puts a separate gutter on the far left of each pane and exposes no line-mapping
+// API, so we reconstruct modified→original from getLineChanges() (a running delta of added/deleted lines
+// between change blocks), then render "orig  new" in the modified pane's gutter — which sits at the
+// center divider — and turn the original pane's far-left gutter off. Added lines show only the new
+// number; if the map isn't ready the gutter degrades safely to new-number-only.
+function buildModOrigMap(){
+  _modToOrig={};
+  if(!_diffEditor)return;
+  var mModel=_diffEditor.getModifiedEditor().getModel();if(!mModel)return;
+  var modCount=mModel.getLineCount();
+  var changes=(_diffEditor.getLineChanges()||[]).slice().sort(function(a,b){return a.modifiedStartLineNumber-b.modifiedStartLineNumber;});
+  for(var mln=1;mln<=modCount;mln++){
+    var delta=0,inside=null;
+    for(var i=0;i<changes.length;i++){
+      var ch=changes[i];
+      var origCount=(ch.originalEndLineNumber>0)?(ch.originalEndLineNumber-ch.originalStartLineNumber+1):0;
+      var modCnt=(ch.modifiedEndLineNumber>0)?(ch.modifiedEndLineNumber-ch.modifiedStartLineNumber+1):0;
+      if(ch.modifiedEndLineNumber===0){                 // pure deletion, anchored after modifiedStartLineNumber
+        if(mln>ch.modifiedStartLineNumber)delta+=origCount;
+      }else if(mln>ch.modifiedEndLineNumber){           // change fully above this line
+        delta+=(origCount-modCnt);
+      }else if(mln>=ch.modifiedStartLineNumber){        // this line is inside the change block
+        inside=ch;break;
+      }
+    }
+    if(inside){
+      if(inside.originalEndLineNumber>0){
+        var o=inside.originalStartLineNumber+(mln-inside.modifiedStartLineNumber);
+        _modToOrig[mln]=(o<=inside.originalEndLineNumber)?o:null;   // beyond original block = added line
+      }else _modToOrig[mln]=null;                        // pure addition
+    }else _modToOrig[mln]=mln+delta;                     // context line
+  }
+}
+function installCenterLineNumbers(){
+  if(!_diffEditor)return;
+  try{
+    _diffEditor.getOriginalEditor().updateOptions({lineNumbers:'off'});
+    // Fresh closure each call so Monaco re-renders the gutter after the map is rebuilt.
+    var fn=function(mln){var o=_modToOrig[mln];return (o===undefined||o===null)?String(mln):(o+'  '+mln);};
+    _diffEditor.getModifiedEditor().updateOptions({lineNumbers:fn,lineNumbersMinChars:9});
+  }catch(_){}
+}
+function onDiffUpdated(){
+  applyModifiedLineDecorations();
+  buildModOrigMap();
+  installCenterLineNumbers();
+}
+function applyModifiedLineDecorations(){
+  if(!_diffEditor||typeof monaco==='undefined')return;
+  var changes=_diffEditor.getLineChanges()||[];
+  var origDecos=[],modDecos=[];
+  changes.forEach(function(ch){
+    if(!(ch.originalEndLineNumber>0&&ch.modifiedEndLineNumber>0))return; // pure add/delete: leave green/red
+    origDecos.push({range:new monaco.Range(ch.originalStartLineNumber,1,ch.originalEndLineNumber,1),
+      options:{isWholeLine:true,className:'mtm-modified-line'}});
+    modDecos.push({range:new monaco.Range(ch.modifiedStartLineNumber,1,ch.modifiedEndLineNumber,1),
+      options:{isWholeLine:true,className:'mtm-modified-line'}});
+    (ch.charChanges||[]).forEach(function(cc){
+      if(cc.originalEndColumn>cc.originalStartColumn)
+        origDecos.push({range:new monaco.Range(cc.originalStartLineNumber,cc.originalStartColumn,cc.originalEndLineNumber,cc.originalEndColumn),
+          options:{className:'mtm-modified-token'}});
+      if(cc.modifiedEndColumn>cc.modifiedStartColumn)
+        modDecos.push({range:new monaco.Range(cc.modifiedStartLineNumber,cc.modifiedStartColumn,cc.modifiedEndLineNumber,cc.modifiedEndColumn),
+          options:{className:'mtm-modified-token'}});
+    });
+  });
+  var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
+  _origDecorations=orig.deltaDecorations(_origDecorations,origDecos);
+  _modDecorations=mod.deltaDecorations(_modDecorations,modDecos);
+}
 
 function loadDiff(msg){
   var original=msg.original||'';
   var modified=msg.modified||'';
   var lang=(msg.language||'').toLowerCase();
-  if(_loaded){updateDiff(original,modified,lang);return;}
+  if(msg.fontSize)_fontSize=+msg.fontSize;
+  applyModifiedDiffColors(msg);
+  if(_loaded){_diffEditor.updateOptions({fontSize:_fontSize});updateDiff(original,modified,lang);return;}
   _pending={original:original,modified:modified,lang:lang};
   if(document.getElementById('_monacoLoader'))return;
   var s=document.createElement('script');
@@ -57,23 +340,33 @@ function loadDiff(msg){
     require.config({paths:{vs:'./vs'}});
     require(['vs/editor/editor.main'],function(){
       _loaded=true;
+      defineDarculaTheme();
       document.getElementById('loading').style.display='none';
       document.getElementById('editor').style.display='block';
       var p=_pending;_pending=null;
       if(p){
         _diffEditor=monaco.editor.createDiffEditor(document.getElementById('editor'),{
-          theme:'vs-dark',readOnly:true,
+          theme:'momenterm-darcula',readOnly:true,
           minimap:{enabled:false},scrollBeyondLastLine:false,
-          fontSize:11.5,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
+          fontSize:_fontSize,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
           renderSideBySide:true,automaticLayout:true,
           contextmenu:false,
           diffWordWrap:'off',
+          // Review cursor: a read-only editor still shows and blinks a caret when focused, and arrow
+          // keys move it — that's the diff-view cursor the native side positions on each hunk.
+          cursorBlinking:'blink',cursorStyle:'line',
           scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}
         });
         _diffEditor.setModel({
           original:monaco.editor.createModel(p.original,mapLang(p.lang)),
           modified:monaco.editor.createModel(p.modified,mapLang(p.lang))
         });
+        wireReviewCursor();
+        // onDidUpdateDiff fires after each diff computation (initial load + every setModel), which is
+        // the only point getLineChanges() is valid — repaint the blue "modified" overlay + rebuild the
+        // center line-number gutter there.
+        _diffEditor.onDidUpdateDiff(onDiffUpdated);
+        setReviewCursor(_reviewLine);
       }
     },function(err){
       var el=document.getElementById('loading');
@@ -92,7 +385,57 @@ function updateDiff(original,modified,lang){
   var newModified=monaco.editor.createModel(modified,mLang);
   _diffEditor.setModel({original:newOriginal,modified:newModified});
   if(oldModel){oldModel.original.dispose();oldModel.modified.dispose();}
+  wireReviewCursor();
 }
+
+var _cursorWired=false;
+function wireReviewCursor(){
+  var ed=modifiedEditor();if(!ed||_cursorWired)return;
+  _cursorWired=true;
+  ed.onDidChangeCursorPosition(function(ev){
+    _reviewLine=ev.position.lineNumber;
+    if(_suppressCursorReport)return;
+    postToNative('reviewCursorMoved',{line:_reviewLine});
+  });
+}
+
+// Monaco holds keyboard focus for the blinking cursor, so review shortcuts that the native side owns
+// (hunk/file navigation, leaving comments, deleting the selected comment) are forwarded from here.
+// Arrow keys are intentionally left to Monaco (native cursor movement, reported via onDidChangeCursorPosition).
+document.addEventListener('keydown',function(e){
+  if(!_diffEditor)return;
+  if(e.metaKey&&(e.key==='b'||e.key==='B')){         // Cmd+B → find usages of the symbol under the cursor
+    var wb=wordAtCursor(focusedDiffEditor());
+    if(wb)postToNative('findUsages',{word:wb});
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.metaKey&&(e.key==='ArrowDown'||e.keyCode===40)){ // Cmd+↓ → go to the declaration of the symbol
+    var wd=wordAtCursor(focusedDiffEditor());
+    if(wd)postToNative('goToDeclaration',{word:wd});
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.key==='Tab'&&e.shiftKey){                     // Shift+Tab → switch between the split panes
+    var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
+    if(orig&&orig.hasTextFocus()){mod.focus();}else{orig.focus();}
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.key==='F7'||e.keyCode===118){                 // F7 / Shift+F7 → next / previous hunk
+    postToNative('reviewNavigate',{delta:e.shiftKey?-1:1});
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.shiftKey&&(e.key==='?'||e.key==='/')){         // Shift+? → question comment
+    postToNative('reviewComment',{kind:'question',line:_reviewLine});
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.shiftKey&&(e.key==='>'||e.key==='.')){         // Shift+> → change/fix comment
+    postToNative('reviewComment',{kind:'change',line:_reviewLine});
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.key==='Backspace'){                            // delete the comment selected at the cursor
+    postToNative('reviewDeleteComment',{line:_reviewLine});
+    e.preventDefault();e.stopPropagation();return;
+  }
+},true);
 
 var LANG={
   swift:'swift',js:'javascript',javascript:'javascript',jsx:'javascript',

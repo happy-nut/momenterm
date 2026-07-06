@@ -588,13 +588,16 @@ extension MainWindowController {
         guard overlayMode == .hidden,
               overlayView.isHidden,
               let label = workspaceToastLabel,
-              label.stringValue == "Maximum terminal panes reached."
+              label.stringValue == "Maximum terminal panes reached.",
+              let container = workspaceToastContainer
         else {
             return false
         }
-        let frame = label.frame
-        return frame.height <= 34
-            && frame.width <= 280
+        // The toast is now a blur pill (icon + label); assert the whole card stays compact and sits
+        // to the right of the rail.
+        let frame = container.frame
+        return frame.height <= 44
+            && frame.width <= 340
             && frame.minX >= railView.frame.maxX
     }
 
@@ -1177,6 +1180,23 @@ extension MainWindowController {
             && overlayDiffSplitView.isHidden
             && overlaySettingsStack.arrangedSubviews.count >= 2
             && settingsOverlayMatchesPreferencesDesignForSmokeTest()
+    }
+
+    // Layered settings: opening Settings while a review panel is up floats it on top (remembering the
+    // panel to return to) and closing Settings returns to that panel instead of the terminal, dropping
+    // the underlay snapshot. Verifies the return-mode tracking + restore (the snapshot image itself is
+    // best-effort and depends on live rendering, so it isn't asserted here).
+    func settingsLayersOverReviewForSmokeTest() -> Bool {
+        showOverlay(.changes)
+        guard overlayMode == .changes else {
+            return false
+        }
+        openSettings()
+        guard overlayMode == .settings, settingsReturnMode == .changes else {
+            return false
+        }
+        closeOverlayAction()
+        return overlayMode == .changes && settingsUnderlayImageView.isHidden
     }
 
     func settingsOverlayMatchesPreferencesDesignForSmokeTest() -> Bool {
@@ -2383,14 +2403,6 @@ extension MainWindowController {
             && quickOpenMode == .content
     }
 
-    func markdownPreviewIsRenderedForSmokeTest() -> Bool {
-        // Markdown is now rendered in the JS hybrid WKWebView (code-viewer.html with marked.js).
-        // We can't synchronously read the rendered HTML; verify the correct pane is visible.
-        return !fileHybridView.isHidden
-            && sourcePreviewScrollView.isHidden
-            && overlayDiffSplitView.isHidden
-    }
-
     func imagePreviewIsVisibleForSmokeTest() -> Bool {
         !sourcePreviewScrollView.isHidden
             && overlayDiffSplitView.isHidden
@@ -2399,12 +2411,6 @@ extension MainWindowController {
             && sourcePreviewImageView.frame.height > 0
     }
 
-    func csvPreviewIsRenderedForSmokeTest() -> Bool {
-        // CSV/TSV is now rendered in the JS hybrid WKWebView (code-viewer.html).
-        return !fileHybridView.isHidden
-            && sourcePreviewScrollView.isHidden
-            && overlayDiffSplitView.isHidden
-    }
     func overlayTitleForSmokeTest() -> String {
         overlayTitleLabel.stringValue
     }
@@ -2955,34 +2961,89 @@ extension MainWindowController {
     }
 
     // Regression hook: simulates a background rail repaint (workspace-status refresh or agent OSC
-    // notification) landing while an inline rename is open. With the guard in rebuildWorkspaceButtons
-    // this must be a no-op that leaves the focused rename field intact; before the fix it tore the
-    // field out of the view tree and committed early, snapping the row back to a static label.
+    // notification) landing while an inline rename is open. With the teardown-commit suppression in
+    // rebuildWorkspaceButtons this must leave the rename field (and edit mode) intact; before the fix
+    // it tore the field out of the view tree and committed early, snapping the row to a static label.
     func simulateBackgroundRailRepaintForSmokeTest() {
         rebuildWorkspaceButtons()
     }
 
-    // Identifiers (workspace ids) of the ✕ close buttons currently rendered in the expanded rail.
-    // Identified by their tooltip so the check exercises the real rendered affordance.
-    func expandedWorkspaceCloseButtonIdsForSmokeTest() -> [String] {
-        collectWorkspaceCloseButtons(in: workspaceStack).compactMap { $0.identifier?.rawValue }
-    }
+    // MARK: - Workspace-lifecycle smoke hooks (US-1..US-8)
 
-    // Invokes the real ✕ button target/action for the given workspace id, exercising the full
-    // close-button wiring (including the private handler) end to end.
-    @discardableResult
-    func triggerWorkspaceCloseButtonForSmokeTest(id: String) -> Bool {
-        guard let button = collectWorkspaceCloseButtons(in: workspaceStack).first(where: { $0.identifier?.rawValue == id }),
-              let action = button.action else {
-            return false
+    // Forces currentTerminalDirectory() so the headless smoke can drive create/split from a chosen
+    // "focused terminal" pwd without a live shell reporting one.
+    func setCurrentTerminalDirectoryOverrideForSmokeTest(_ url: URL?) {
+        currentTerminalDirectoryOverrideForSmokeTest = url?.standardizedFileURL
+    }
+    // US-1/US-2: the real Cmd+N create action (guards on overlay visibility, creates from PWD).
+    func invokeWorkspaceShortcutForSmokeTest() {
+        workspaceShortcut()
+    }
+    // US-7: the duplicate-aware create-from-terminal flow (routes through the worktree confirm).
+    func createWorkspaceFromActiveTerminalForSmokeTest() {
+        createWorkspaceFromActiveTerminal(revealReview: false)
+    }
+    // overlayIsHiddenForSmokeTest() already exists above (reused for the US-2 create guard).
+    func hideOverlayForSmokeTest() {
+        hideOverlay()
+    }
+    // US-3/4: stamp the active pane's resolved git root and recompute the workspace aggregation,
+    // exercising the same path a poll tick uses (minus the git subprocess).
+    func setActivePaneGitRootForSmokeTest(_ root: String?) {
+        activeSession()?.gitRoot = root
+        updateWorkspaceGitDetection()
+    }
+    func workspaceDetectedGitRootForSmokeTest(id: String) -> String? {
+        workspace(forId: id)?.detectedGitRoot
+    }
+    func workspaceRailGlyphSymbolForSmokeTest(id: String) -> String? {
+        guard let workspace = workspace(forId: id) else {
+            return nil
         }
-        return NSApp.sendAction(action, to: button.target, from: button)
+        return workspace.detectedGitRoot != nil ? "arrow.triangle.branch" : "circle.fill"
+    }
+    // The ACTUAL rendered select-button tooltip for a workspace row (its ✕ button shares the id but
+    // lives as a subview, so match only the arranged row button) — verifies US-3's on-hover path.
+    func workspaceRailTooltipForSmokeTest(id: String) -> String? {
+        workspaceStack.arrangedSubviews
+            .compactMap { $0 as? NSButton }
+            .first { $0.identifier?.rawValue == id }?
+            .toolTip
+    }
+    // US-6: cwd of the most recently created pane (the split's new pane).
+    func latestTerminalPaneCwdForSmokeTest() -> String? {
+        sessions.last?.cwd.standardizedFileURL.path
+    }
+    func splitTerminalPaneForSmokeTest() {
+        splitTerminalPane()
+    }
+    // US-5: the root the review/diff actually builds against for the active workspace.
+    func reviewBuildRootForSmokeTest() -> String? {
+        guard let root = root else {
+            return nil
+        }
+        return reviewBuildRoot(for: root, detectedGitRoot: activeWorkspaceDetectedGitRoot()).path
+    }
+    // US-7: bypass the modal worktree confirm with a fixed choice ("worktree"/"sibling"/"cancel").
+    func setDuplicateWorkspaceChoiceForSmokeTest(_ choice: String) {
+        switch choice {
+        case "worktree":
+            duplicateWorkspaceChoiceOverrideForSmokeTest = .worktree
+        case "sibling":
+            duplicateWorkspaceChoiceOverrideForSmokeTest = .sibling
+        case "cancel":
+            duplicateWorkspaceChoiceOverrideForSmokeTest = .cancel
+        default:
+            duplicateWorkspaceChoiceOverrideForSmokeTest = nil
+        }
     }
 
-    // Mirrors the Backspace case in handleWorkspaceRailKey: removes the highlighted workspace.
-    @discardableResult
-    func removeSelectedWorkspaceViaBackspaceForSmokeTest() -> Bool {
-        forgetSelectedWorkspacePickerItem()
+    // Identifiers (workspace ids) of the ✕ close buttons currently rendered AND wired (target+action)
+    // in the expanded rail. Identified by their tooltip so it exercises the real rendered affordance.
+    func expandedWorkspaceCloseButtonIdsForSmokeTest() -> [String] {
+        collectWorkspaceCloseButtons(in: workspaceStack)
+            .filter { $0.target != nil && $0.action != nil }
+            .compactMap { $0.identifier?.rawValue }
     }
 
     private func collectWorkspaceCloseButtons(in view: NSView) -> [NSButton] {
