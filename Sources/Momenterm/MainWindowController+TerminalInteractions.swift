@@ -59,6 +59,10 @@ extension MainWindowController {
         writeToActiveTerminal(text)
     }
     func cycleSourceTab(delta: Int) {
+        if overlayMode == .files, !openFileTabs.isEmpty {
+            _ = cycleOpenFileTab(delta: delta)
+            return
+        }
         guard let document = currentDocument, !document.sourceFiles.isEmpty else {
             openFilesView()
             return
@@ -67,6 +71,10 @@ extension MainWindowController {
         showOverlay(.files)
     }
     func closeTab() {
+        if overlayMode == .files, !overlayView.isHidden {
+            _ = closeActiveOpenFileTab()
+            return
+        }
         guard let tab = activeTab() else {
             return
         }

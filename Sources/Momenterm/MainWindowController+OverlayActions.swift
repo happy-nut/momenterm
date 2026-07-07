@@ -76,6 +76,12 @@ extension MainWindowController {
             selectedDiffHunkIndex = 0
             awaitingNextFileAfterLastHunk = false
             populateChangesOverlay()
+        } else if value.hasPrefix("file-tab-close:") {
+            let path = String(value.dropFirst("file-tab-close:".count))
+            _ = closeOpenFileTab(path: path)
+        } else if value.hasPrefix("file-tab:") {
+            let path = String(value.dropFirst("file-tab:".count))
+            _ = selectOpenFileTab(path: path, focus: false)
         } else if value.hasPrefix("source:"), let index = Int(value.dropFirst(7)) {
             fileTreeModel.selectedIdentifier = value
             // A "source:" row can be a real folder entry (non-git shallow listing); clicking a folder

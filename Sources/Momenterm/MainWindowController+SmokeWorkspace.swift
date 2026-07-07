@@ -303,6 +303,44 @@ extension MainWindowController {
             && tooltips.contains("Files\nShortcut: Cmd+1")
     }
 
+    func setWorkspaceShortcutHintsVisibleForSmokeTest(_ visible: Bool) {
+        setWorkspaceShortcutHintsVisible(visible)
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    func workspaceShortcutHintTextForSmokeTest() -> [String] {
+        workspaceShortcutHintViews.compactMap { view in
+            view.subviews.compactMap { ($0 as? NSTextField)?.stringValue }.first
+        }
+    }
+
+    func workspaceShortcutHintsAreCollapsedRailBadgesForSmokeTest() -> Bool {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        let expectedCount = min(workspaces.count, 9)
+        let labels = workspaceShortcutHintTextForSmokeTest()
+        let expectedLabels = (0..<expectedCount).map { workspaceShortcutHintText(index: $0) }
+        let tooltips = workspaceShortcutHintViews.map { $0.toolTip ?? "" }
+        return !workspaceRailExpanded
+            && workspaceShortcutHintViews.count == expectedCount
+            && labels == expectedLabels
+            && tooltips == expectedLabels
+            && workspaceShortcutHintViews.allSatisfy { view in
+                view.superview === rootView
+                    && view.frame.minX >= railView.frame.maxX - 1
+                    && view.frame.height >= 18
+                    && view.frame.width >= 40
+            }
+    }
+
+    func workspaceShortcutHintDiagnosticsForSmokeTest() -> String {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        let parts = workspaceShortcutHintViews.enumerated().map { index, view in
+            let text = view.subviews.compactMap { ($0 as? NSTextField)?.stringValue }.first ?? ""
+            return "\(index):\(text) tooltip=\(view.toolTip ?? "") frame=\(view.frame)"
+        }
+        return "expanded=\(workspaceRailExpanded) rail=\(railView.frame) hints=[\(parts.joined(separator: ", "))]"
+    }
+
     func selectedWorkspacePickerPathForSmokeTest() -> String? {
         guard workspaces.indices.contains(selectedWorkspacePickerIndex) else {
             return nil

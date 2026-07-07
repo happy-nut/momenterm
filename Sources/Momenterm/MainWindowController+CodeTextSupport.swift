@@ -101,13 +101,18 @@ extension MainWindowController {
             ruler.needsDisplay = true
             scroll.hasVerticalRuler = true
             scroll.rulersVisible = true
+            scroll.tile()
+            scroll.needsDisplay = true
+            scroll.contentView.needsDisplay = true
         } else if scroll.verticalRulerView is SourceLineNumberRulerView {
             scroll.hasVerticalRuler = false
             scroll.rulersVisible = false
             scroll.verticalRulerView = nil
+            scroll.tile()
         } else {
             scroll.hasVerticalRuler = false
             scroll.rulersVisible = false
+            scroll.tile()
         }
     }
 

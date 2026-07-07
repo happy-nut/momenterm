@@ -237,6 +237,13 @@ extension MainWindowController {
             && !settingsUnderlayImageView.isHidden
     }
 
+    func quickOpenIsLayeredOverFilesForSmokeTest(title: String) -> Bool {
+        overlayMode == .quickOpen
+            && quickOpenReturnMode == .files
+            && overlayTitleLabel.stringValue == title
+            && !settingsUnderlayImageView.isHidden
+    }
+
     func findInFilesPreviewHasSyntaxForSmokeTest(containing needle: String) -> Bool {
         guard overlayMode == .quickOpen, quickOpenMode == .content,
               codePane.oldPaneString.contains(needle),

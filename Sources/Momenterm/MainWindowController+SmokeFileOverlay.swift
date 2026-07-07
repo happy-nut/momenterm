@@ -168,6 +168,14 @@ extension MainWindowController {
         fileListingLoadCount
     }
 
+    func fileOverlayPopulateCountForSmokeTest() -> Int {
+        fileOverlayPopulateCount
+    }
+
+    func hiddenFilesOverlayRestoreCountForSmokeTest() -> Int {
+        hiddenFilesOverlayRestoreCount
+    }
+
     func selectedSourcePathForSmokeTest() -> String? {
         guard let document = activeFilesDocument(),
               document.sourceFiles.indices.contains(selectedSourceIndex)
@@ -175,6 +183,52 @@ extension MainWindowController {
             return nil
         }
         return document.sourceFiles[selectedSourceIndex].path
+    }
+
+    func openFileTabsForSmokeTest() -> [String] {
+        openFileTabs
+    }
+
+    func activeOpenFileTabForSmokeTest() -> String? {
+        activeOpenFileTabPath
+    }
+
+    func fileTabBarIsVisibleForSmokeTest() -> Bool {
+        overlayMode == .files
+            && !fileTabBarView.isHidden
+            && (fileTabBarHeightConstraint?.constant ?? 0) > 0
+    }
+
+    func closeActiveOpenFileTabForSmokeTest() -> Bool {
+        closeActiveOpenFileTab()
+    }
+
+    func cycleOpenFileTabForSmokeTest(delta: Int) -> Bool {
+        cycleOpenFileTab(delta: delta)
+    }
+
+    func clickOpenFileTabForSmokeTest(path: String) -> Bool {
+        guard overlayMode == .files,
+              let contentView = window?.contentView,
+              let button = collectButtons(in: fileTabStack).first(where: {
+                  $0.identifier?.rawValue == "file-tab:\(path)"
+              })
+        else {
+            return false
+        }
+        window?.makeKeyAndOrderFront(nil)
+        contentView.layoutSubtreeIfNeeded()
+        fileTabStack.layoutSubtreeIfNeeded()
+        let center = NSPoint(x: button.bounds.midX, y: button.bounds.midY)
+        let pointInContent = button.convert(center, to: contentView)
+        let hit = contentView.hitTest(pointInContent)
+        guard hit === button || (hit?.isDescendant(of: button) ?? false),
+              button.acceptsFirstMouse(for: nil) else {
+            return false
+        }
+        button.performClick(nil)
+        contentView.layoutSubtreeIfNeeded()
+        return activeOpenFileTabPath == path
     }
 
     // Path of the currently highlighted tree row (file *or* folder), unlike selectedSourcePath which
@@ -320,6 +374,10 @@ extension MainWindowController {
         overlayMode == .files && firstResponderIsOrDescends(from: overlaySidebarScrollView)
     }
 
+    func focusFileSidebarForSmokeTest() {
+        focusFileSidebar()
+    }
+
     func fileOverlayPreviewIsFirstResponderForSmokeTest() -> Bool {
         guard overlayMode == .files else { return false }
         if !fileHybridView.isHidden {
@@ -388,6 +446,11 @@ extension MainWindowController {
             return -1
         }
         guard codePane.isOldPaneFirstResponder(in: window) else { return -1 }
+        return lineNumber(in: codePane.oldPaneString, location: codePane.oldPaneSelectionLocation)
+    }
+
+    func fileOverlayPreviewSelectionLineForSmokeTest() -> Int {
+        guard overlayMode == .files else { return -1 }
         return lineNumber(in: codePane.oldPaneString, location: codePane.oldPaneSelectionLocation)
     }
 

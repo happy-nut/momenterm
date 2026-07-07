@@ -337,6 +337,14 @@ function editorWordAtCursor(){
 // Code-navigation shortcuts on the raw source editor (Cmd+B find usages, Cmd+↓ go to declaration).
 // Only fire when Monaco holds focus (raw/side modes); the native key monitor covers the other panes.
 document.addEventListener('keydown',function(e){
+  if(e.altKey&&!e.metaKey&&!e.ctrlKey&&e.key==='Tab'){
+    postToNative('cycleFileTab',{delta:e.shiftKey?-1:1});
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(e.metaKey&&e.shiftKey&&!e.altKey&&!e.ctrlKey&&(e.key==='ArrowLeft'||e.key==='ArrowRight')){
+    postToNative('cycleFileTab',{delta:e.key==='ArrowLeft'?-1:1});
+    e.preventDefault();e.stopPropagation();return;
+  }
   if(!_editor||!_editor.hasTextFocus||!_editor.hasTextFocus())return;
   if(e.metaKey&&(e.key==='b'||e.key==='B')){
     var wb=editorWordAtCursor();

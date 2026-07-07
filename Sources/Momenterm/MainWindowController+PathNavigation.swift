@@ -201,6 +201,9 @@ extension MainWindowController {
             guard !files.isEmpty else { return nil }
             return files.indices.contains(selectedDiffIndex) ? files[selectedDiffIndex].displayPath : files.first?.displayPath
         case .files:
+            if let activeOpenFileTabPath {
+                return activeOpenFileTabPath
+            }
             guard let document = activeFilesDocument() else { return nil }
             return document.sourceFiles.indices.contains(selectedSourceIndex) ? document.sourceFiles[selectedSourceIndex].path : document.sourceFiles.first?.path
         case .quickOpen:

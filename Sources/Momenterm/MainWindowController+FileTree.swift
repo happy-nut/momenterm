@@ -8,6 +8,7 @@ extension MainWindowController {
         }
     }
     func populateFilesOverlay() {
+        fileOverlayPopulateCount += 1
         resetOverlaySidebar()
         if isLoadingFileListing && fileListingDocument == nil {
             overlaySubtitleLabel.stringValue = "Loading"
@@ -32,11 +33,16 @@ extension MainWindowController {
         overlaySubtitleLabel.stringValue = "\(document.sourceFiles.count) source files"
         guard !document.sourceFiles.isEmpty else {
             addSidebarMessage("No files found")
+            clearOpenFileTabs()
             codePane.setOldString("")
             codePane.setNewString("")
             return
         }
         selectedSourceIndex = min(selectedSourceIndex, document.sourceFiles.count - 1)
+        if let activeOpenFileTabPath,
+           let activeIndex = document.sourceFiles.firstIndex(where: { $0.path == activeOpenFileTabPath }) {
+            selectedSourceIndex = activeIndex
+        }
         var rows = fileTreeModel.buildRows(for: document.sourceFiles)
         // Resolve the selected row: keep the current selection when it is still visible, otherwise
         // fall back to the selected file (when its row survived the collapse filter) or the first
@@ -51,16 +57,27 @@ extension MainWindowController {
         for row in fileTreeModel.visibleRows {
             overlaySidebarStack.addArrangedSubview(fileTreeRowButton(row))
         }
-        // The code pane reflects the last opened file (selectedSourceIndex), never the tree cursor, so
-        // rebuilding the sidebar can't yank it onto a folder or a merely-highlighted row. A folder or an
-        // out-of-range index clears the pane so stale content (e.g. "Loading file list...") doesn't linger.
-        // Initial load (selectedIdentifier == nil) falls through without touching the pane.
+        if let activeOpenFileTabPath,
+           !document.sourceFiles.contains(where: { $0.path == activeOpenFileTabPath }),
+           let activePreview = sourceFilePreview(forPath: activeOpenFileTabPath) {
+            renderSourceFile(activePreview)
+            if let selectedRow = rows.first(where: { $0.identifier == fileTreeModel.selectedIdentifier }) {
+                ensureSelectedSidebarRowVisible(identifier: selectedRow.identifier)
+            }
+            return
+        }
+        // The code pane reflects the last opened file, never the tree cursor, so rebuilding the
+        // sidebar can't yank it onto a folder or a merely-highlighted row. If no file has ever been
+        // opened, a folder or out-of-range selection still clears placeholder/loading text.
         if let selectedRow = rows.first(where: { $0.identifier == fileTreeModel.selectedIdentifier }) {
             if !selectedRow.isFolder,
                document.sourceFiles.indices.contains(selectedSourceIndex),
                document.sourceFiles[selectedSourceIndex].language != "folder" {
                 renderSourceFile(document.sourceFiles[selectedSourceIndex])
+            } else if renderActiveOpenFilePreview(in: document) {
+                renderOpenFileTabs()
             } else {
+                renderOpenFileTabs()
                 codePane.setOldString("")
                 codePane.setNewString("")
             }
@@ -76,6 +93,23 @@ extension MainWindowController {
         let selectedRowIndex = rows.firstIndex { $0.identifier == fileTreeModel.selectedIdentifier } ?? 0
         let range = visibleSidebarIndexRange(count: rows.count, selectedIndex: selectedRowIndex, limit: Self.fileTreeRenderedRowLimit)
         return Array(rows[range])
+    }
+    @discardableResult
+    private func renderActiveOpenFilePreview(in document: ReviewDocument) -> Bool {
+        guard let activePath = activeOpenFileTabPath ?? openFileTabs.last,
+              !activePath.isEmpty else {
+            return false
+        }
+        let preview = sourceFilePreview(forPath: activePath)
+            ?? document.sourceFiles.first { $0.path == activePath }
+        guard let preview = preview, preview.language != "folder" else {
+            return false
+        }
+        if let activeIndex = document.sourceFiles.firstIndex(where: { $0.path == activePath }) {
+            selectedSourceIndex = activeIndex
+        }
+        renderSourceFile(preview)
+        return true
     }
     func activeFilesDocument() -> ReviewDocument? {
         let rootPath = normalizedWorkspacePath(root?.path)

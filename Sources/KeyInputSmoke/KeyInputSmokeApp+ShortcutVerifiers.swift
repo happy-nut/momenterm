@@ -126,6 +126,110 @@ extension KeyInputSmokeApp {
         }
         controller.setSourceViewModeForSmokeTest("raw")
 
+        guard controller.previewSourceFileForSmokeTest("docs/table.csv"),
+              controller.fileTabBarIsVisibleForSmokeTest(),
+              controller.openFileTabsForSmokeTest().contains("docs/note.md"),
+              controller.openFileTabsForSmokeTest().contains("docs/table.csv"),
+              controller.activeOpenFileTabForSmokeTest() == "docs/table.csv" else {
+            fail("file view did not track opened source files as visible tabs; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil")")
+            return
+        }
+        sendShortcut("\t", keyCode: 48, modifiers: [.option, .shift])
+        guard controller.activeOpenFileTabForSmokeTest() == "docs/note.md" else {
+            fail("Option+Shift+Tab did not cycle to the previous open file tab; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil")")
+            return
+        }
+        sendShortcut("\t", keyCode: 48, modifiers: [.option])
+        guard controller.activeOpenFileTabForSmokeTest() == "docs/table.csv" else {
+            fail("Option+Tab did not cycle to the next open file tab; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil")")
+            return
+        }
+        sendShortcut("", keyCode: 123, modifiers: [.command, .shift])
+        guard controller.activeOpenFileTabForSmokeTest() == "docs/note.md",
+              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title") else {
+            fail("Cmd+Shift+Left did not cycle to the previous open file tab; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        sendShortcut("", keyCode: 124, modifiers: [.command, .shift])
+        guard controller.activeOpenFileTabForSmokeTest() == "docs/table.csv",
+              controller.reviewOverlayTextForSmokeTest().contains("name,count") else {
+            fail("Cmd+Shift+Right did not cycle to the next open file tab; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        guard controller.clickOpenFileTabForSmokeTest(path: "docs/note.md"),
+              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title") else {
+            fail("mouse-clicking the note.md file tab did not show that tab; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        guard controller.clickOpenFileTabForSmokeTest(path: "docs/table.csv"),
+              controller.reviewOverlayTextForSmokeTest().contains("name,count") else {
+            fail("mouse-clicking the table.csv file tab did not show that tab; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        sendShortcut("", keyCode: 125, modifiers: [])
+        let restoredFilesTabsBefore = controller.openFileTabsForSmokeTest()
+        let restoredFilesActiveTabBefore = controller.activeOpenFileTabForSmokeTest()
+        let restoredFilesTreeRowBefore = controller.selectedFileTreeRowPathForSmokeTest()
+        let restoredFilesSelectionLineBefore = controller.fileOverlayPreviewSelectionLineForSmokeTest()
+        let restoredFilesLoadCountBefore = controller.fileListingLoadCountForSmokeTest()
+        let restoredFilesPopulateCountBefore = controller.fileOverlayPopulateCountForSmokeTest()
+        let restoredFilesRestoreCountBefore = controller.hiddenFilesOverlayRestoreCountForSmokeTest()
+        controller.focusFileSidebarForSmokeTest()
+        guard waitUntil("Files sidebar focus before restore close", timeout: 1, condition: {
+            controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
+        }) else {
+            fail("Files sidebar did not take focus before the Esc restore check; firstResponder=\(controller.firstResponderDiagnosticsForSmokeTest())")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [], routeThroughShortcutRouter: true)
+        guard controller.overlayIsHiddenForSmokeTest() else {
+            fail("Esc in the Files sidebar did not close the panel before restore check; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
+        sendShortcut("1", keyCode: 18, modifiers: [.command])
+        guard waitUntil("Cmd+1 restores hidden Files overlay", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Files"
+                && !controller.overlayIsHiddenForSmokeTest()
+                && controller.hiddenFilesOverlayRestoreCountForSmokeTest() == restoredFilesRestoreCountBefore + 1
+        }) else {
+            fail("Cmd+1 after Esc did not restore the hidden Files overlay directly; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) restores=\(controller.hiddenFilesOverlayRestoreCountForSmokeTest()) before=\(restoredFilesRestoreCountBefore)")
+            return
+        }
+        guard controller.fileListingLoadCountForSmokeTest() == restoredFilesLoadCountBefore,
+              controller.fileOverlayPopulateCountForSmokeTest() == restoredFilesPopulateCountBefore,
+              controller.openFileTabsForSmokeTest() == restoredFilesTabsBefore,
+              controller.activeOpenFileTabForSmokeTest() == restoredFilesActiveTabBefore,
+              controller.selectedFileTreeRowPathForSmokeTest() == restoredFilesTreeRowBefore,
+              controller.fileOverlayPreviewSelectionLineForSmokeTest() == restoredFilesSelectionLineBefore,
+              controller.reviewOverlayTextForSmokeTest().contains("name,count") else {
+            fail("Cmd+1 after Esc did not restore the exact Files UI state; loads=\(controller.fileListingLoadCountForSmokeTest())/\(restoredFilesLoadCountBefore) populates=\(controller.fileOverlayPopulateCountForSmokeTest())/\(restoredFilesPopulateCountBefore) tabs=\(controller.openFileTabsForSmokeTest())/\(restoredFilesTabsBefore) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil")/\(restoredFilesActiveTabBefore ?? "nil") row=\(controller.selectedFileTreeRowPathForSmokeTest() ?? "nil")/\(restoredFilesTreeRowBefore ?? "nil") line=\(controller.fileOverlayPreviewSelectionLineForSmokeTest())/\(restoredFilesSelectionLineBefore) text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        sendShortcut("w", keyCode: 13, modifiers: [.command])
+        guard controller.fileTabBarIsVisibleForSmokeTest(),
+              !controller.openFileTabsForSmokeTest().contains("docs/table.csv"),
+              controller.activeOpenFileTabForSmokeTest() == "docs/note.md" else {
+            fail("Cmd+W in Files did not close the active file tab and activate the neighbor; tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil")")
+            return
+        }
+        guard controller.selectSourcePathForSmokeTest("docs"),
+              controller.selectedFileTreeRowIsFolderForSmokeTest(),
+              controller.fileOverlaySidebarIsFirstResponderForSmokeTest(),
+              controller.activeOpenFileTabForSmokeTest() == "docs/note.md",
+              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title") else {
+            fail("selecting a folder row cleared the previously opened file preview; row=\(controller.selectedFileTreeRowPathForSmokeTest() ?? "nil") active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard controller.fileOverlaySidebarIsFirstResponderForSmokeTest(),
+              controller.activeOpenFileTabForSmokeTest() == "docs/note.md",
+              controller.reviewOverlayTextForSmokeTest().contains("# Rendered Title"),
+              !controller.reviewOverlayTextForSmokeTest().contains("Loading file list") else {
+            fail("pressing Enter on a folder row cleared the previously opened file preview; row=\(controller.selectedFileTreeRowPathForSmokeTest() ?? "nil") active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+
         guard controller.expandFileTreeFolderForSmokeTest("assets"),
               controller.previewSourceFileForSmokeTest("assets/pixel.png"),
               controller.imagePreviewIsVisibleForSmokeTest() else {
@@ -290,6 +394,10 @@ extension KeyInputSmokeApp {
             fail("Cmd+N did not create and attach a workspace at the focused terminal pwd (US-1); active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") expected=\(shortcutSourcePath) tabWS=\(controller.activeTerminalWorkspacePathForSmokeTest() ?? "nil") count=\(controller.workspaceCountForSmokeTest())")
             return
         }
+        guard let firstWorkspaceId = controller.activeWorkspaceIdForSmokeTest() else {
+            fail("Cmd+N workspace did not expose a stable workspace id")
+            return
+        }
         guard controller.workspaceFeedbackIsVisibleForSmokeTest() else {
             fail("workspace creation did not show visible feedback")
             return
@@ -337,6 +445,10 @@ extension KeyInputSmokeApp {
               controller.visibleTerminalTabCountForSmokeTest() == 1,
               controller.workspaceTerminalTabCountForSmokeTest(workspacePath) == firstWorkspaceTabCount else {
             fail("workspace switch did not isolate terminal pane groups or terminal transcript; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") terminalId=\(controller.activeTerminalSessionIdForSmokeTest().map(String.init) ?? "nil") firstTerminalId=\(firstWorkspaceTerminalId) output=\(controller.terminalOutputForSmokeTest()) visible=\(controller.visibleTerminalTabCountForSmokeTest()) first=\(controller.workspaceTerminalTabCountForSmokeTest(workspacePath))")
+            return
+        }
+        guard let secondWorkspaceId = controller.activeWorkspaceIdForSmokeTest() else {
+            fail("second workspace did not expose a stable workspace id")
             return
         }
         guard var secondWorkspaceTerminalId = controller.activeTerminalSessionIdForSmokeTest() else {
@@ -534,6 +646,42 @@ extension KeyInputSmokeApp {
         guard controller.memoTextForSmokeTest().contains("workspace-one memo"),
               controller.mergePromptForSmokeTest(kind: "plan") == "WORKSPACE ONE PLAN" else {
             fail("mouse-clicking first workspace did not restore first workspace prompt state; memo=\(controller.memoTextForSmokeTest()) merge=\(controller.mergePromptForSmokeTest(kind: "plan"))")
+            return
+        }
+        guard let firstWorkspaceShortcutIndex = controller.workspacePickerIndexForSmokeTest(id: firstWorkspaceId),
+              let secondWorkspaceShortcutIndex = controller.workspacePickerIndexForSmokeTest(id: secondWorkspaceId),
+              firstWorkspaceShortcutIndex < 9,
+              secondWorkspaceShortcutIndex < 9 else {
+            fail("workspace Option-number smoke setup could not resolve first/second workspace rail indexes")
+            return
+        }
+        let optionNumberKeyCodes: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+        let firstWorkspaceShortcutHint = "Opt \(firstWorkspaceShortcutIndex + 1)  \(controller.workspaceNameForSmokeTest(id: firstWorkspaceId) ?? "")"
+        let secondWorkspaceShortcutHint = "Opt \(secondWorkspaceShortcutIndex + 1)  \(controller.workspaceNameForSmokeTest(id: secondWorkspaceId) ?? "")"
+        controller.setWorkspaceShortcutHintsVisibleForSmokeTest(true)
+        guard controller.workspaceShortcutHintsAreCollapsedRailBadgesForSmokeTest(),
+              controller.workspaceShortcutHintTextForSmokeTest().contains(firstWorkspaceShortcutHint),
+              controller.workspaceShortcutHintTextForSmokeTest().contains(secondWorkspaceShortcutHint) else {
+            fail("holding Option did not show Opt-number workspace-name badges beside collapsed workspace icons: \(controller.workspaceShortcutHintDiagnosticsForSmokeTest())")
+            return
+        }
+        controller.setWorkspaceShortcutHintsVisibleForSmokeTest(false)
+        guard controller.workspaceShortcutHintTextForSmokeTest().isEmpty else {
+            fail("releasing Option did not hide workspace shortcut badges: \(controller.workspaceShortcutHintDiagnosticsForSmokeTest())")
+            return
+        }
+        sendShortcut("\(secondWorkspaceShortcutIndex + 1)", keyCode: optionNumberKeyCodes[secondWorkspaceShortcutIndex], modifiers: [.option])
+        guard controller.activeWorkspacePathForSmokeTest() == secondWorkspacePath,
+              controller.activeTerminalWorkspacePathForSmokeTest() == secondWorkspacePath,
+              !controller.terminalOutputForSmokeTest().contains(firstWorkspaceTerminalMarker) else {
+            fail("Option+\(secondWorkspaceShortcutIndex + 1) did not switch to the second workspace from the collapsed rail; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") expected=\(secondWorkspacePath)")
+            return
+        }
+        sendShortcut("\(firstWorkspaceShortcutIndex + 1)", keyCode: optionNumberKeyCodes[firstWorkspaceShortcutIndex], modifiers: [.option])
+        guard controller.activeWorkspacePathForSmokeTest() == workspacePath,
+              controller.activeTerminalWorkspacePathForSmokeTest() == workspacePath,
+              !controller.terminalOutputForSmokeTest().contains(secondWorkspaceTerminalMarker) else {
+            fail("Option+\(firstWorkspaceShortcutIndex + 1) did not switch back to the first workspace from the collapsed rail; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") expected=\(workspacePath)")
             return
         }
 
@@ -968,6 +1116,34 @@ extension KeyInputSmokeApp {
             controller.overlayTitleForSmokeTest() == "Files" && !controller.overlayIsHiddenForSmokeTest()
         }) else {
             fail("Esc from layered Find Usages did not restore Files; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
+        sendShortcut("f", keyCode: 3, modifiers: [.command])
+        guard waitUntil("Cmd+F opens layered Quick Open over Files", timeout: 2, condition: {
+            controller.quickOpenIsLayeredOverFilesForSmokeTest(title: "Quick Open")
+        }) else {
+            fail("Cmd+F from Files did not open Quick Open as a layered toggle over Files; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [], routeThroughShortcutRouter: true)
+        guard waitUntil("Esc from layered Quick Open returns to Files", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Files" && !controller.overlayIsHiddenForSmokeTest()
+        }) else {
+            fail("Esc from layered Quick Open closed the Files panel instead of dismissing only the toggle; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
+        sendShortcut("e", keyCode: 14, modifiers: [.command])
+        guard waitUntil("Cmd+E opens layered Recent Files over Files", timeout: 2, condition: {
+            controller.quickOpenIsLayeredOverFilesForSmokeTest(title: "Recent Files")
+        }) else {
+            fail("Cmd+E from Files did not open Recent Files over Files; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [], routeThroughShortcutRouter: true)
+        guard waitUntil("Esc from layered Recent Files returns to Files", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Files" && !controller.overlayIsHiddenForSmokeTest()
+        }) else {
+            fail("Esc from layered Recent Files closed the Files panel instead of dismissing only the Recent Files view; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
             return
         }
         guard controller.selectSourcePathForSmokeTest("src/app.swift") else {

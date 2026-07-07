@@ -154,6 +154,7 @@ extension MainWindowController {
                 focusRenamingWorkspaceField()
             }
         }
+        syncWorkspaceShortcutHintsAfterRailRebuild()
         refreshWorkspaceStatuses()
     }
     // Asynchronously resolve PR state + listening ports for each workspace and, when

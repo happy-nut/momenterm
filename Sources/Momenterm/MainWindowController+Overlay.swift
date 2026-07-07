@@ -9,6 +9,11 @@ extension MainWindowController {
             settingsReturnMode = .hidden
             quickOpenReturnMode = .hidden
         }
+        if mode != .files {
+            hiddenFilesOverlayRootPath = nil
+            hiddenFilesOverlayWorkspaceId = nil
+            hiddenFilesOverlayWorkspacePath = nil
+        }
         if mode != .workspacePicker {
             setWorkspaceRailPickerVisible(false, animated: false)
         }
@@ -42,12 +47,59 @@ extension MainWindowController {
     }
 
     func hideOverlay() {
-        clearInlineReviewCommentViews()
+        if overlayMode == .files {
+            hiddenFilesOverlayRootPath = normalizedWorkspacePath(fileListingRoot?.path ?? root?.path)
+            hiddenFilesOverlayWorkspaceId = activeWorkspaceId
+            hiddenFilesOverlayWorkspacePath = activeWorkspacePath
+        } else {
+            hiddenFilesOverlayRootPath = nil
+            hiddenFilesOverlayWorkspaceId = nil
+            hiddenFilesOverlayWorkspacePath = nil
+            clearInlineReviewCommentViews()
+        }
         settingsUnderlayImageView.isHidden = true
         settingsReturnMode = .hidden
         overlayMode = .hidden
         overlayView.isHidden = true
         overlayBackdrop.isHidden = true
+    }
+
+    @discardableResult
+    func restoreHiddenFilesOverlayIfPossible() -> Bool {
+        guard overlayMode == .hidden,
+              overlayView.isHidden,
+              let restoreRootPath = hiddenFilesOverlayRootPath,
+              overlayTitleLabel.stringValue == "Files"
+        else {
+            return false
+        }
+        guard hiddenFilesOverlayWorkspaceId == activeWorkspaceId,
+              hiddenFilesOverlayWorkspacePath == activeWorkspacePath
+        else {
+            hiddenFilesOverlayRootPath = nil
+            hiddenFilesOverlayWorkspaceId = nil
+            hiddenFilesOverlayWorkspacePath = nil
+            return false
+        }
+        let restoreRoot = URL(fileURLWithPath: restoreRootPath).standardizedFileURL
+        root = restoreRoot
+        if fileListingRoot == nil {
+            fileListingRoot = restoreRoot
+        }
+        hiddenFilesOverlayRootPath = nil
+        hiddenFilesOverlayWorkspaceId = nil
+        hiddenFilesOverlayWorkspacePath = nil
+        hiddenFilesOverlayRestoreCount += 1
+        settingsUnderlayImageView.isHidden = true
+        settingsReturnMode = .hidden
+        quickOpenReturnMode = .hidden
+        overlayMode = .files
+        overlayView.isHidden = false
+        overlayBackdrop.isHidden = true
+        applyOverlayMaximizedState()
+        window?.contentView?.layoutSubtreeIfNeeded()
+        focusFileSidebar()
+        return true
     }
 
     func populateOverlay() {
@@ -125,6 +177,7 @@ extension MainWindowController {
         overlayContentView.layer?.borderColor = NSColor.clear.cgColor
         overlayContentView.layer?.borderWidth = 0
         overlaySidebarScrollView?.isHidden = false
+        setFileTabsVisible(false)
         fileHybridView.isHidden = true
         diffHybridView.isHidden = true
         historyGraphWebView.isHidden = true

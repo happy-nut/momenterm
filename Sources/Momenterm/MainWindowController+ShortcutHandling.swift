@@ -3,13 +3,30 @@ import AppKit
 // Global shortcut monitor, app shortcut routing, and overlay keyboard navigation.
 extension MainWindowController {
     func installShortcutMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self = self else { return event }
+            if event.type == .flagsChanged {
+                self.handleModifierFlagsChanged(event)
+                return event
+            }
             return self.handleShortcut(event) ? nil : event
         }
     }
 
-    func handleShortcut(_ event: NSEvent) -> Bool {
+    private func handleModifierFlagsChanged(_ event: NSEvent) {
+        guard shortcutEventTargetsCurrentWindow(event) else {
+            setWorkspaceShortcutHintsVisible(false)
+            return
+        }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let optionOnly = flags.contains(.option)
+            && !flags.contains(.command)
+            && !flags.contains(.control)
+            && !flags.contains(.shift)
+        setWorkspaceShortcutHintsVisible(optionOnly)
+    }
+
+    private func shortcutEventTargetsCurrentWindow(_ event: NSEvent) -> Bool {
         let matchesWindowNumber = event.windowNumber != 0 && event.windowNumber == window?.windowNumber
         let matchesActiveWindow = event.window == nil && (NSApp.keyWindow === window || NSApp.mainWindow === window)
         let visibleMomentermWindows = NSApp.windows.filter { $0.isVisible && $0.windowController is MainWindowController }
@@ -17,12 +34,15 @@ extension MainWindowController {
             && event.windowNumber == 0
             && visibleMomentermWindows.count == 1
             && visibleMomentermWindows.first === window
-        guard event.window === window
+        return event.window === window
             || matchesWindowNumber
             || matchesActiveWindow
             || matchesOnlyVisibleMomentermWindow
             || (event.window == nil && firstResponderBelongsToCurrentWindow())
-        else {
+    }
+
+    func handleShortcut(_ event: NSEvent) -> Bool {
+        guard shortcutEventTargetsCurrentWindow(event) else {
             lastShortcutTraceForSmokeTest = "rejected windowNumber=\(event.windowNumber) appWindow=\(window?.windowNumber ?? -1) eventWindow=\(event.window.map { String(describing: $0) } ?? "nil")"
             return false
         }
@@ -93,6 +113,28 @@ extension MainWindowController {
             default:
                 break
             }
+        }
+
+        if overlayMode == .files, option, !command, !control, event.keyCode == 48 {
+            _ = cycleOpenFileTab(delta: shift ? -1 : 1)
+            return true
+        }
+
+        if overlayMode == .files, command, shift, !option, !control, openFileTabs.count > 1 {
+            if event.keyCode == 123 {
+                _ = cycleOpenFileTab(delta: -1)
+                return true
+            }
+            if event.keyCode == 124 {
+                _ = cycleOpenFileTab(delta: 1)
+                return true
+            }
+        }
+
+        if option, !command, !control, !shift,
+           let workspaceIndex = workspaceShortcutIndex(forKeyCode: event.keyCode),
+           activateWorkspaceShortcut(at: workspaceIndex) {
+            return true
         }
 
         if !memoSidePanel.isHidden, !command, !control, !option, !shift, (lowerKey == "\u{1b}" || event.keyCode == 53) {

@@ -330,7 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         windowMenu.addItem(targetedItem("Settings", #selector(showSettings), ",", [.command]))
         windowMenu.addItem(NSMenuItem.separator())
-        windowMenu.addItem(targetedItem("Close Terminal Pane", #selector(closeTab), "w"))
+        windowMenu.addItem(targetedItem("Close Tab or Pane", #selector(closeTab), "w"))
         windowItem.submenu = windowMenu
         mainMenu.addItem(windowItem)
 

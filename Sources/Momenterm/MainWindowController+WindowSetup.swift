@@ -106,6 +106,8 @@ extension MainWindowController {
         overlaySettingsScrollView.documentView?.layer?.backgroundColor = theme.panelBackground.cgColor
         quickOpenRecentResultsScrollView.documentView?.layer?.backgroundColor = theme.panelBackground.cgColor
         quickOpenRecentFooterLabel.textColor = theme.secondaryText
+        fileTabBarView.layer?.backgroundColor = theme.codeHeaderBackground.cgColor
+        fileTabBarView.layer?.borderColor = theme.separator.cgColor
         memoSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
         memoSidePanel.layer?.borderColor = theme.panelBorder.cgColor
         mergedPromptSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
@@ -125,6 +127,7 @@ extension MainWindowController {
         if overlayMode != .hidden {
             populateOverlay()
         }
+        renderOpenFileTabs()
         loadDocument(forceReload: true)
 
         rootView.needsDisplay = true
@@ -338,6 +341,32 @@ extension MainWindowController {
         )
         diffEditorChromeView.addSubview(diffEditorCurrentVersionCheckbox)
 
+        fileTabBarView.translatesAutoresizingMaskIntoConstraints = false
+        fileTabBarView.wantsLayer = true
+        fileTabBarView.layer?.backgroundColor = theme.codeHeaderBackground.cgColor
+        fileTabBarView.layer?.borderColor = theme.separator.cgColor
+        fileTabBarView.layer?.borderWidth = 1
+        fileTabBarView.isHidden = true
+        overlayContentView.addSubview(fileTabBarView)
+
+        fileTabScrollView.translatesAutoresizingMaskIntoConstraints = false
+        fileTabScrollView.drawsBackground = false
+        fileTabScrollView.borderType = .noBorder
+        fileTabScrollView.hasVerticalScroller = false
+        fileTabScrollView.hasHorizontalScroller = true
+        fileTabScrollView.autohidesScrollers = true
+        fileTabScrollView.scrollerStyle = .overlay
+        fileTabBarView.addSubview(fileTabScrollView)
+
+        let fileTabDocumentView = NSView()
+        fileTabDocumentView.translatesAutoresizingMaskIntoConstraints = false
+        fileTabScrollView.documentView = fileTabDocumentView
+        fileTabStack.translatesAutoresizingMaskIntoConstraints = false
+        fileTabStack.orientation = .horizontal
+        fileTabStack.alignment = .centerY
+        fileTabStack.spacing = 4
+        fileTabDocumentView.addSubview(fileTabStack)
+
         sourcePreviewDocumentView.wantsLayer = true
         sourcePreviewDocumentView.layer?.backgroundColor = theme.panelBackground.cgColor
         sourcePreviewImageView.imageAlignment = .alignCenter
@@ -376,6 +405,12 @@ extension MainWindowController {
         }
         fileHybridView.registerMessageHandler(name: "goToDeclaration") { [weak self] body in
             self?.handleHybridGoToDeclaration(body)
+        }
+        fileHybridView.registerMessageHandler(name: "cycleFileTab") { [weak self] body in
+            guard let self = self else { return }
+            let dict = body as? [String: Any]
+            let rawDelta = (dict?["delta"] as? Int) ?? Int((dict?["delta"] as? Double) ?? 1)
+            _ = self.cycleOpenFileTab(delta: rawDelta >= 0 ? 1 : -1)
         }
 
         diffHybridView.translatesAutoresizingMaskIntoConstraints = false
@@ -498,7 +533,8 @@ extension MainWindowController {
         overlayCompactCenterYConstraint = overlayView.centerYAnchor.constraint(equalTo: rootView.centerYAnchor)
 
         diffEditorChromeHeightConstraint = diffEditorChromeView.heightAnchor.constraint(equalToConstant: 0)
-        overlayDiffTopConstraint = overlayDiffSplitView.topAnchor.constraint(equalTo: diffEditorChromeView.bottomAnchor, constant: MomentermDesign.Metrics.panelInnerPadding)
+        fileTabBarHeightConstraint = fileTabBarView.heightAnchor.constraint(equalToConstant: 0)
+        overlayDiffTopConstraint = overlayDiffSplitView.topAnchor.constraint(equalTo: fileTabBarView.bottomAnchor, constant: MomentermDesign.Metrics.panelInnerPadding)
         overlayDiffLeadingConstraint = overlayDiffSplitView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor, constant: MomentermDesign.Metrics.panelInnerPadding)
         overlayDiffTrailingConstraint = overlayDiffSplitView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor, constant: -MomentermDesign.Metrics.panelInnerPadding)
         overlayDiffBottomConstraint = overlayDiffSplitView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor, constant: -MomentermDesign.Metrics.panelInnerPadding)
@@ -529,24 +565,39 @@ extension MainWindowController {
             diffEditorCurrentVersionCheckbox.trailingAnchor.constraint(equalTo: diffEditorChromeView.trailingAnchor, constant: -8),
             diffEditorCurrentVersionCheckbox.bottomAnchor.constraint(equalTo: diffEditorChromeView.bottomAnchor, constant: -3),
 
+            fileTabBarView.topAnchor.constraint(equalTo: diffEditorChromeView.bottomAnchor),
+            fileTabBarView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor),
+            fileTabBarView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor),
+            fileTabBarHeightConstraint!,
+            fileTabScrollView.topAnchor.constraint(equalTo: fileTabBarView.topAnchor, constant: 3),
+            fileTabScrollView.leadingAnchor.constraint(equalTo: fileTabBarView.leadingAnchor, constant: 7),
+            fileTabScrollView.trailingAnchor.constraint(equalTo: fileTabBarView.trailingAnchor, constant: -7),
+            fileTabScrollView.bottomAnchor.constraint(equalTo: fileTabBarView.bottomAnchor, constant: -3),
+            fileTabDocumentView.heightAnchor.constraint(equalTo: fileTabScrollView.contentView.heightAnchor),
+            fileTabDocumentView.widthAnchor.constraint(greaterThanOrEqualTo: fileTabScrollView.contentView.widthAnchor),
+            fileTabStack.topAnchor.constraint(equalTo: fileTabDocumentView.topAnchor),
+            fileTabStack.leadingAnchor.constraint(equalTo: fileTabDocumentView.leadingAnchor),
+            fileTabStack.trailingAnchor.constraint(equalTo: fileTabDocumentView.trailingAnchor),
+            fileTabStack.bottomAnchor.constraint(equalTo: fileTabDocumentView.bottomAnchor),
+
             overlayDiffTopConstraint!,
             overlayDiffLeadingConstraint!,
             overlayDiffTrailingConstraint!,
             overlayDiffBottomConstraint!,
 
-            sourcePreviewScrollView.topAnchor.constraint(equalTo: overlayContentView.topAnchor, constant: MomentermDesign.Metrics.panelInnerPadding),
+            sourcePreviewScrollView.topAnchor.constraint(equalTo: fileTabBarView.bottomAnchor, constant: MomentermDesign.Metrics.panelInnerPadding),
             sourcePreviewScrollView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor, constant: MomentermDesign.Metrics.panelInnerPadding),
             sourcePreviewScrollView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor, constant: -MomentermDesign.Metrics.panelInnerPadding),
             sourcePreviewScrollView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor, constant: -MomentermDesign.Metrics.panelInnerPadding),
 
             // fileHybridView: same position as sourcePreviewScrollView (no inner padding for Monaco).
-            fileHybridView.topAnchor.constraint(equalTo: overlayContentView.topAnchor),
+            fileHybridView.topAnchor.constraint(equalTo: fileTabBarView.bottomAnchor),
             fileHybridView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor),
             fileHybridView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor),
             fileHybridView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor),
 
             // diffHybridView: sits below chrome bar (same as overlayDiffSplitView).
-            diffHybridView.topAnchor.constraint(equalTo: diffEditorChromeView.bottomAnchor),
+            diffHybridView.topAnchor.constraint(equalTo: fileTabBarView.bottomAnchor),
             diffHybridView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor),
             diffHybridView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor),
             diffHybridView.bottomAnchor.constraint(equalTo: overlayContentView.bottomAnchor),

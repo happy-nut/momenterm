@@ -8,13 +8,18 @@ extension MainWindowController {
         showOverlay(.goToLine)
     }
     func openQuickOpen(mode: QuickOpenMode, initialQuery: String = "") {
-        if mode == .usages,
-           (overlayMode == .files || overlayMode == .changes),
-           !overlayView.isHidden {
+        let existingLayerReturnMode = overlayMode == .quickOpen
+            && (quickOpenReturnMode == .files || quickOpenReturnMode == .changes)
+        if existingLayerReturnMode {
+            // Switching between Quick Open / Recent / Find while already floating over a review
+            // panel must keep that review panel as the Esc return target.
+        } else if (overlayMode == .files || overlayMode == .changes),
+                  !overlayView.isHidden {
             captureSettingsUnderlay()
             quickOpenReturnMode = overlayMode
         } else {
             quickOpenReturnMode = .hidden
+            settingsUnderlayImageView.isHidden = true
         }
         quickOpenMode = mode
         quickOpenFilter = initialQuery
@@ -46,7 +51,9 @@ extension MainWindowController {
     }
     func handleQuickOpenKey(_ event: NSEvent, key: String, lowerKey: String, flags: NSEvent.ModifierFlags) -> Bool {
         if event.keyCode == 53 || lowerKey == "\u{1b}" {
-            if quickOpenMode == .recent, !quickOpenFilter.isEmpty {
+            if quickOpenReturnMode == .files || quickOpenReturnMode == .changes {
+                closeOverlayAction()
+            } else if quickOpenMode == .recent, !quickOpenFilter.isEmpty {
                 quickOpenFilter = ""
                 populateQuickOpenOverlay()
             } else {

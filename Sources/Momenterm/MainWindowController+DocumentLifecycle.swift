@@ -7,9 +7,13 @@ extension MainWindowController {
         let listingRoot = standardized
         let previousRoot = normalizedWorkspacePath(root?.path)
         let listingRootPath = normalizedWorkspacePath(listingRoot.path)
+        if restoreHiddenFilesOverlayIfPossible() {
+            return
+        }
         root = listingRoot
         if previousRoot != listingRootPath {
             selectedSourceIndex = 0
+            clearOpenFileTabs()
             fileTreeModel.selectedIdentifier = nil
             // Restore the folders that were open here at quit so the tree reopens as the user left it
             // (empty when never opened, i.e. fully collapsed). The async load below re-affirms this.
@@ -43,6 +47,7 @@ extension MainWindowController {
         }
 
         selectedSourceIndex = 0
+        clearOpenFileTabs()
         fileListingDocument = nil
         fileListingRoot = listingRoot
         fileListingRequestID += 1
@@ -133,6 +138,7 @@ extension MainWindowController {
             currentDocument = nil
             fileListingDocument = nil
             fileListingRoot = nil
+            clearOpenFileTabs()
             isLoadingFileListing = false
             window?.title = "Momenterm"
             terminalStatusLabel.stringValue = activeSession()?.cwd.path ?? FileManager.default.homeDirectoryForCurrentUser.path

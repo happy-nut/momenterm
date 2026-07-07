@@ -790,6 +790,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         modifiers: NSEvent.ModifierFlags,
         charactersIgnoringModifiers: String? = nil,
         routeThroughWindow: Bool = true,
+        routeThroughShortcutRouter: Bool = false,
         settle: TimeInterval = 0.1
     ) {
         guard let window = controller?.window,
@@ -816,7 +817,9 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             && !modifiers.contains(.control)
             && !modifiers.contains(.option)
             && !modifiers.contains(.shift)
-        if plainResponderEvent {
+        if routeThroughShortcutRouter {
+            _ = controller?.handleShortcutForSmokeTest(event)
+        } else if plainResponderEvent {
             window.sendEvent(event)
         } else if modifiers == [.command], keyCode == 35 {
             // Cmd+P is consumed by the system's default "Print" menu item before local
@@ -830,6 +833,11 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             // firing a second forget and deleting two workspaces on one press. Mirroring the Cmd+P
             // special-case keeps deletion at exactly one instance per press.
             controller?.forgetCurrentWorkspaceForSmokeTest()
+        } else if modifiers == [.option], [18, 19, 20, 21, 23, 22, 26, 28, 25].contains(keyCode) {
+            // Option-number shortcuts are owned by the local shortcut router. Programmatic
+            // NSApp.sendEvent does not reliably exercise local monitors for these ordinary number
+            // keys, so drive the router directly and keep the terminal from receiving Option glyphs.
+            _ = controller?.handleShortcutForSmokeTest(event)
         } else {
             NSApp.sendEvent(event)
         }

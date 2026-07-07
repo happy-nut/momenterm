@@ -40,6 +40,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let fileTreeModel = FileTreeModel()
     var fileListingRequestID = 0
     var fileListingLoadCount = 0
+    var fileOverlayPopulateCount = 0
+    var hiddenFilesOverlayRootPath: String?
+    var hiddenFilesOverlayWorkspaceId: String?
+    var hiddenFilesOverlayWorkspacePath: String?
+    var hiddenFilesOverlayRestoreCount = 0
     var sourcePreviewRenderRequestID = 0
     var refreshTimer: Timer?
     var statusClockTimer: Timer?
@@ -123,6 +128,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         return currentDocument?.diffFiles ?? []
     }
     var selectedSourceIndex = 0
+    var openFileTabs: [String] = []
+    var activeOpenFileTabPath: String?
     // How the file view presents a renderable file (Markdown / CSV / TSV / SVG):
     //   .raw      — source text only (Monaco / native code pane, has a caret)
     //   .side     — source + rendered preview side by side
@@ -209,6 +216,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var workspaceRailExpanded = false
     let workspaceRailAnimationDuration: TimeInterval = 0.25
     var workspaceRailLastAnimatedTransition: (from: CGFloat, to: CGFloat, duration: TimeInterval)?
+    var workspaceShortcutHintsRequested = false
+    var workspaceShortcutHintViews: [NSView] = []
+    var workspaceShortcutHintConstraints: [NSLayoutConstraint] = []
     var lastShiftAt: TimeInterval = 0
     var lastShiftKeyCode: UInt16 = 0
     weak var memoTextView: NativeMarkdownMemoTextView?
@@ -299,6 +309,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let sourcePreviewScrollView = NSScrollView()
     let sourcePreviewDocumentView = NSView()
     let sourcePreviewImageView = NSImageView()
+    let fileTabBarView = NSView()
+    let fileTabScrollView = NSScrollView()
+    let fileTabStack = NSStackView()
+    var fileTabBarHeightConstraint: NSLayoutConstraint?
     // JS-hybrid content views (US-H4/H5 file viewer, US-H7 diff, US-H8 git graph).
     let fileHybridView = NativeHybridWebView()
     let diffHybridView = NativeHybridWebView()
@@ -426,6 +440,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
 
     func windowDidBecomeKey(_ notification: Notification) {
         focusTerminalIfAppropriate()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        setWorkspaceShortcutHintsVisible(false)
     }
 
     func windowDidResize(_ notification: Notification) {

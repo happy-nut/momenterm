@@ -8,6 +8,7 @@ extension MainWindowController {
         if file.language == "folder" {
             return
         }
+        trackOpenFileTab(path: file.path)
         httpRunner.clearRunButtons()
         let renderedFile: SourceFile
         if !file.embedded,
