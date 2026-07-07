@@ -457,7 +457,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             ]),
             .object([
                 "name": .string("momenterm"),
-                "cwd": .string(homePath),
+                "cwd": .string(workspacePath),
                 "workspacePath": .string(workspacePath),
                 "sessionKey": .string("restore-workspace"),
                 "active": .bool(true)
@@ -522,6 +522,55 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
                 && savedOnly.activeTerminalProcessCwdForSmokeTest() == savedOnlyPath
         }) else {
             fail("saved active workspace with only a home tab reopened terminal at home; active=\(savedOnly.activeWorkspacePathForSmokeTest() ?? "nil") cwd=\(savedOnly.activeTerminalCwdForSmokeTest() ?? "nil") process=\(savedOnly.activeTerminalProcessCwdForSmokeTest() ?? "nil") terminalWorkspace=\(savedOnly.activeTerminalWorkspacePathForSmokeTest() ?? "nil") expected=\(savedOnlyPath) diagnostics=\(savedOnly.terminalWorkspaceDiagnosticsForSmokeTest())")
+            return
+        }
+
+        clearPersistedState()
+        let trackedRepo = makeTempDirectory(name: "momenterm-git-tracked-cwd")
+        let trackedRepoPath = trackedRepo.path
+        guard run(["git", "init"], cwd: trackedRepo),
+              run(["git", "config", "user.email", "smoke@example.com"], cwd: trackedRepo),
+              run(["git", "config", "user.name", "Smoke"], cwd: trackedRepo) else {
+            fail("failed to create git-tracked workspace restore fixture")
+            return
+        }
+        let homeWorkspaceId = "git-tracked-home-\(UUID().uuidString)"
+        UserDefaults.standard.set(homeWorkspaceId, forKey: "momenterm.native.active-workspace-id")
+        UserDefaults.standard.set(homePath, forKey: "momenterm.native.active-workspace-path")
+        writePersistedArray([
+            .object([
+                "name": .string("tracked repo"),
+                "cwd": .string(trackedRepoPath),
+                "workspacePath": .string(homePath),
+                "workspaceId": .string(homeWorkspaceId),
+                "sessionKey": .string("restore-git-tracked-workspace"),
+                "active": .bool(true)
+            ])
+        ], forKey: "momenterm.native.terminal-tabs.v2")
+        writePersistedArray([
+            .object([
+                "id": .string(homeWorkspaceId),
+                "path": .string(homePath),
+                "name": .string("tracked repo"),
+                "color": .string("#e06c75"),
+                "icon": .string("diamond.fill"),
+                "detectedGitRoot": .string(trackedRepoPath)
+            ])
+        ], forKey: "momenterm.native.workspaces")
+
+        let gitTracked = registerSmokeController(MainWindowController(initialRoot: nil))
+        defer {
+            gitTracked.disposeForSmokeTest()
+            gitTracked.close()
+        }
+        guard waitUntil("git-tracked workspace preserves pane cwd", condition: {
+            gitTracked.activeWorkspacePathForSmokeTest() == homePath
+                && gitTracked.activeTerminalWorkspacePathForSmokeTest() == homePath
+                && gitTracked.activeTerminalCwdForSmokeTest() == trackedRepoPath
+                && gitTracked.activeTerminalProcessCwdForSmokeTest() == trackedRepoPath
+                && gitTracked.workspaceDetectedGitRootForSmokeTest(id: homeWorkspaceId) == trackedRepoPath
+        }) else {
+            fail("git-tracked workspace reset to home after relaunch; active=\(gitTracked.activeWorkspacePathForSmokeTest() ?? "nil") cwd=\(gitTracked.activeTerminalCwdForSmokeTest() ?? "nil") process=\(gitTracked.activeTerminalProcessCwdForSmokeTest() ?? "nil") terminalWorkspace=\(gitTracked.activeTerminalWorkspacePathForSmokeTest() ?? "nil") git=\(gitTracked.workspaceDetectedGitRootForSmokeTest(id: homeWorkspaceId) ?? "nil") expectedCwd=\(trackedRepoPath) diagnostics=\(gitTracked.terminalWorkspaceDiagnosticsForSmokeTest())")
             return
         }
     }

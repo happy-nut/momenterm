@@ -20,9 +20,9 @@ extension MainWindowController {
         showOverlay(.settings)
     }
     // Snapshot the currently-open review overlay into the underlay image so it stays visible (dimmed)
-    // behind the Settings modal. Frame is set in rootView coordinates so it holds the panel's docked
-    // position while the Settings modal shrinks to its centered card.
-    private func captureSettingsUnderlay() {
+    // behind layered compact overlays. Frame is set in rootView coordinates so it holds the panel's
+    // docked position while the transient overlay shrinks to its centered card.
+    func captureSettingsUnderlay() {
         rootView.layoutSubtreeIfNeeded()
         let bounds = overlayView.bounds
         guard bounds.width > 1, bounds.height > 1,

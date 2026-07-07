@@ -8,19 +8,41 @@ extension MainWindowController {
         showOverlay(.goToLine)
     }
     func openQuickOpen(mode: QuickOpenMode, initialQuery: String = "") {
+        if mode == .usages,
+           (overlayMode == .files || overlayMode == .changes),
+           !overlayView.isHidden {
+            captureSettingsUnderlay()
+            quickOpenReturnMode = overlayMode
+        } else {
+            quickOpenReturnMode = .hidden
+        }
         quickOpenMode = mode
         quickOpenFilter = initialQuery
         selectedQuickOpenIndex = 0
-        if mode == .content || mode == .recent {
+        if quickOpenUsesContentSearch(mode) || mode == .recent {
             overlayMaximized = false
         }
-        if mode == .content {
+        if quickOpenUsesContentSearch(mode) {
             quickOpenContentResults = []
             quickOpenContentSearchQuery = ""
             quickOpenContentSearchRoot = ""
             quickOpenContentSearchLoading = false
         }
         showOverlay(.quickOpen)
+    }
+    func openFindUsages(word: String) {
+        openQuickOpen(mode: .usages, initialQuery: word)
+    }
+    func dismissQuickOpenLayer() -> Bool {
+        guard overlayMode == .quickOpen,
+              quickOpenReturnMode == .files || quickOpenReturnMode == .changes else {
+            return false
+        }
+        settingsUnderlayImageView.isHidden = true
+        let returnMode = quickOpenReturnMode
+        quickOpenReturnMode = .hidden
+        showOverlay(returnMode)
+        return true
     }
     func handleQuickOpenKey(_ event: NSEvent, key: String, lowerKey: String, flags: NSEvent.ModifierFlags) -> Bool {
         if event.keyCode == 53 || lowerKey == "\u{1b}" {
@@ -127,6 +149,8 @@ extension MainWindowController {
             return "Quick Open"
         case .content:
             return "파일 내용 검색"
+        case .usages:
+            return "Find Usages"
         case .recent:
             return "Recent Files"
         case .commands:
@@ -137,7 +161,7 @@ extension MainWindowController {
         resetOverlaySidebar()
         resetQuickOpenRecentResults()
         setSettingsContentVisible(false)
-        if quickOpenMode == .content {
+        if quickOpenUsesContentSearch(quickOpenMode) {
             configureFindInFilesOverlayBodyLayout()
         } else if quickOpenMode == .recent {
             configureRecentFilesOverlayBodyLayout()
@@ -146,8 +170,9 @@ extension MainWindowController {
         }
         setRecentFilesContentVisible(quickOpenMode == .recent)
         if quickOpenMode != .recent {
-            setSingleCodePaneVisible(quickOpenMode == .content)
+            setSingleCodePaneVisible(quickOpenUsesContentSearch(quickOpenMode))
         }
+        setSourceLineRulerVisible(false)
         let items = quickOpenItems()
         selectedQuickOpenIndex = min(max(selectedQuickOpenIndex, 0), max(items.count - 1, 0))
         overlaySubtitleLabel.stringValue = quickOpenSubtitle()
@@ -155,28 +180,28 @@ extension MainWindowController {
             populateRecentFilesOverlay(items: items)
             return
         }
-        if quickOpenMode == .content {
+        if quickOpenUsesContentSearch(quickOpenMode) {
             overlaySidebarStack.addArrangedSubview(findInFilesSearchPromptRow())
         }
         guard !items.isEmpty else {
             addSidebarMessage(quickOpenContentSearchLoading ? "Searching..." : "No matches")
             let message = quickOpenContentSearchLoading
                 ? "Searching files..."
-                : "No files matched \(quickOpenFilter)."
+                : (quickOpenMode == .usages ? "No usages found for \(quickOpenFilter)." : "No files matched \(quickOpenFilter).")
             codePane.setOldContent(styledText(message, color: theme.primaryText))
             codePane.setNewString("")
             return
         }
         for index in visibleSidebarIndexRange(count: items.count, selectedIndex: selectedQuickOpenIndex, limit: Self.quickOpenRenderedRowLimit) {
             let item = items[index]
-            if quickOpenMode == .content {
+            if quickOpenUsesContentSearch(quickOpenMode) {
                 overlaySidebarStack.addArrangedSubview(findInFilesResultRowButton(item: item, index: index, selected: index == selectedQuickOpenIndex))
             } else {
                 overlaySidebarStack.addArrangedSubview(sidebarButton(title: quickOpenSidebarTitle(for: item), identifier: "quick:\(index)", selected: index == selectedQuickOpenIndex))
             }
         }
         let selected = items[selectedQuickOpenIndex]
-        if quickOpenMode == .content {
+        if quickOpenUsesContentSearch(quickOpenMode) {
             renderQuickOpenContentPreview(selected)
         } else if quickOpenMode != .recent,
                   let file = currentDocument?.sourceFiles.first(where: { $0.path == selected.path }), file.embedded {
@@ -187,59 +212,6 @@ extension MainWindowController {
             codePane.setNewString("")
         }
         ensureSelectedSidebarRowVisible(identifier: "quick:\(selectedQuickOpenIndex)")
-    }
-    func quickOpenItems() -> [QuickOpenItem] {
-        if quickOpenMode == .commands {
-            return filteredPaletteCommands().map {
-                QuickOpenItem(path: $0.title, detail: $0.hint, preview: nil, previewStartLine: 0)
-            }
-        }
-        let query = quickOpenFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let sourceFiles = currentDocument?.sourceFiles ?? []
-        let recentPaths = Array(NSOrderedSet(array: cursorHistory.reversed()).compactMap { $0 as? String })
-        let base: [QuickOpenItem]
-        switch quickOpenMode {
-        case .commands:
-            base = []
-        case .recent:
-            var indexedFiles: [String: SourceFile] = [:]
-            for file in sourceFiles where indexedFiles[file.path] == nil {
-                indexedFiles[file.path] = file
-            }
-            let fallbackPaths = sourceFiles.prefix(60).map(\.path)
-            base = (recentPaths.isEmpty ? fallbackPaths : recentPaths).compactMap { path in
-                let source = indexedFiles[path]
-                let edited = source?.changed == true || source?.vcs != nil
-                guard !quickOpenRecentEditedOnly || edited else {
-                    return nil
-                }
-                let language = source?.language ?? languageForPath(path)
-                let status = edited ? "changed" : "recent"
-                return QuickOpenItem(path: path, detail: "\(status) - \(language)", preview: source, previewStartLine: 1)
-            }
-        case .content:
-            scheduleQuickOpenContentSearchIfNeeded()
-            return quickOpenContentResults
-        case .all:
-            base = sourceFiles.map { file in
-                QuickOpenItem(path: file.path, detail: [file.changed ? "changed" : "file", file.language].joined(separator: " - "), preview: nil, previewStartLine: 1)
-            }
-        }
-        guard !query.isEmpty, quickOpenMode != .content else {
-            return Array(base.prefix(120))
-        }
-        return Array(base.filter { item in
-            item.path.lowercased().contains(query) || item.detail.lowercased().contains(query)
-        }.prefix(120))
-    }
-    private func quickOpenSubtitle() -> String {
-        if quickOpenMode == .content {
-            if quickOpenFilter.isEmpty {
-                return quickOpenContentSearchLoading ? "파일 검색  |  Searching" : "파일 검색"
-            }
-            return quickOpenContentSearchLoading ? "파일 검색: \(quickOpenFilter)  |  Searching" : "파일 검색: \(quickOpenFilter)"
-        }
-        return quickOpenFilter.isEmpty ? "Type to filter" : "Filter: \(quickOpenFilter)"
     }
     private func resetQuickOpenRecentResults() {
         quickOpenRecentResultsStack.arrangedSubviews.forEach { view in
@@ -597,142 +569,18 @@ extension MainWindowController {
         quickOpenRecentResultsScrollView.reflectScrolledClipView(quickOpenRecentResultsScrollView.contentView)
     }
     private func quickOpenSidebarTitle(for item: QuickOpenItem) -> String {
-        guard quickOpenMode == .content else {
+        guard quickOpenUsesContentSearch(quickOpenMode) else {
             return item.path
         }
         let name = URL(fileURLWithPath: item.path).lastPathComponent
         let parent = parentPath(for: item.path)
         return parent.isEmpty ? "\(name)    \(item.detail)" : "\(name)    \(parent)    \(item.detail)"
     }
-    private func scheduleQuickOpenContentSearchIfNeeded() {
-        guard quickOpenMode == .content, let document = activeQuickOpenDocument() else {
-            return
-        }
-        let query = quickOpenFilter.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rootPath = document.root ?? root?.path ?? currentTerminalDirectory().path
-        guard quickOpenContentSearchQuery != query || quickOpenContentSearchRoot != rootPath else {
-            return
-        }
-
-        quickOpenContentSearchRequestID += 1
-        let requestID = quickOpenContentSearchRequestID
-        quickOpenContentSearchQuery = query
-        quickOpenContentSearchRoot = rootPath
-        quickOpenContentSearchLoading = true
-        let files = document.sourceFiles
-        let rootURL = URL(fileURLWithPath: rootPath).standardizedFileURL
-
-        quickOpenSearchQueue.async { [weak self] in
-            let results = MainWindowController.buildQuickOpenContentResults(root: rootURL, files: files, query: query)
-            DispatchQueue.main.async {
-                guard let self = self,
-                      self.quickOpenContentSearchRequestID == requestID,
-                      self.quickOpenMode == .content,
-                      self.quickOpenContentSearchQuery == query,
-                      self.quickOpenContentSearchRoot == rootPath
-                else {
-                    return
-                }
-                self.quickOpenContentResults = results
-                self.quickOpenContentSearchLoading = false
-                if self.overlayMode == .quickOpen {
-                    self.populateQuickOpenOverlay()
-                }
-            }
-        }
-    }
-    private func activeQuickOpenDocument() -> ReviewDocument? {
-        if let fileListingDocument = fileListingDocument {
-            return fileListingDocument
-        }
-        if let currentDocument = currentDocument {
-            return currentDocument
-        }
-        return nil
-    }
-    private static func buildQuickOpenContentResults(root: URL, files: [SourceFile], query: String) -> [QuickOpenItem] {
-        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let candidates = files
-            .lazy
-            .filter { $0.language != "folder" }
-            .prefix(Self.quickOpenSearchMaxFiles)
-
-        var results: [QuickOpenItem] = []
-        var scannedBytes = 0
-
-        for file in candidates {
-            if results.count >= Self.quickOpenSearchMaxResults || scannedBytes >= Self.quickOpenSearchMaxTotalBytes {
-                break
-            }
-            let pathMatch = !normalizedQuery.isEmpty && file.path.lowercased().contains(normalizedQuery)
-            let shouldPreviewEmptyQuery = normalizedQuery.isEmpty && results.count < 24
-            let shouldRead = normalizedQuery.isEmpty ? shouldPreviewEmptyQuery : true
-            var content: String?
-            var matchLine = 1
-
-            if shouldRead,
-               let loaded = quickOpenSearchContent(root: root, file: file, budgetRemaining: Self.quickOpenSearchMaxTotalBytes - scannedBytes) {
-                scannedBytes += loaded.bytes
-                if normalizedQuery.isEmpty {
-                    content = loaded.content
-                } else if let range = loaded.content.lowercased().range(of: normalizedQuery) {
-                    content = loaded.content
-                    matchLine = lineNumber(in: loaded.content, before: range.lowerBound)
-                } else if pathMatch {
-                    content = loaded.content
-                }
-            }
-
-            guard normalizedQuery.isEmpty || pathMatch || content != nil else {
-                continue
-            }
-
-            let excerpt = content.map { previewExcerpt(content: $0, around: matchLine) }
-            let preview = excerpt.map { value in
-                SourceFile(
-                    path: file.path,
-                    size: file.size,
-                    embedded: true,
-                    content: value.text,
-                    skippedReason: "",
-                    language: file.language,
-                    changed: file.changed,
-                    changedLines: file.changedLines,
-                    signature: file.signature,
-                    vcs: file.vcs
-                )
-            }
-            let status = file.changed || file.vcs != nil ? "changed" : "file"
-            let lineSuffix = normalizedQuery.isEmpty ? "" : " · line \(excerpt?.startLine ?? matchLine)"
-            results.append(QuickOpenItem(
-                path: file.path,
-                detail: "\(status) - \(file.language)\(lineSuffix)",
-                preview: preview,
-                previewStartLine: excerpt?.startLine ?? 1
-            ))
-        }
-        return results
-    }
-    private static func quickOpenSearchContent(root: URL, file: SourceFile, budgetRemaining: Int) -> (content: String, bytes: Int)? {
-        guard file.size > 0,
-              file.size <= Self.quickOpenSearchMaxFileBytes,
-              file.size <= budgetRemaining else {
-            return nil
-        }
-        let url = root.appendingPathComponent(file.path)
-        guard let data = try? Data(contentsOf: url),
-              data.count <= Self.quickOpenSearchMaxFileBytes,
-              data.count <= budgetRemaining,
-              !data.prefix(8192).contains(0),
-              let content = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        return (content, data.count)
-    }
     private func renderQuickOpenContentPreview(_ item: QuickOpenItem) {
         sourcePreviewScrollView.isHidden = true
         overlayDiffSplitView.isHidden = false
         setSingleCodePaneVisible(true)
+        setSourceLineRulerVisible(false)
         guard let preview = item.preview else {
             codePane.setOldContent(styledText("\(item.path)\n\(item.detail)\n\nPreview is loading or the file is too large for instant search.", color: theme.secondaryText))
             codePane.setNewString("")
@@ -772,7 +620,14 @@ extension MainWindowController {
         guard items.indices.contains(selectedQuickOpenIndex) else {
             return
         }
-        openPathFromShortcut(items[selectedQuickOpenIndex].path)
+        let item = items[selectedQuickOpenIndex]
+        if quickOpenUsesContentSearch(quickOpenMode),
+           openFilePathInFilesView(item.path, preferredLine: max(1, item.matchLine)) {
+            settingsUnderlayImageView.isHidden = true
+            quickOpenReturnMode = .hidden
+            return
+        }
+        openPathFromShortcut(item.path)
     }
     func populateGoToLineOverlay() {
         resetOverlaySidebar()
@@ -784,6 +639,7 @@ extension MainWindowController {
         overlayContentView.layer?.borderWidth = 0
         setSingleCodePaneVisible(true)
         resetDiffLineGutters()
+        setSourceLineRulerVisible(false)
         let target = goToLineTargetPath ?? selectedFilePath() ?? currentFileLocation()
         overlaySubtitleLabel.stringValue = target
         let value = goToLineBuffer.isEmpty ? "_" : goToLineBuffer
@@ -831,7 +687,8 @@ extension MainWindowController {
         container.layer?.borderColor = theme.panelBorder.withAlphaComponent(0.75).cgColor
         container.layer?.borderWidth = 1
 
-        let label = NSTextField(labelWithString: quickOpenFilter.isEmpty ? "파일 검색" : quickOpenFilter)
+        let placeholder = quickOpenMode == .usages ? "Find usages" : "파일 검색"
+        let label = NSTextField(labelWithString: quickOpenFilter.isEmpty ? placeholder : quickOpenFilter)
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = NSFont.systemFont(ofSize: 18, weight: .regular)
         label.textColor = quickOpenFilter.isEmpty ? theme.secondaryText : theme.primaryText

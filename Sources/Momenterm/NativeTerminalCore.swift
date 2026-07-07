@@ -104,6 +104,10 @@ final class NativeTerminalCore {
             if !branch.isEmpty {
                 normalized["branch"] = .string(branch)
             }
+            let detectedGitRoot = cleanPath(object["detectedGitRoot"]?.stringValue)
+            if !detectedGitRoot.isEmpty {
+                normalized["detectedGitRoot"] = .string(detectedGitRoot)
+            }
             return .object(normalized)
         }.prefix(maxWorkspaces))
     }
@@ -170,4 +174,3 @@ final class NativeTerminalCore {
             .trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
     }
 }
-

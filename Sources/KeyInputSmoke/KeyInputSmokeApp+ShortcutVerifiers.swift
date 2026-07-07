@@ -891,8 +891,8 @@ extension KeyInputSmokeApp {
             fail("file tree Enter focused the file view but did not show a visible review cursor for comments")
             return
         }
-        guard controller.fileOverlayShowsLineNumberGutterForSmokeTest() else {
-            fail("file view did not show an IntelliJ-style line-number gutter")
+        guard controller.fileOverlayShowsSourceLineRulerForSmokeTest() else {
+            fail("file view did not show a source line-number ruler")
             return
         }
         let selectedSourceIndexBeforePreviewArrow = controller.selectedSourceIndexForSmokeTest()
@@ -954,6 +954,29 @@ extension KeyInputSmokeApp {
         sendShortcut("\r", keyCode: 36, modifiers: [])
         guard controller.fileOverlayPreviewIsFirstResponderForSmokeTest() else {
             fail("re-entering the file preview after two-stage Esc did not focus the file view code pane")
+            return
+        }
+        sendShortcut("b", keyCode: 11, modifiers: [.command])
+        guard waitUntil("Cmd+B opens layered Find Usages over Files", timeout: 3, condition: {
+            controller.findUsagesIsLayeredOverFilesForSmokeTest()
+        }) else {
+            fail("Cmd+B from the file view did not open a layered Find Usages panel over Files; title=\(controller.overlayTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("Esc from Find Usages returns to Files", timeout: 2, condition: {
+            controller.overlayTitleForSmokeTest() == "Files" && !controller.overlayIsHiddenForSmokeTest()
+        }) else {
+            fail("Esc from layered Find Usages did not restore Files; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
+        guard controller.selectSourcePathForSmokeTest("src/app.swift") else {
+            fail("could not reselect the multi-line source fixture after layered Find Usages")
+            return
+        }
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard controller.fileOverlayPreviewIsFirstResponderForSmokeTest() else {
+            fail("re-entering the file preview after layered Find Usages did not focus the file view code pane")
             return
         }
         // Cmd+1 from the file view code pane returns focus to the file tree sidebar (open-only, and

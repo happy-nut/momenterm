@@ -207,7 +207,7 @@ function setEditor(content,lang){
       readOnly:true,theme:'vs-dark',
       minimap:{enabled:false},scrollBeyondLastLine:false,
       fontSize:_fontSize,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
-      lineNumbers:'on',automaticLayout:true,wordWrap:'off',
+      lineNumbers:'on',lineNumbersMinChars:4,automaticLayout:true,wordWrap:'off',
       contextmenu:false,overviewRulerLanes:0,
       scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}
     });
@@ -224,6 +224,7 @@ function setEditor(content,lang){
   var old=_editor.getModel();
   var m=monaco.editor.createModel(content,mapLang(lang));
   _editor.setModel(m);
+  _editor.updateOptions({lineNumbers:'on',lineNumbersMinChars:4});
   if(old)old.dispose();
   setEditorCursor();
 }
