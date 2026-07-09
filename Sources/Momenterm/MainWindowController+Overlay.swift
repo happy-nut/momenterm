@@ -25,6 +25,7 @@ extension MainWindowController {
         }
         let wasHidden = overlayView.isHidden
         overlayMode = mode
+        systemStatsBar.isHidden = mode == .changes
         overlayView.isHidden = false
         applyOverlayMaximizedState()
         populateOverlay()
@@ -62,6 +63,7 @@ extension MainWindowController {
         overlayMode = .hidden
         overlayView.isHidden = true
         overlayBackdrop.isHidden = true
+        systemStatsBar.isHidden = false
     }
 
     @discardableResult
@@ -94,6 +96,7 @@ extension MainWindowController {
         settingsReturnMode = .hidden
         quickOpenReturnMode = .hidden
         overlayMode = .files
+        systemStatsBar.isHidden = false
         overlayView.isHidden = false
         overlayBackdrop.isHidden = true
         applyOverlayMaximizedState()
@@ -171,12 +174,24 @@ extension MainWindowController {
     func configureStandardOverlayBodyLayout() {
         overlayBodySplitView.isVertical = true
         overlaySidebarHeightConstraint?.isActive = false
-        overlaySidebarWidthConstraint?.constant = MomentermDesign.Metrics.sidebarWidth + MomentermDesign.Metrics.sidebarGutter * 2
+        let dockedChanges = overlayMode == .changes
+        let sidebarWidth = dockedChanges ? MomentermDesign.Metrics.diffSidebarWidth : MomentermDesign.Metrics.sidebarWidth
+        overlaySidebarWidthConstraint?.constant = sidebarWidth + MomentermDesign.Metrics.sidebarGutter * 2
         overlaySidebarWidthConstraint?.isActive = true
         overlaySidebarStack.spacing = 4
+        let bodyInset: CGFloat = dockedChanges ? 0 : MomentermDesign.Metrics.panelOuterPadding
+        overlayHeaderHeightConstraint?.constant = dockedChanges ? 34 : 42
+        overlayHeaderDividerLeadingConstraint?.constant = dockedChanges ? 0 : MomentermDesign.Metrics.panelOuterPadding
+        overlayHeaderDividerTrailingConstraint?.constant = dockedChanges ? 0 : -MomentermDesign.Metrics.panelOuterPadding
+        overlayBodyLeadingConstraint?.constant = bodyInset
+        overlayBodyTrailingConstraint?.constant = -bodyInset
+        overlayBodyBottomConstraint?.constant = -bodyInset
+        overlayView.layer?.backgroundColor = theme.panelBackground.cgColor
+        overlayContentView.layer?.backgroundColor = theme.panelBackground.cgColor
         overlayContentView.layer?.borderColor = NSColor.clear.cgColor
         overlayContentView.layer?.borderWidth = 0
         overlaySidebarScrollView?.isHidden = false
+        updateSourceViewModeButtons(canToggle: false)
         setFileTabsVisible(false)
         fileHybridView.isHidden = true
         diffHybridView.isHidden = true

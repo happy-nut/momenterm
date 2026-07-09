@@ -140,6 +140,14 @@ extension MainWindowController {
         return current + view.subviews.reduce(0) { $0 + countViews(identifier: identifier, in: $1) }
     }
 
+    func collectViews(identifier: String, in view: NSView) -> [NSView] {
+        var views: [NSView] = view.identifier?.rawValue == identifier ? [view] : []
+        for subview in view.subviews {
+            views.append(contentsOf: collectViews(identifier: identifier, in: subview))
+        }
+        return views
+    }
+
     func collectButtons(in view: NSView) -> [NSButton] {
         var buttons: [NSButton] = []
         if let button = view as? NSButton {
@@ -211,6 +219,67 @@ extension MainWindowController {
             if colors.contains(where: { colorsAreClose(color, $0) }) {
                 found = true
                 stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    func storageContainsAnyDiffLineBackground(_ storage: NSTextStorage, colors: [NSColor]) -> Bool {
+        guard storage.length > 0 else {
+            return false
+        }
+        var found = false
+        storage.enumerateAttribute(.momentermDiffLineBackground, in: NSRange(location: 0, length: storage.length)) { value, _, stop in
+            guard let color = value as? NSColor else {
+                return
+            }
+            if colors.contains(where: { colorsAreClose(color, $0) }) {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    func storageHasBackgroundOnNewline(_ storage: NSTextStorage) -> Bool {
+        guard storage.length > 0 else {
+            return false
+        }
+        let string = storage.string as NSString
+        var found = false
+        storage.enumerateAttribute(.backgroundColor, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard value is NSColor else {
+                return
+            }
+            for offset in 0..<range.length {
+                let character = string.character(at: range.location + offset)
+                if character == 10 || character == 13 {
+                    found = true
+                    stop.pointee = true
+                    return
+                }
+            }
+        }
+        return found
+    }
+
+    func storageHasDiffLineBackgroundOnNewline(_ storage: NSTextStorage) -> Bool {
+        guard storage.length > 0 else {
+            return false
+        }
+        let string = storage.string as NSString
+        var found = false
+        storage.enumerateAttribute(.momentermDiffLineBackground, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard value is NSColor else {
+                return
+            }
+            for offset in 0..<range.length {
+                let character = string.character(at: range.location + offset)
+                if character == 10 || character == 13 {
+                    found = true
+                    stop.pointee = true
+                    return
+                }
             }
         }
         return found

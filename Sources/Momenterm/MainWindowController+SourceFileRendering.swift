@@ -8,6 +8,7 @@ extension MainWindowController {
         if file.language == "folder" {
             return
         }
+        sourcePreviewCursorLine = max(1, preferredLine ?? file.changedLines.first ?? 1)
         trackOpenFileTab(path: file.path)
         httpRunner.clearRunButtons()
         let renderedFile: SourceFile
@@ -24,6 +25,7 @@ extension MainWindowController {
         resetDiffLineGutters()
         setSourceLineRulerVisible(false)
         codePane.clearReviewCursors()
+        codePane.setReviewCursorHidden(false)
 
         let canToggle = sourceFileSupportsRawToggle(renderedFile)
         updateSourceViewModeButtons(canToggle: canToggle)
@@ -57,6 +59,7 @@ extension MainWindowController {
         }
         codePane.setNewContent(styledText("", color: theme.primaryText))
         let contentCursorLine = preferredLine ?? renderedFile.changedLines.first ?? 1
+        sourcePreviewCursorLine = max(1, contentCursorLine)
         let renderedCursorLine = sourcePreviewRenderedLine(path: renderedFile.path, contentLine: contentCursorLine)
         codePane.scrollOldToTop()
         codePane.scrollNewToTop()
@@ -94,6 +97,7 @@ extension MainWindowController {
     // including smoke binaries compiled directly with swiftc.
     private func renderToggleableSourceFileNatively(_ file: SourceFile, mode: SourceViewMode, preferredLine: Int?, focus: Bool) {
         let line = preferredLine ?? file.changedLines.first ?? 1
+        sourcePreviewCursorLine = max(1, line)
         let rawAttributed = NativeSyntaxHighlighter.highlight(file.content, language: rawPreviewLanguage(for: file.language), theme: theme)
         switch mode {
         case .raw:
@@ -186,13 +190,16 @@ extension MainWindowController {
     }
 
     func cycleSourceViewMode() {
-        let next: SourceViewMode
-        switch sourceViewMode {
-        case .raw: next = .side
-        case .side: next = .rendered
-        case .rendered: next = .raw
+        cycleSourceViewMode(delta: 1)
+    }
+
+    func cycleSourceViewMode(delta: Int) {
+        let modes: [SourceViewMode] = [.raw, .side, .rendered]
+        guard let index = modes.firstIndex(of: sourceViewMode) else {
+            return
         }
-        setSourceViewMode(next)
+        let wrapped = (index + (delta % modes.count) + modes.count) % modes.count
+        setSourceViewMode(modes[wrapped])
     }
 
     private func renderHttpSourceFile(_ file: SourceFile) {

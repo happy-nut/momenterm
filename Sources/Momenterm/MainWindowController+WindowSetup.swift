@@ -108,7 +108,7 @@ extension MainWindowController {
         quickOpenRecentFooterLabel.textColor = theme.secondaryText
         fileTabBarView.layer?.backgroundColor = theme.codeHeaderBackground.cgColor
         fileTabBarView.layer?.borderColor = theme.separator.cgColor
-        memoSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
+        memoSidePanel.layer?.backgroundColor = theme.codeBackground.cgColor
         memoSidePanel.layer?.borderColor = theme.panelBorder.cgColor
         mergedPromptSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
         mergedPromptSidePanel.layer?.borderColor = theme.panelBorder.cgColor
@@ -118,6 +118,10 @@ extension MainWindowController {
         // Persistent text views that hold their own theme copy.
         configureCodeTextView(mergedPromptTextView)
         memoTextView?.configure(theme: theme)
+        memoScrollView?.layer?.backgroundColor = theme.codeBackground.cgColor
+        memoScrollView?.backgroundColor = theme.codeBackground
+        memoScrollView?.contentView.layer?.backgroundColor = theme.codeBackground.cgColor
+        memoScrollView?.contentView.backgroundColor = theme.codeBackground
         for textView in settingsPromptTextViews.values {
             textView.configure(theme: theme)
         }
@@ -168,7 +172,8 @@ extension MainWindowController {
             // Settings is a deliberate, form-like panel — a stray click (even one that slips past the
             // card onto the backdrop) must not discard it. It closes only via Esc or the ✕ button.
             // Other floating overlays (pickers, palette) still dismiss on an outside click.
-            if self.overlayMode == .settings {
+            if self.overlayMode == .settings
+                || (self.overlayMode == .quickOpen && self.quickOpenMode == .recent) {
                 return
             }
             self.closeOverlayAction()
@@ -226,9 +231,10 @@ extension MainWindowController {
                 button.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.iconButtonSize)
             ])
         }
-        configureSourceViewModeButton(sourceViewModeRawButton, symbol: "chevron.left.slash.chevron.right", fallback: "Raw", label: "Raw source", shortcut: "⌥1", mode: .raw)
-        configureSourceViewModeButton(sourceViewModeSideButton, symbol: "rectangle.split.2x1", fallback: "Side", label: "Side by side", shortcut: "⌥2", mode: .side)
-        configureSourceViewModeButton(sourceViewModeRenderedButton, symbol: "doc.richtext", fallback: "View", label: "Rendered", shortcut: "⌥3", mode: .rendered)
+        let sourceModeShortcut = "⌃Tab / ⌃⇧Tab"
+        configureSourceViewModeButton(sourceViewModeRawButton, symbol: "chevron.left.slash.chevron.right", fallback: "Raw", label: "Raw source", shortcut: sourceModeShortcut, mode: .raw)
+        configureSourceViewModeButton(sourceViewModeSideButton, symbol: "rectangle.split.2x1", fallback: "Side", label: "Side by side", shortcut: sourceModeShortcut, mode: .side)
+        configureSourceViewModeButton(sourceViewModeRenderedButton, symbol: "doc.richtext", fallback: "View", label: "Rendered", shortcut: sourceModeShortcut, mode: .rendered)
         sourceViewModeButtonStack.translatesAutoresizingMaskIntoConstraints = false
         sourceViewModeButtonStack.orientation = .horizontal
         sourceViewModeButtonStack.spacing = 2
@@ -435,7 +441,8 @@ extension MainWindowController {
             guard let self = self, let dict = body as? [String: Any] else { return }
             let kind = (dict["kind"] as? String) ?? "question"
             let line = (dict["line"] as? Int) ?? Int((dict["line"] as? Double) ?? 1)
-            self.addHybridReviewComment(kind: kind, monacoLine: max(1, line))
+            let text = (dict["text"] as? String) ?? ""
+            self.addHybridReviewComment(kind: kind, monacoLine: max(1, line), text: text)
         }
         diffHybridView.registerMessageHandler(name: "reviewDeleteComment") { [weak self] body in
             guard let self = self, let dict = body as? [String: Any] else { return }
@@ -462,7 +469,7 @@ extension MainWindowController {
             self.selectHistoryCommitByHash(hash)
         }
 
-        let settingsDocument = NSView()
+        let settingsDocument = MomentermFlippedView()
         settingsDocument.translatesAutoresizingMaskIntoConstraints = false
         settingsDocument.wantsLayer = true
         settingsDocument.layer?.backgroundColor = theme.panelBackground.cgColor
@@ -479,7 +486,7 @@ extension MainWindowController {
         overlaySettingsScrollView.isHidden = true
         overlayContentView.addSubview(overlaySettingsScrollView)
 
-        let recentResultsDocument = NSView()
+        let recentResultsDocument = MomentermFlippedView()
         recentResultsDocument.translatesAutoresizingMaskIntoConstraints = false
         recentResultsDocument.wantsLayer = true
         recentResultsDocument.layer?.backgroundColor = theme.panelBackground.cgColor
@@ -531,6 +538,12 @@ extension MainWindowController {
         overlayCompactHeightConstraint = overlayView.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.workspacePickerMaxHeight)
         overlayCompactCenterXConstraint = overlayView.centerXAnchor.constraint(equalTo: rootView.centerXAnchor)
         overlayCompactCenterYConstraint = overlayView.centerYAnchor.constraint(equalTo: rootView.centerYAnchor)
+        overlayHeaderHeightConstraint = header.heightAnchor.constraint(equalToConstant: 42)
+        overlayHeaderDividerLeadingConstraint = headerDivider.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: MomentermDesign.Metrics.panelOuterPadding)
+        overlayHeaderDividerTrailingConstraint = headerDivider.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding)
+        overlayBodyLeadingConstraint = overlayBodySplitView.leadingAnchor.constraint(equalTo: overlayView.leadingAnchor, constant: MomentermDesign.Metrics.panelOuterPadding)
+        overlayBodyTrailingConstraint = overlayBodySplitView.trailingAnchor.constraint(equalTo: overlayView.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding)
+        overlayBodyBottomConstraint = overlayBodySplitView.bottomAnchor.constraint(equalTo: overlayView.bottomAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding)
 
         diffEditorChromeHeightConstraint = diffEditorChromeView.heightAnchor.constraint(equalToConstant: 0)
         fileTabBarHeightConstraint = fileTabBarView.heightAnchor.constraint(equalToConstant: 0)
@@ -631,7 +644,7 @@ extension MainWindowController {
             header.topAnchor.constraint(equalTo: overlayView.topAnchor),
             header.leadingAnchor.constraint(equalTo: overlayView.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: overlayView.trailingAnchor),
-            header.heightAnchor.constraint(equalToConstant: 42),
+            overlayHeaderHeightConstraint!,
 
             overlayTitleLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: MomentermDesign.Metrics.panelOuterPadding),
             overlayTitleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
@@ -646,15 +659,15 @@ extension MainWindowController {
             close.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding),
             close.centerYAnchor.constraint(equalTo: header.centerYAnchor),
 
-            headerDivider.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: MomentermDesign.Metrics.panelOuterPadding),
-            headerDivider.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding),
+            overlayHeaderDividerLeadingConstraint!,
+            overlayHeaderDividerTrailingConstraint!,
             headerDivider.bottomAnchor.constraint(equalTo: header.bottomAnchor),
             headerDivider.heightAnchor.constraint(equalToConstant: 1),
 
             overlayBodySplitView.topAnchor.constraint(equalTo: header.bottomAnchor),
-            overlayBodySplitView.leadingAnchor.constraint(equalTo: overlayView.leadingAnchor, constant: MomentermDesign.Metrics.panelOuterPadding),
-            overlayBodySplitView.trailingAnchor.constraint(equalTo: overlayView.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding),
-            overlayBodySplitView.bottomAnchor.constraint(equalTo: overlayView.bottomAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding)
+            overlayBodyLeadingConstraint!,
+            overlayBodyTrailingConstraint!,
+            overlayBodyBottomConstraint!
         ])
     }
 

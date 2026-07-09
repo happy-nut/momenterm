@@ -53,12 +53,31 @@ extension MainWindowController {
         fileListingRequestID += 1
         fileListingLoadCount += 1
         let requestID = fileListingRequestID
+        let requestWorkspaceId = activeWorkspaceId
 
         isLoadingFileListing = true
         showOverlay(.files)
         focusFileSidebar()
 
         DispatchQueue.global(qos: .userInitiated).async {
+            if let shallowDocument = try? self.service.shallowFileListing(root: listingRoot) {
+                DispatchQueue.main.async {
+                    guard self.fileListingRequestID == requestID,
+                          self.activeWorkspaceId == requestWorkspaceId,
+                          self.fileListingDocument == nil else {
+                        return
+                    }
+                    self.fileListingDocument = shallowDocument
+                    let resolvedRoot = URL(fileURLWithPath: shallowDocument.root ?? listingRoot.path).standardizedFileURL
+                    self.fileListingRoot = resolvedRoot
+                    self.root = resolvedRoot
+                    if self.overlayMode == .files {
+                        self.populateOverlay()
+                        self.focusFileSidebar()
+                    }
+                }
+            }
+
             let result: Result<ReviewDocument, Error>
             do {
                 result = .success(try self.service.fileListing(root: listingRoot))
@@ -68,8 +87,7 @@ extension MainWindowController {
 
             DispatchQueue.main.async {
                 guard self.fileListingRequestID == requestID,
-                      self.normalizedWorkspacePath(self.fileListingRoot?.path) == self.normalizedWorkspacePath(listingRoot.path)
-                else {
+                      self.activeWorkspaceId == requestWorkspaceId else {
                     return
                 }
                 let selectedPathBeforeRefresh: String?
@@ -156,6 +174,7 @@ extension MainWindowController {
 
         isLoadingDocument = true
         let detectedGitRoot = activeWorkspaceDetectedGitRoot()
+        let requestedWorkspaceId = activeWorkspaceId
         DispatchQueue.global(qos: .userInitiated).async {
             let requestedRoot = root
             // US-5: when the active workspace's own path isn't inside a repo but a pane under it has
@@ -171,7 +190,8 @@ extension MainWindowController {
 
             DispatchQueue.main.async {
                 self.isLoadingDocument = false
-                guard self.root == requestedRoot else {
+                guard self.root == requestedRoot,
+                      self.activeWorkspaceId == requestedWorkspaceId else {
                     self.drainQueuedReload()
                     return
                 }

@@ -17,6 +17,69 @@ private struct DiffReviewTarget {
     }
 }
 
+private struct DiffSyntaxState {
+    private var fencedLanguage: String?
+
+    mutating func language(for line: String, baseLanguage: String) -> String {
+        let normalizedBase = NativeLanguageRegistry.normalized(baseLanguage)
+        guard normalizedBase == "markdown" else {
+            return normalizedBase
+        }
+        if let nextFenceLanguage = markdownFenceLanguage(from: line) {
+            if fencedLanguage == nil {
+                fencedLanguage = nextFenceLanguage
+            } else {
+                fencedLanguage = nil
+            }
+            return "markdown"
+        }
+        return fencedLanguage ?? "markdown"
+    }
+
+    private func markdownFenceLanguage(from line: String) -> String?? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") else {
+            return nil
+        }
+        let raw = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else {
+            return .some(nil)
+        }
+        var token = raw.components(separatedBy: .whitespaces).first ?? ""
+        if token.hasPrefix("{."), token.hasSuffix("}") {
+            token = String(token.dropFirst(2).dropLast())
+        }
+        let normalized = NativeLanguageRegistry.normalized(token)
+        return .some(NativeLanguageRegistry.darculaHighlightedLanguages.contains(normalized) ? normalized : nil)
+    }
+}
+
+private enum HybridLineDiffKind: String {
+    case added
+    case deleted
+    case modified
+}
+
+private struct HybridLineDiffEntry {
+    let line: Int
+    let kind: HybridLineDiffKind
+
+    var payload: [String: Any] {
+        [
+            "line": line,
+            "kind": kind.rawValue
+        ]
+    }
+}
+
+private struct HybridDiffContent {
+    let oldLines: [String]
+    let newLines: [String]
+    let modifiedFileLines: [Int]
+    let originalLineDiffs: [HybridLineDiffEntry]
+    let modifiedLineDiffs: [HybridLineDiffEntry]
+}
+
 // Diff target navigation and native / hybrid diff rendering.
 extension MainWindowController {
     func selectedDiffHunk(in file: DiffFile) -> DiffHunk? {
@@ -115,6 +178,7 @@ extension MainWindowController {
     }
     func renderDiffFile(_ file: DiffFile) {
         setSourceLineRulerVisible(false)
+        codePane.setReviewCursorHidden(false)
         let oldOutput = NSMutableAttributedString()
         let newOutput = NSMutableAttributedString()
         let language = languageForPath(file.newPath.isEmpty ? file.oldPath : file.newPath)
@@ -123,13 +187,18 @@ extension MainWindowController {
         // (set in layoutDiffLineGutters), so the outer horizontal inset stays ~0 — otherwise a
         // symmetric textContainerInset also wastes the same width on the outer edge (the black
         // margins the user saw). Vertical inset only.
-        codePane.setOldInset(NSSize(width: 0, height: MomentermDesign.Metrics.codeTextInset.height))
-        codePane.setNewInset(NSSize(width: 0, height: MomentermDesign.Metrics.codeTextInset.height))
+        codePane.setOldInset(MomentermDesign.Metrics.diffCodeTextInset)
+        codePane.setNewInset(MomentermDesign.Metrics.diffCodeTextInset)
         diffOldGutterNumbers.removeAll(keepingCapacity: true)
         diffNewGutterNumbers.removeAll(keepingCapacity: true)
+        diffOldLineBackgrounds.removeAll(keepingCapacity: true)
+        diffNewLineBackgrounds.removeAll(keepingCapacity: true)
+        diffCenterGutterBlocks.removeAll(keepingCapacity: true)
 
         selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(reviewTargetCount(for: file) - 1, 0))
         var renderedTargetIndex = 0
+        var oldSyntaxState = DiffSyntaxState()
+        var newSyntaxState = DiffSyntaxState()
         for hunk in file.hunks {
             // The F7-at-last-hunk "pause before next file" behavior stays
             // (awaitingNextFileAfterLastHunk), but highlighting now follows actual changed blocks
@@ -139,14 +208,16 @@ extension MainWindowController {
                 let line = hunk.lines[index]
                 switch line.kind {
                 case .context:
-                    appendCodeLine(number: line.oldNumber, text: line.text, to: oldOutput, color: theme.codeText, background: nil, pane: .old, language: language)
-                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.codeText, background: nil, pane: .new, language: language)
+                    appendCodeLine(number: line.oldNumber, text: line.text, to: oldOutput, color: theme.codeText, background: nil, pane: .old, language: oldSyntaxState.language(for: line.text, baseLanguage: language))
+                    appendCodeLine(number: line.newNumber, text: line.text, to: newOutput, color: theme.codeText, background: nil, pane: .new, language: newSyntaxState.language(for: line.text, baseLanguage: language))
                     index += 1
                 case .deletion:
                     let isFocusedTarget = renderedTargetIndex == selectedDiffHunkIndex
-                    let emptyBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
-                    let deletionBackground = isFocusedTarget ? activeDiffBackground(theme.deletionBackground) : theme.deletionBackground
-                    let modifiedBackground = isFocusedTarget ? activeDiffBackground(theme.modifiedBackground) : theme.modifiedBackground
+                    let emptyBackground = theme.emptyDiffBackground
+                    let deletionBackground = diffLineBackground(theme.deletionBackground, focused: isFocusedTarget)
+                    let modifiedBackground = diffLineBackground(theme.modifiedBackground, focused: isFocusedTarget)
+                    let oldBlockStart = diffOldGutterNumbers.count
+                    let newBlockStart = diffNewGutterNumbers.count
                     let start = index
                     var deletions: [DiffLine] = []
                     while index < hunk.lines.count, hunk.lines[index].kind == .deletion {
@@ -160,7 +231,7 @@ extension MainWindowController {
                     }
                     if additions.isEmpty {
                         for deletion in deletions {
-                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: deletionBackground, pane: .old, language: language)
+                            appendCodeLine(number: deletion.oldNumber, text: deletion.text, to: oldOutput, color: theme.deletionText, background: deletionBackground, pane: .old, language: oldSyntaxState.language(for: deletion.text, baseLanguage: language))
                             appendCodeLine(number: nil, text: "", to: newOutput, color: theme.codeText, background: emptyBackground, pane: .new)
                         }
                     } else {
@@ -178,7 +249,7 @@ extension MainWindowController {
                                     color: theme.modifiedText,
                                     background: modifiedBackground,
                                     pane: .old,
-                                    language: language,
+                                    language: oldSyntaxState.language(for: deletion.text, baseLanguage: language),
                                     inlineHighlight: addition.flatMap { changedTextRange(in: deletion.text, comparedTo: $0.text) },
                                     inlineHighlightColor: theme.modifiedText.withAlphaComponent(0.45)
                                 )
@@ -193,7 +264,7 @@ extension MainWindowController {
                                     color: theme.modifiedText,
                                     background: modifiedBackground,
                                     pane: .new,
-                                    language: language,
+                                    language: newSyntaxState.language(for: addition.text, baseLanguage: language),
                                     inlineHighlight: deletion.flatMap { changedTextRange(in: addition.text, comparedTo: $0.text) },
                                     inlineHighlightColor: theme.modifiedText.withAlphaComponent(0.45)
                                 )
@@ -205,23 +276,41 @@ extension MainWindowController {
                     if index == start {
                         index += 1
                     }
+                    appendDiffCenterBlock(
+                        oldStart: oldBlockStart,
+                        oldEnd: diffOldGutterNumbers.count - 1,
+                        newStart: newBlockStart,
+                        newEnd: diffNewGutterNumbers.count - 1,
+                        background: additions.isEmpty ? deletionBackground : modifiedBackground
+                    )
                     renderedTargetIndex += 1
                 case .addition:
                     let isFocusedTarget = renderedTargetIndex == selectedDiffHunkIndex
-                    let emptyBackground = isFocusedTarget ? theme.diffFocusedHunkBackground : theme.emptyDiffBackground
-                    let additionBackground = isFocusedTarget ? activeDiffBackground(theme.additionBackground) : theme.additionBackground
+                    let emptyBackground = theme.emptyDiffBackground
+                    let additionBackground = diffLineBackground(theme.additionBackground, focused: isFocusedTarget)
+                    let oldBlockStart = diffOldGutterNumbers.count
+                    let newBlockStart = diffNewGutterNumbers.count
                     while index < hunk.lines.count, hunk.lines[index].kind == .addition {
                         let addition = hunk.lines[index]
                         appendCodeLine(number: nil, text: "", to: oldOutput, color: theme.codeText, background: emptyBackground, pane: .old)
-                        appendCodeLine(number: addition.newNumber, text: addition.text, to: newOutput, color: theme.additionText, background: additionBackground, pane: .new, language: language)
+                        appendCodeLine(number: addition.newNumber, text: addition.text, to: newOutput, color: theme.additionText, background: additionBackground, pane: .new, language: newSyntaxState.language(for: addition.text, baseLanguage: language))
                         index += 1
                     }
+                    appendDiffCenterBlock(
+                        oldStart: oldBlockStart,
+                        oldEnd: diffOldGutterNumbers.count - 1,
+                        newStart: newBlockStart,
+                        newEnd: diffNewGutterNumbers.count - 1,
+                        background: additionBackground
+                    )
                     renderedTargetIndex += 1
                 case .meta:
                     appendLine(line.text, to: oldOutput, color: theme.hunkText, background: nil)
                     appendLine(line.text, to: newOutput, color: theme.hunkText, background: nil)
                     diffOldGutterNumbers.append(nil)
                     diffNewGutterNumbers.append(nil)
+                    diffOldLineBackgrounds.append(nil)
+                    diffNewLineBackgrounds.append(nil)
                     index += 1
                 }
             }
@@ -232,12 +321,14 @@ extension MainWindowController {
             appendLine("Binary file changed", to: newOutput, color: theme.secondaryText, background: theme.emptyDiffBackground)
             diffOldGutterNumbers.append(nil)
             diffNewGutterNumbers.append(nil)
+            diffOldLineBackgrounds.append(theme.emptyDiffBackground)
+            diffNewLineBackgrounds.append(theme.emptyDiffBackground)
         }
 
         // The gutter padding + the new pane's inner exclusion strip must be set on the text container
         // BEFORE the content is laid out. Setting exclusionPaths only AFTER setNewContent+scroll lays
         // the text out ignoring the strip, so the line numbers overlap the code (the bug the user saw).
-        // diffGutterWidth is a fixed 44pt, so this doesn't need the post-content line counts.
+        // diffGutterWidth is fixed, so this doesn't need the post-content line counts.
         applyDiffGutterTextInsets()
         codePane.setOldContent(oldOutput)
         codePane.setNewContent(newOutput)
@@ -256,37 +347,18 @@ extension MainWindowController {
             refreshInlineReviewCommentBoxes()
             return
         }
-        // US-H7: send reconstructed old/new content to Monaco diff editor.
+        // US-H7: send reconstructed old/new content to Monaco diff editor. The line decoration map is
+        // derived from the same Git hunks as the sidebar +N/-N counts, instead of asking Monaco to
+        // rediscover the diff and risking invisible/misclassified large inserts.
         let diffLanguage = languageForPath(file.newPath.isEmpty ? file.oldPath : file.newPath)
-        var oldLines: [String] = []
-        var newLines: [String] = []
-        // Parallel to newLines: the real file (new) line number of each reconstructed modified line, so
-        // review comments (stored by file line) map to/from Monaco's line numbers.
-        var modifiedFileLines: [Int] = []
-        for hunk in file.hunks {
-            for line in hunk.lines {
-                switch line.kind {
-                case .context:
-                    oldLines.append(line.text)
-                    newLines.append(line.text)
-                    modifiedFileLines.append(line.newNumber ?? (modifiedFileLines.last ?? 0) + 1)
-                case .deletion:
-                    oldLines.append(line.text)
-                case .addition:
-                    newLines.append(line.text)
-                    modifiedFileLines.append(line.newNumber ?? (modifiedFileLines.last ?? 0) + 1)
-                case .meta:
-                    break
-                }
-            }
-        }
-        hybridModifiedFileLines = modifiedFileLines
+        let hybridContent = hybridDiffContent(for: file)
+        hybridModifiedFileLines = hybridContent.modifiedFileLines
         hybridReviewFilePath = selectedFilePath()
         // Reload Monaco only when the file's content actually changed (a different file, or a live
         // reload). Plain hunk navigation keeps the same content, so we skip the model recreation and
         // just move the cursor — otherwise every F7 would flash the whole diff and reset the caret.
-        let originalContent = oldLines.joined(separator: "\n")
-        let modifiedContent = newLines.joined(separator: "\n")
+        let originalContent = hybridContent.oldLines.joined(separator: "\n")
+        let modifiedContent = hybridContent.newLines.joined(separator: "\n")
         let signature = "\(file.oldPath)|\(file.newPath)|\(originalContent.hashValue)|\(modifiedContent.hashValue)"
         if lastHybridDiffSignature != signature {
             lastHybridDiffSignature = signature
@@ -295,18 +367,23 @@ extension MainWindowController {
                 "original": originalContent,
                 "modified": modifiedContent,
                 "language": diffLanguage,
+                "originalLineDiffs": hybridContent.originalLineDiffs.map(\.payload),
+                "modifiedLineDiffs": hybridContent.modifiedLineDiffs.map(\.payload),
                 "fontSize": Double(MomentermDesign.Fonts.codeFontSize),
+                "lineHeight": 18,
                 // IntelliJ "modified" (changed on both sides) blue, matching the native diff pane so the
                 // hybrid diff reclassifies Monaco's add-green/delete-red the same way.
                 "modifiedLineBackground": theme.modifiedBackground.hexString(fallback: "#2B3A52"),
-                "modifiedTokenBackground": theme.modifiedText.hexString(fallback: "#6897BB")
+                "modifiedTokenBackground": theme.modifiedText.hexString(fallback: "#6897BB"),
+                "addedLineBackground": theme.additionBackground.hexString(fallback: "#294436"),
+                "deletedLineBackground": theme.deletionBackground.hexString(fallback: "#4A2D2D")
             ])
         }
         showHybridDiffPane()
         // Place Monaco's review cursor and IntelliJ-style active hunk block on the selected changed
         // block (not the broad git hunk), then show the optional "one more F7" hint at file boundary.
         let activeTarget = selectedReviewTarget(in: file)
-        let cursorLine = activeTarget.map { min(max(1, $0.cursorLine), max(1, newLines.count)) } ?? max(1, newLines.count)
+        let cursorLine = activeTarget.map { min(max(1, $0.cursorLine), max(1, hybridContent.newLines.count)) } ?? max(1, hybridContent.newLines.count)
         if let target = activeTarget {
             diffHybridView.postJSON([
                 "type": "setActiveHunk",
@@ -331,15 +408,88 @@ extension MainWindowController {
         refreshInlineReviewCommentBoxes()
     }
 
+    private func hybridDiffContent(for file: DiffFile) -> HybridDiffContent {
+        var oldLines: [String] = []
+        var newLines: [String] = []
+        // Parallel to newLines: the real file (new) line number of each reconstructed modified line, so
+        // review comments (stored by file line) map to/from Monaco's line numbers.
+        var modifiedFileLines: [Int] = []
+        var originalLineDiffs: [HybridLineDiffEntry] = []
+        var modifiedLineDiffs: [HybridLineDiffEntry] = []
+
+        func appendModifiedFileLine(_ lineNumber: Int?) {
+            modifiedFileLines.append(lineNumber ?? (modifiedFileLines.last ?? 0) + 1)
+        }
+
+        func appendOriginalDiff(_ kind: HybridLineDiffKind) {
+            originalLineDiffs.append(HybridLineDiffEntry(line: oldLines.count, kind: kind))
+        }
+
+        func appendModifiedDiff(_ kind: HybridLineDiffKind) {
+            modifiedLineDiffs.append(HybridLineDiffEntry(line: newLines.count, kind: kind))
+        }
+
+        for hunk in file.hunks {
+            var index = 0
+            while index < hunk.lines.count {
+                let line = hunk.lines[index]
+                switch line.kind {
+                case .context:
+                    oldLines.append(line.text)
+                    newLines.append(line.text)
+                    appendModifiedFileLine(line.newNumber)
+                    index += 1
+                case .deletion:
+                    var deletions: [DiffLine] = []
+                    while index < hunk.lines.count, hunk.lines[index].kind == .deletion {
+                        deletions.append(hunk.lines[index])
+                        index += 1
+                    }
+                    var additions: [DiffLine] = []
+                    while index < hunk.lines.count, hunk.lines[index].kind == .addition {
+                        additions.append(hunk.lines[index])
+                        index += 1
+                    }
+                    let pairedCount = min(deletions.count, additions.count)
+                    for (offset, deletion) in deletions.enumerated() {
+                        oldLines.append(deletion.text)
+                        appendOriginalDiff(offset < pairedCount ? .modified : .deleted)
+                    }
+                    for (offset, addition) in additions.enumerated() {
+                        newLines.append(addition.text)
+                        appendModifiedFileLine(addition.newNumber)
+                        appendModifiedDiff(offset < pairedCount ? .modified : .added)
+                    }
+                case .addition:
+                    while index < hunk.lines.count, hunk.lines[index].kind == .addition {
+                        let addition = hunk.lines[index]
+                        newLines.append(addition.text)
+                        appendModifiedFileLine(addition.newNumber)
+                        appendModifiedDiff(.added)
+                        index += 1
+                    }
+                case .meta:
+                    index += 1
+                }
+            }
+        }
+
+        return HybridDiffContent(
+            oldLines: oldLines,
+            newLines: newLines,
+            modifiedFileLines: modifiedFileLines,
+            originalLineDiffs: originalLineDiffs,
+            modifiedLineDiffs: modifiedLineDiffs
+        )
+    }
+
     private func configureDiffEditorChrome(for file: DiffFile) {
         configureDiffEditorChromeVisibility(true)
         diffEditorChromeView.layer?.backgroundColor = theme.diffEditorToolbarBackground.cgColor
         diffEditorPathLabel.textColor = theme.secondaryText
         diffEditorStatusLabel.textColor = theme.secondaryText
         diffEditorPathLabel.stringValue = diffEditorPathSummary(for: file)
-        let differences = max(file.hunks.count, file.added + file.removed > 0 ? 1 : 0)
-        let suffix = differences == 1 ? "difference" : "differences"
-        diffEditorStatusLabel.stringValue = "\(differences) \(suffix), 0 included"
+        diffEditorStatusLabel.attributedStringValue = diffEditorChangeStatsTitle(for: file)
         diffEditorCurrentVersionCheckbox.state = .off
         diffEditorCurrentVersionCheckbox.attributedTitle = NSAttributedString(
             string: "Current version",
@@ -348,6 +498,22 @@ extension MainWindowController {
                 .foregroundColor: theme.secondaryText
             ]
         )
+    }
+    private func diffEditorChangeStatsTitle(for file: DiffFile) -> NSAttributedString {
+        let output = NSMutableAttributedString()
+        output.append(NSAttributedString(string: "+\(file.added)", attributes: [
+            .font: MomentermDesign.Fonts.codeSmall,
+            .foregroundColor: theme.fileTreeVcsStaged
+        ]))
+        output.append(NSAttributedString(string: "  ", attributes: [
+            .font: MomentermDesign.Fonts.codeSmall,
+            .foregroundColor: theme.secondaryText
+        ]))
+        output.append(NSAttributedString(string: "-\(file.removed)", attributes: [
+            .font: MomentermDesign.Fonts.codeSmall,
+            .foregroundColor: theme.fileTreeVcsDeleted
+        ]))
+        return output
     }
     private func diffEditorPathSummary(for file: DiffFile) -> String {
         let path = file.displayPath
@@ -378,12 +544,25 @@ extension MainWindowController {
         let newView = codePane.newPaneCodeView
         let width = diffGutterWidth
         let tall: CGFloat = 1_000_000
-        oldView.textContainer?.lineFragmentPadding = 6
-        newView.textContainer?.lineFragmentPadding = 6
+        oldView.textContainer?.lineFragmentPadding = 3
+        newView.textContainer?.lineFragmentPadding = 3
         newView.textContainer?.exclusionPaths = [NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: tall))]
     }
 
-    private func activeDiffBackground(_ base: NSColor) -> NSColor {
-        base.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? base
+    private func diffLineBackground(_ base: NSColor, focused: Bool) -> NSColor {
+        base.withAlphaComponent(focused ? 0.36 : 0.18)
+    }
+
+    private func appendDiffCenterBlock(oldStart: Int, oldEnd: Int, newStart: Int, newEnd: Int, background: NSColor) {
+        guard oldStart <= oldEnd,
+              newStart <= newEnd
+        else { return }
+        diffCenterGutterBlocks.append(DiffCenterGutterChangeBlock(
+            oldStartIndex: oldStart,
+            oldEndIndex: oldEnd,
+            newStartIndex: newStart,
+            newEndIndex: newEnd,
+            background: background
+        ))
     }
 }

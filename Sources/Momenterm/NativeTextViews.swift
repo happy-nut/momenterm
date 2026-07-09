@@ -1,5 +1,9 @@
 import AppKit
 
+extension NSAttributedString.Key {
+    static let momentermDiffLineBackground = NSAttributedString.Key("dev.happynut.momenterm.diffLineBackground")
+}
+
 // Inline text/scroll views extracted from MainWindowController (refactor step #4).
 // NSView subclasses for the code editor, terminal, inline review comments, memo,
 // settings prompt, and workspace rail. They communicate outward only through on*
@@ -221,9 +225,21 @@ final class NativeCodeTextView: NSTextView {
         return resigned
     }
 
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawDiffLineBackgrounds(in: rect)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawReviewCursor()
+    }
+
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        guard !reviewCursorHidden else {
+            return
+        }
+        super.drawInsertionPoint(in: rect, color: color, turnedOn: flag)
     }
 
     func reviewCursorIsVisibleForSmokeTest() -> Bool {
@@ -252,6 +268,69 @@ final class NativeCodeTextView: NSTextView {
         }
         reviewCursorColor.setFill()
         rect.fill()
+    }
+
+    private func drawDiffLineBackgrounds(in dirtyRect: NSRect) {
+        guard let storage = textStorage,
+              storage.length > 0,
+              let layoutManager = layoutManager,
+              let textContainer = textContainer
+        else {
+            return
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        guard layoutManager.numberOfGlyphs > 0 else {
+            return
+        }
+
+        let origin = textContainerOrigin
+        let containerRect = NSRect(
+            x: dirtyRect.minX - origin.x,
+            y: dirtyRect.minY - origin.y,
+            width: dirtyRect.width,
+            height: dirtyRect.height
+        )
+        let visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: containerRect, in: textContainer)
+        guard visibleGlyphRange.length > 0 else {
+            return
+        }
+
+        let visible = visibleRect
+        let drawX = min(visible.minX, dirtyRect.minX)
+        let drawWidth = max(visible.width, dirtyRect.width)
+        var glyphIndex = visibleGlyphRange.location
+        let upperBound = min(NSMaxRange(visibleGlyphRange), layoutManager.numberOfGlyphs)
+        while glyphIndex < upperBound {
+            var lineGlyphRange = NSRange(location: 0, length: 0)
+            let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+            if let background = diffLineBackgroundColor(at: characterIndex, storage: storage) {
+                background.setFill()
+                let rect = NSRect(
+                    x: drawX,
+                    y: origin.y + lineRect.minY,
+                    width: drawWidth,
+                    height: max(1, ceil(lineRect.height))
+                )
+                rect.intersection(dirtyRect).fill()
+            }
+            let next = NSMaxRange(lineGlyphRange)
+            glyphIndex = next > glyphIndex ? next : glyphIndex + 1
+        }
+    }
+
+    private func diffLineBackgroundColor(at index: Int, storage: NSTextStorage) -> NSColor? {
+        guard storage.length > 0 else {
+            return nil
+        }
+        let bounded = min(max(index, 0), storage.length - 1)
+        if let color = storage.attribute(.momentermDiffLineBackground, at: bounded, effectiveRange: nil) as? NSColor {
+            return color
+        }
+        if bounded > 0 {
+            return storage.attribute(.momentermDiffLineBackground, at: bounded - 1, effectiveRange: nil) as? NSColor
+        }
+        return nil
     }
 
     func reviewCursorRectForOverlay() -> NSRect? {
@@ -881,6 +960,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
     var onTextChange: ((String) -> Void)?
     var onEscapeKey: (() -> Void)?
     var renderMarkdown = true
+    private let placeholderText = "메모를 입력하세요"
 
     func configure(theme: NativeTheme) {
         self.theme = theme
@@ -889,8 +969,10 @@ final class NativeMarkdownMemoTextView: NSTextView {
         isRichText = true
         allowsUndo = true
         importsGraphics = false
+        wantsLayer = true
         drawsBackground = true
-        backgroundColor = theme.panelBackground
+        backgroundColor = theme.codeBackground
+        layer?.backgroundColor = theme.codeBackground.cgColor
         textColor = theme.primaryText
         insertionPointColor = theme.primaryText
         font = NSFont.systemFont(ofSize: 13, weight: .regular)
@@ -906,6 +988,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
         isAutomaticDashSubstitutionEnabled = false
         isAutomaticTextReplacementEnabled = false
         isContinuousSpellCheckingEnabled = false
+        needsDisplay = true
     }
 
     override var acceptsFirstResponder: Bool {
@@ -945,14 +1028,34 @@ final class NativeMarkdownMemoTextView: NSTextView {
         super.insertNewline(sender)
     }
 
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if toggleCheckbox(at: point) {
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
     override func didChangeText() {
         super.didChangeText()
         if renderMarkdown {
             applyMarkdownRendering()
         }
+        needsDisplay = true
         if !suppressChange {
             onTextChange?(string)
         }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        theme.codeBackground.setFill()
+        bounds.intersection(rect).fill()
+        super.drawBackground(in: rect)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawPlaceholderIfNeeded()
     }
 
     func replaceTextWithoutSaving(_ text: String) {
@@ -962,6 +1065,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
             applyMarkdownRendering()
         }
         setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
+        needsDisplay = true
         suppressChange = false
     }
 
@@ -971,9 +1075,58 @@ final class NativeMarkdownMemoTextView: NSTextView {
         if renderMarkdown {
             applyMarkdownRendering()
         }
+        needsDisplay = true
         onTextChange?(string)
     }
 #endif
+
+    private func drawPlaceholderIfNeeded() {
+        guard string.isEmpty, let font = font else {
+            return
+        }
+        let inset = textContainerInset
+        let rect = NSRect(
+            x: inset.width,
+            y: inset.height,
+            width: max(0, bounds.width - inset.width * 2),
+            height: font.ascender - font.descender + font.leading + 4
+        )
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        (placeholderText as NSString).draw(in: rect, withAttributes: [
+            .font: font,
+            .foregroundColor: theme.secondaryText.withAlphaComponent(0.72),
+            .paragraphStyle: paragraph
+        ])
+    }
+
+    private func toggleCheckbox(at point: NSPoint) -> Bool {
+        guard isEditable else {
+            return false
+        }
+        let nsText = string as NSString
+        guard nsText.length > 0 else {
+            return false
+        }
+        let insertionIndex = min(max(characterIndexForInsertion(at: point), 0), nsText.length - 1)
+        let candidateIndexes = [insertionIndex, max(0, insertionIndex - 1)]
+        for index in candidateIndexes {
+            let range = NSRange(location: index, length: 1)
+            let char = nsText.substring(with: range)
+            guard char == "☐" || char == "☑" else {
+                continue
+            }
+            let replacement = char == "☐" ? "☑" : "☐"
+            guard shouldChangeText(in: range, replacementString: replacement) else {
+                return false
+            }
+            textStorage?.replaceCharacters(in: range, with: replacement)
+            didChangeText()
+            setSelectedRange(NSRange(location: index + 1, length: 0))
+            return true
+        }
+        return false
+    }
 
     func applyMarkdownRendering() {
         guard renderMarkdown, !isRenderingMarkdown else {
@@ -1064,7 +1217,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
     }
 
     private static func normalizeBulletLine(_ line: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: #"^([ \t]*)-\s+(.*)$"#),
+        guard let regex = try? NSRegularExpression(pattern: #"^([ \t]*)[-*+]\s+(.*)$"#),
               let match = regex.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length)),
               match.numberOfRanges == 3
         else {
@@ -1083,6 +1236,22 @@ final class NativeMarkdownMemoTextView: NSTextView {
         let lineRange = nsText.lineRange(for: NSRange(location: selection.location, length: 0))
         let prefixLength = max(selection.location - lineRange.location, 0)
         let linePrefix = nsText.substring(with: NSRange(location: lineRange.location, length: prefixLength))
+        if let regex = try? NSRegularExpression(pattern: #"^([ \t]*)(\d+)([.)])([ \t]+)(.*)$"#),
+           let match = regex.firstMatch(in: linePrefix, range: NSRange(location: 0, length: (linePrefix as NSString).length)),
+           match.numberOfRanges == 6 {
+            let nsPrefix = linePrefix as NSString
+            let indent = nsPrefix.substring(with: match.range(at: 1))
+            let number = Int(nsPrefix.substring(with: match.range(at: 2))) ?? 1
+            let delimiter = nsPrefix.substring(with: match.range(at: 3))
+            let spacing = nsPrefix.substring(with: match.range(at: 4))
+            let content = nsPrefix.substring(with: match.range(at: 5))
+            if content.trimmingCharacters(in: .whitespaces).isEmpty {
+                insertText("", replacementRange: NSRange(location: lineRange.location, length: prefixLength))
+                return true
+            }
+            insertText("\n\(indent)\(number + 1)\(delimiter)\(spacing)", replacementRange: selection)
+            return true
+        }
         // Markers are the rendered forms (bullet, checkbox) plus the raw "-" the user may type before
         // normalization runs. Group 4 is the text typed after the marker on this line.
         guard let regex = try? NSRegularExpression(pattern: #"^([ \t]*)([-•]|☐|☑)([ \t]+)(.*)$"#),
@@ -1123,13 +1292,20 @@ final class NativeMarkdownMemoTextView: NSTextView {
         applyLineStyle(pattern: #"^#\s+.*$"#, font: NSFont.systemFont(ofSize: 20, weight: .semibold), color: theme.primaryText)
         applyLineStyle(pattern: #"^##\s+.*$"#, font: NSFont.systemFont(ofSize: 17, weight: .semibold), color: theme.primaryText)
         applyLineStyle(pattern: #"^###\s+.*$"#, font: NSFont.systemFont(ofSize: 15, weight: .semibold), color: theme.primaryText)
+        applyCodeBlockStyle()
         applyHorizontalRuleStyle()
         applyLineStyle(pattern: #"^[ \t]*▌ .*$"#, font: NSFont.systemFont(ofSize: 13, weight: .regular), color: theme.secondaryText)
+        applyLineMarkerStyle(pattern: #"^#{1,3}\s+"#)
+        applyLineMarkerStyle(pattern: #"^[ \t]*\d+[.)]\s+"#)
         applyInlineStyle(pattern: #"☐|☑"#, font: NSFont.systemFont(ofSize: 15, weight: .semibold), color: theme.accent)
         applyInlineStyle(pattern: #"•"#, font: NSFont.systemFont(ofSize: 15, weight: .semibold), color: theme.accent)
         applyInlineStyle(pattern: #"▌"#, font: NSFont.systemFont(ofSize: 15, weight: .semibold), color: theme.accent)
         applyInlineStyle(pattern: #"`[^`]+`"#, font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular), color: theme.syntaxString)
+        applyMarkdownDelimiterStyle()
         applyBoldRuns()
+        applyItalicRuns()
+        applyStrikethroughRuns()
+        applyLinkRuns()
     }
 
     private func applyLineStyle(pattern: String, font: NSFont, color: NSColor) {
@@ -1178,15 +1354,97 @@ final class NativeMarkdownMemoTextView: NSTextView {
         }
     }
 
-    private func applyBoldRuns() {
+    private func applyInlineAttributes(pattern: String, rangeIndex: Int = 0, attributes: [NSAttributedString.Key: Any]) {
         guard let storage = textStorage,
-              let regex = try? NSRegularExpression(pattern: #"\*\*([^*]+)\*\*"#)
+              let regex = try? NSRegularExpression(pattern: pattern)
         else {
             return
         }
         regex.enumerateMatches(in: string, range: NSRange(location: 0, length: storage.length)) { match, _, _ in
-            guard let match = match, match.numberOfRanges > 1 else { return }
-            storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 13, weight: .semibold), range: match.range(at: 1))
+            guard let match = match, match.numberOfRanges > rangeIndex else { return }
+            let range = match.range(at: rangeIndex)
+            guard range.location != NSNotFound, range.length > 0 else { return }
+            storage.addAttributes(attributes, range: range)
+        }
+    }
+
+    private func applyBoldRuns() {
+        applyInlineAttributes(
+            pattern: #"\*\*([^*\n]+)\*\*"#,
+            rangeIndex: 1,
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)]
+        )
+    }
+
+    private func applyItalicRuns() {
+        applyInlineAttributes(
+            pattern: #"(?<!\*)\*([^*\n]+)\*(?!\*)"#,
+            rangeIndex: 1,
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]
+        )
+        applyInlineAttributes(
+            pattern: #"(?<!_)_([^_\n]+)_(?!_)"#,
+            rangeIndex: 1,
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]
+        )
+    }
+
+    private func applyStrikethroughRuns() {
+        applyInlineAttributes(
+            pattern: #"~~([^~\n]+)~~"#,
+            rangeIndex: 1,
+            attributes: [
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                .foregroundColor: theme.secondaryText
+            ]
+        )
+    }
+
+    private func applyLinkRuns() {
+        applyInlineAttributes(
+            pattern: #"\[([^\]\n]+)\]\([^)]+\)"#,
+            rangeIndex: 1,
+            attributes: [
+                .foregroundColor: theme.secondaryAccent,
+                .underlineStyle: NSUnderlineStyle.single.rawValue
+            ]
+        )
+    }
+
+    private func applyLineMarkerStyle(pattern: String) {
+        guard let storage = textStorage,
+              let regex = try? NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+        else {
+            return
+        }
+        regex.enumerateMatches(in: string, range: NSRange(location: 0, length: storage.length)) { match, _, _ in
+            guard let match = match else { return }
+            storage.addAttributes([.foregroundColor: theme.tertiaryText], range: match.range)
+        }
+    }
+
+    private func applyMarkdownDelimiterStyle() {
+        applyInlineAttributes(pattern: #"\*\*|~~|`|(?<!\*)\*(?!\*)|(?<!_)_(?!_)"#, attributes: [.foregroundColor: theme.tertiaryText])
+        applyInlineAttributes(pattern: #"\[[^\]\n]+\](\([^)]+\))"#, rangeIndex: 1, attributes: [.foregroundColor: theme.tertiaryText])
+    }
+
+    private func applyCodeBlockStyle() {
+        guard let storage = textStorage,
+              let regex = try? NSRegularExpression(pattern: #"```[\s\S]*?```"#)
+        else {
+            return
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        paragraph.paragraphSpacing = 6
+        regex.enumerateMatches(in: string, range: NSRange(location: 0, length: storage.length)) { match, _, _ in
+            guard let match = match else { return }
+            storage.addAttributes([
+                .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                .foregroundColor: theme.syntaxString,
+                .backgroundColor: theme.surfaceElevated,
+                .paragraphStyle: paragraph
+            ], range: match.range)
         }
     }
 }

@@ -124,6 +124,16 @@ extension MainWindowController {
         return true
     }
 
+    func previewSourceFileForSmokeTest(_ path: String, preferredLine: Int) -> Bool {
+        guard previewSourceFileForSmokeTest(path),
+              let preview = sourceFilePreview(forPath: path)
+        else {
+            return false
+        }
+        renderSourceFile(preview, preferredLine: preferredLine, focus: true)
+        return true
+    }
+
     // Expands every ancestor folder of `path` so its row survives the collapse filter, mirroring a
     // user opening each parent folder before reaching the file.
     private func revealFileTreeAncestorsForSmokeTest(ofPath path: String) {
@@ -166,6 +176,10 @@ extension MainWindowController {
 
     func fileListingLoadCountForSmokeTest() -> Int {
         fileListingLoadCount
+    }
+
+    func fileListingIsLoadingForSmokeTest() -> Bool {
+        isLoadingFileListing
     }
 
     func fileOverlayPopulateCountForSmokeTest() -> Int {

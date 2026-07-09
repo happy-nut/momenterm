@@ -62,6 +62,29 @@ extension MainWindowController {
             return "ok=false buttons=0"
         }
         let selectedButtons = buttons.filter { ($0.layer?.borderWidth ?? 0) > 0.5 }
+        let selectedUsesIntelliJSelection = selectedButtons.count == 1 && selectedButtons.allSatisfy { button in
+            guard let backgroundCG = button.layer?.backgroundColor,
+                  let background = NSColor(cgColor: backgroundCG),
+                  let borderCG = button.layer?.borderColor,
+                  let border = NSColor(cgColor: borderCG)
+            else {
+                return false
+            }
+            return colorsAreClose(background, theme.selectionBackground)
+                && colorsAreClose(border, theme.selectionBorder)
+                && !colorsAreClose(background, theme.accent)
+                && !colorsAreClose(border, theme.accent)
+        }
+        let noAccentFileTint = buttons.allSatisfy { button in
+            let labelsAvoidAccent = collectTextFields(in: button).allSatisfy { label in
+                !colorsAreClose(label.textColor ?? .clear, theme.accent)
+            }
+            let iconsAvoidAccent = directImageViews(in: button).allSatisfy { imageView in
+                guard let tint = imageView.contentTintColor else { return true }
+                return !colorsAreClose(tint, theme.accent)
+            }
+            return labelsAvoidAccent && iconsAvoidAccent
+        }
         let titles = buttons.map { collectVisibleText(in: $0).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines) }
         let identifiers = buttons.compactMap { $0.identifier?.rawValue }
         let visibleText = collectVisibleText(in: overlayView)
@@ -77,6 +100,23 @@ extension MainWindowController {
             .allSatisfy { !visibleText.contains($0) }
         let editedToggle = visibleTextJoined.contains("Show edited only") && visibleTextJoined.contains("⌘E")
         let footerVisible = !quickOpenRecentFooterLabel.stringValue.isEmpty
+        let contentBorderClear = (overlayContentView.layer?.borderWidth ?? 0) < 0.5
+        let stalePreviewChromeHidden = sourcePreviewScrollView.isHidden
+            && fileHybridView.isHidden
+            && diffHybridView.isHidden
+            && historyGraphWebView.isHidden
+            && fileTabBarView.isHidden
+        let sourceModeButtonsHidden = sourceViewModeButtonStack.isHidden
+        let recentDocumentTopAnchored = quickOpenRecentResultsScrollView.documentView?.isFlipped == true
+        let editedOnlyButton = collectButtons(in: quickOpenRecentResultsStack).first {
+            $0.identifier?.rawValue == "recent-files-edited-only"
+        }
+        let editedOnlyFrame = editedOnlyButton.flatMap { button -> NSRect? in
+            guard let documentView = quickOpenRecentResultsScrollView.documentView else { return nil }
+            return button.convert(button.bounds, to: documentView)
+        }
+        let resultsStartAtTop = recentDocumentTopAnchored
+            && (editedOnlyFrame?.minY ?? .greatestFiniteMagnitude) <= 8
         let ok = selectedButtons.count == 1
             && Set(identifiers).count == identifiers.count
             && titles.allSatisfy { !$0.hasPrefix(">") }
@@ -88,14 +128,23 @@ extension MainWindowController {
             && quickOpenRecentFooterLabel.isHidden == false
             && overlayDiffSplitView.isHidden == true
             && codePane.isNewPaneHidden
+            && contentBorderClear
+            && stalePreviewChromeHidden
+            && sourceModeButtonsHidden
+            && recentDocumentTopAnchored
+            && resultsStartAtTop
             && compact
             && categoryRail
             && removedFakeCategories
             && editedToggle
             && footerVisible
+            && selectedUsesIntelliJSelection
+            && noAccentFileTint
         return [
             "ok=\(ok)",
             "selected=\(selectedButtons.count)",
+            "selectedUsesIntelliJSelection=\(selectedUsesIntelliJSelection)",
+            "noAccentFileTint=\(noAccentFileTint)",
             "idsUnique=\(Set(identifiers).count == identifiers.count)",
             "cleanTitles=\(titles.allSatisfy { !$0.hasPrefix(">") })",
             "sidebarV=\(overlaySidebarScrollView?.hasVerticalScroller == true)",
@@ -106,6 +155,12 @@ extension MainWindowController {
             "footerVisible=\(!quickOpenRecentFooterLabel.isHidden && footerVisible)",
             "diffHidden=\(overlayDiffSplitView.isHidden)",
             "newHidden=\(codePane.isNewPaneHidden)",
+            "contentBorderClear=\(contentBorderClear)",
+            "previewChromeHidden=\(stalePreviewChromeHidden)",
+            "sourceModeButtonsHidden=\(sourceModeButtonsHidden)",
+            "recentDocumentTopAnchored=\(recentDocumentTopAnchored)",
+            "resultsStartAtTop=\(resultsStartAtTop)",
+            "editedOnlyY=\(Int(editedOnlyFrame?.minY ?? -1))",
             "compact=\(compact)",
             "categoryRail=\(categoryRail)",
             "removedFakeCategories=\(removedFakeCategories)",
@@ -118,6 +173,82 @@ extension MainWindowController {
 
     func recentFilesEditedOnlyIsEnabledForSmokeTest() -> Bool {
         quickOpenRecentEditedOnly
+    }
+
+    func quickOpenFilterForSmokeTest() -> String {
+        quickOpenFilter
+    }
+
+    func recentFilesFocusRegionForSmokeTest() -> String {
+        guard overlayMode == .quickOpen, quickOpenMode == .recent else {
+            return "none"
+        }
+        return recentFilesFocusRegion == .categories ? "categories" : "results"
+    }
+
+    func recentFilesSelectedCategoryTitleForSmokeTest() -> String? {
+        guard overlayMode == .quickOpen, quickOpenMode == .recent else {
+            return nil
+        }
+        let rows = recentFilesCategoryRows()
+        guard rows.indices.contains(selectedRecentFilesCategoryIndex) else {
+            return nil
+        }
+        return rows[selectedRecentFilesCategoryIndex].1
+    }
+
+    func recentFilesBackdropClickKeepsPanelForSmokeTest() -> Bool {
+        guard overlayMode == .quickOpen, quickOpenMode == .recent else {
+            return false
+        }
+        overlayBackdrop.onClick?()
+        return overlayMode == .quickOpen
+            && quickOpenMode == .recent
+            && overlayTitleLabel.stringValue == "Recent Files"
+            && !overlayView.isHidden
+    }
+
+    func positionRecentFilesSelectionAwayFromTopForSmokeTest() -> Bool {
+        guard overlayMode == .quickOpen, quickOpenMode == .recent else {
+            return false
+        }
+        if quickOpenItems().count < 24 {
+            cursorHistory = (0..<48).map { index in
+                String(format: "src/smoke/RecentScrollProbe%02d.kt", index)
+            }
+            quickOpenRecentEditedOnly = false
+            quickOpenFilter = ""
+            selectedQuickOpenIndex = 0
+            recentFilesFocusRegion = .results
+            populateQuickOpenOverlay()
+        }
+        let items = quickOpenItems()
+        guard items.count >= 24 else {
+            return false
+        }
+        selectedQuickOpenIndex = min(max(24, items.count / 2), items.count - 1)
+        recentFilesFocusRegion = .results
+        populateQuickOpenOverlay()
+        window?.contentView?.layoutSubtreeIfNeeded()
+        quickOpenRecentResultsScrollView.layoutSubtreeIfNeeded()
+        quickOpenRecentResultsStack.layoutSubtreeIfNeeded()
+        return recentFilesResultScrollYForSmokeTest() > 0
+    }
+
+    func recentFilesResultScrollYForSmokeTest() -> Int {
+        guard overlayMode == .quickOpen, quickOpenMode == .recent else {
+            return -1
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+        quickOpenRecentResultsScrollView.layoutSubtreeIfNeeded()
+        return Int(quickOpenRecentResultsScrollView.contentView.documentVisibleRect.minY.rounded())
+    }
+
+    func recentFilesSelectedResultIndexForSmokeTest() -> Int {
+        guard overlayMode == .quickOpen, quickOpenMode == .recent else {
+            return -1
+        }
+        return selectedQuickOpenIndex
     }
 
     func recentFilesVisibleResultCountForSmokeTest() -> Int {
@@ -235,6 +366,57 @@ extension MainWindowController {
             && quickOpenReturnMode == .files
             && overlayTitleLabel.stringValue == "Find Usages"
             && !settingsUnderlayImageView.isHidden
+    }
+
+    func quickOpenContentPanelUsesCompactTypographyAndPreviewHasNoCursorForSmokeTest() -> Bool {
+        quickOpenContentPanelCompactDiagnosticsForSmokeTest().contains("ok=true")
+    }
+
+    func quickOpenContentPanelCompactDiagnosticsForSmokeTest() -> String {
+        guard overlayMode == .quickOpen,
+              quickOpenUsesContentSearch(quickOpenMode)
+        else {
+            return "ok=false preconditions=false mode=\(overlayMode)"
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+        overlaySidebarStack.layoutSubtreeIfNeeded()
+        let labels = collectTextFields(in: overlaySidebarStack)
+        guard !labels.isEmpty else {
+            return "ok=false labels=0"
+        }
+        let maxPointSize = MomentermDesign.Metrics.findPanelTextFontSize + 0.5
+        let labelSizes = labels.map { String(format: "%.1f", $0.font?.pointSize ?? -1) }.joined(separator: ",")
+        let compactFonts = labels.allSatisfy { label in
+            (label.font?.pointSize ?? 99) <= maxPointSize
+        }
+        let resultRows = collectButtons(in: overlaySidebarStack).filter {
+            $0.identifier?.rawValue.hasPrefix("quick:") == true
+        }
+        let rowHeights = resultRows.map { row -> String in
+            let height = row.frame.height > 0 ? row.frame.height : row.fittingSize.height
+            return String(format: "%.1f", height)
+        }.joined(separator: ",")
+        let compactRows = resultRows.allSatisfy { row in
+            let height = row.frame.height > 0 ? row.frame.height : row.fittingSize.height
+            return height <= MomentermDesign.Metrics.findPanelResultRowHeight + 1
+        }
+        let reviewCursorVisible = codePane.oldPaneCodeView.reviewCursorIsVisibleForSmokeTest()
+        let firstResponderInPreview = firstResponderIsOrDescends(from: codePane.oldPaneCodeView)
+        let ok = compactFonts
+            && compactRows
+            && codePane.oldPaneCodeView.reviewCursorHidden
+            && !reviewCursorVisible
+        return [
+            "ok=\(ok)",
+            "compactFonts=\(compactFonts)",
+            "labelSizes=\(labelSizes)",
+            "compactRows=\(compactRows)",
+            "rowHeights=\(rowHeights)",
+            "cursorHidden=\(codePane.oldPaneCodeView.reviewCursorHidden)",
+            "cursorVisible=\(reviewCursorVisible)",
+            "previewFirstResponder=\(firstResponderInPreview)",
+            "firstResponder=\(String(describing: window?.firstResponder))"
+        ].joined(separator: " ")
     }
 
     func quickOpenIsLayeredOverFilesForSmokeTest(title: String) -> Bool {

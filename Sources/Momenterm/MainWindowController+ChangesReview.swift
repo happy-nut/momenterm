@@ -79,42 +79,6 @@ extension MainWindowController {
                 && collectVisibleText(in: button).contains(text)
         }
     }
-    func diffSidebarStatsSnapshot(containing text: String) -> [DiffSidebarStatSnapshot]? {
-        guard let row = diffSidebarButton(containing: text) else {
-            return nil
-        }
-        row.layoutSubtreeIfNeeded()
-        window?.contentView?.layoutSubtreeIfNeeded()
-        let labels = collectTextFields(in: row).filter {
-            $0.identifier?.rawValue.hasPrefix("diff-stat-") == true
-        }
-        guard labels.count == 2 else {
-            return nil
-        }
-        return labels.map { label in
-            DiffSidebarStatSnapshot(
-                identifier: label.identifier?.rawValue ?? "",
-                text: label.stringValue,
-                frame: label.convert(label.bounds, to: row),
-                color: label.textColor
-            )
-        }
-        .sorted { $0.identifier < $1.identifier }
-    }
-    func diffSidebarStatSnapshotsMatch(_ lhs: [DiffSidebarStatSnapshot], _ rhs: [DiffSidebarStatSnapshot]) -> Bool {
-        guard lhs.count == rhs.count else {
-            return false
-        }
-        return zip(lhs, rhs).allSatisfy { left, right in
-            left.identifier == right.identifier
-                && left.text == right.text
-                && abs(left.frame.minX - right.frame.minX) < 0.5
-                && abs(left.frame.minY - right.frame.minY) < 0.5
-                && abs(left.frame.width - right.frame.width) < 0.5
-                && abs(left.frame.height - right.frame.height) < 0.5
-                && colorsAreClose(left.color ?? .clear, right.color ?? .clear)
-        }
-    }
     func configureDiffEditorChromeVisibility(_ visible: Bool) {
         diffEditorChromeView.isHidden = !visible
         diffEditorChromeHeightConstraint?.constant = visible ? MomentermDesign.Metrics.diffEditorChromeHeight : 0

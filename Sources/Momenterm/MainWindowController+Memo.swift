@@ -12,7 +12,7 @@ extension MainWindowController {
         if memoSidePanel.layer == nil {
             memoSidePanel.layer = CALayer()
         }
-        memoSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
+        memoSidePanel.layer?.backgroundColor = theme.codeBackground.cgColor
         memoSidePanel.layer?.borderColor = theme.panelBorder.cgColor
         memoSidePanel.layer?.borderWidth = 1
         applyMemoPanelShadow()
@@ -50,7 +50,14 @@ extension MainWindowController {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         MomentermDesign.styleMinimalScrollbars(scroll)
         scroll.borderType = .noBorder
-        scroll.drawsBackground = false
+        scroll.wantsLayer = true
+        scroll.layer?.backgroundColor = theme.codeBackground.cgColor
+        scroll.drawsBackground = true
+        scroll.backgroundColor = theme.codeBackground
+        scroll.contentView.wantsLayer = true
+        scroll.contentView.layer?.backgroundColor = theme.codeBackground.cgColor
+        scroll.contentView.drawsBackground = true
+        scroll.contentView.backgroundColor = theme.codeBackground
         scroll.documentView = text
         memoSidePanel.addSubview(scroll)
         memoTextView = text
@@ -88,7 +95,22 @@ extension MainWindowController {
     }
 
     private func storedPromptMemoText() -> String {
-        workspaceScopedString(rootKey: Self.promptMemoSettingsKey, fallback: defaultPromptMemoText())
+        let stored = workspaceScopedString(rootKey: Self.promptMemoSettingsKey, fallback: defaultPromptMemoText())
+        let sanitized = sanitizePromptMemoText(stored)
+        if sanitized != stored {
+            savePromptMemoText(sanitized)
+        }
+        return sanitized
+    }
+
+    private func sanitizePromptMemoText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyPrefills: Set<String> = [
+            "Prompt memo",
+            "# Prompt memo",
+            "## Prompt memo"
+        ]
+        return legacyPrefills.contains(trimmed) ? "" : text
     }
 
     private func savePromptMemoText(_ text: String) {

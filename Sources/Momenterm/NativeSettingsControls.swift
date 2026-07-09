@@ -1,11 +1,58 @@
 import AppKit
 
-// Modern, themed Settings controls that replace the dated system checkbox (loud macOS checkmark)
-// and the system-accent NSSegmentedControl (jarring green selection) with layer-backed controls
-// that follow the app's amber accent and dark palette. They expose target/action + a small state
-// surface so the existing settings handlers keep working.
+final class NativeSettingsLabel: NSTextField {
+    var cursor: NSCursor = .arrow
 
-// An on/off pill toggle. Amber track when on, muted track when off, with an animated knob.
+    convenience init(text: String, wrapping: Bool = false) {
+        self.init(frame: .zero)
+        stringValue = text
+        isEditable = false
+        isSelectable = false
+        isBordered = false
+        drawsBackground = false
+        backgroundColor = .clear
+        focusRingType = .none
+        if wrapping {
+            cell?.wraps = true
+            cell?.isScrollable = false
+            lineBreakMode = .byWordWrapping
+        }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: cursor)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        cursor.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        cursor.set()
+    }
+}
+
+final class NativeSettingsButton: NSButton {
+    var cursor: NSCursor = .pointingHand
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: cursor)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        cursor.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        cursor.set()
+    }
+}
+
+// Modern, themed Settings controls that replace the dated system checkbox and system-accent
+// NSSegmentedControl with layer-backed controls that follow the app's neutral preferences surface.
+// They expose target/action + a small state surface so the existing settings handlers keep working.
+
+// An on/off pill toggle. A muted active track, quiet inactive track, and animated knob.
 final class NativeSettingsToggle: NSControl {
     private(set) var isOn = false
     private var onColor = NSColor.systemGreen
@@ -49,6 +96,18 @@ final class NativeSettingsToggle: NSControl {
 
     override var intrinsicContentSize: NSSize { Self.controlSize }
 
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
     override func layout() {
         super.layout()
         render(animated: false)
@@ -82,8 +141,8 @@ final class NativeSettingsToggle: NSControl {
 }
 
 // A themed segmented control (a rounded track with per-segment buttons). The selected segment gets
-// an amber fill; the others stay quiet — no system-accent green. Exposes `selectedSegment` so the
-// existing settings handlers read it exactly like an NSSegmentedControl.
+// a subdued selection fill; the others stay quiet. Exposes `selectedSegment` so the existing
+// settings handlers read it exactly like an NSSegmentedControl.
 final class NativeSettingsSegmented: NSControl {
     private(set) var selectedSegment = 0
     private var segments: [NSButton] = []
@@ -125,7 +184,7 @@ final class NativeSettingsSegmented: NSControl {
         ])
 
         for (index, label) in labels.enumerated() {
-            let button = NSButton(title: label, target: self, action: #selector(segmentTapped(_:)))
+            let button = NativeSettingsButton(title: label, target: self, action: #selector(segmentTapped(_:)))
             button.tag = index
             button.isBordered = false
             button.bezelStyle = .regularSquare
@@ -141,6 +200,18 @@ final class NativeSettingsSegmented: NSControl {
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: 30)
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.pointingHand.set()
     }
 
     @objc private func segmentTapped(_ sender: NSButton) {

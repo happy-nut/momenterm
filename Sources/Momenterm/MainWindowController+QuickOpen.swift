@@ -22,8 +22,12 @@ extension MainWindowController {
             settingsUnderlayImageView.isHidden = true
         }
         quickOpenMode = mode
-        quickOpenFilter = initialQuery
+        quickOpenFilter = sanitizedQuickOpenInitialFilter(initialQuery, mode: mode)
         selectedQuickOpenIndex = 0
+        if mode == .recent {
+            recentFilesFocusRegion = .results
+            selectedRecentFilesCategoryIndex = 0
+        }
         if quickOpenUsesContentSearch(mode) || mode == .recent {
             overlayMaximized = false
         }
@@ -64,8 +68,42 @@ extension MainWindowController {
         if quickOpenMode == .recent, flags.contains(.command), lowerKey == "e" {
             quickOpenRecentEditedOnly.toggle()
             selectedQuickOpenIndex = 0
+            recentFilesFocusRegion = .results
             populateQuickOpenOverlay()
             return true
+        }
+        if quickOpenMode == .recent {
+            switch event.keyCode {
+            case 123:
+                focusRecentFilesCategories()
+                return true
+            case 124:
+                focusRecentFilesResults()
+                return true
+            case 125:
+                if recentFilesFocusRegion == .categories {
+                    moveRecentFilesCategorySelection(delta: 1)
+                } else {
+                    moveQuickOpenSelection(delta: 1)
+                }
+                return true
+            case 126:
+                if recentFilesFocusRegion == .categories {
+                    moveRecentFilesCategorySelection(delta: -1)
+                } else {
+                    moveQuickOpenSelection(delta: -1)
+                }
+                return true
+            case 36, 76:
+                if recentFilesFocusRegion == .categories {
+                    activateSelectedRecentFilesCategory()
+                } else {
+                    openSelectedQuickOpenItem()
+                }
+                return true
+            default:
+                break
+            }
         }
         if key == String(UnicodeScalar(0xF701)!) || event.keyCode == 125 {
             moveQuickOpenSelection(delta: 1)
@@ -87,11 +125,41 @@ extension MainWindowController {
             return true
         }
         if key.count == 1, !flags.contains(.command), !flags.contains(.control), !flags.contains(.option) {
-            quickOpenFilter += key
+            let fragment = sanitizedQuickOpenTypedFragment(key, mode: quickOpenMode)
+            guard !fragment.isEmpty else {
+                return true
+            }
+            quickOpenFilter += fragment
+            if quickOpenMode == .recent {
+                recentFilesFocusRegion = .results
+            }
             populateQuickOpenOverlay()
             return true
         }
         return false
+    }
+    private func sanitizedQuickOpenInitialFilter(_ value: String, mode: QuickOpenMode) -> String {
+        guard mode == .recent else {
+            return value
+        }
+        return sanitizedRecentFilesFilterFragment(value)
+    }
+    private func sanitizedQuickOpenTypedFragment(_ value: String, mode: QuickOpenMode) -> String {
+        guard mode == .recent else {
+            return value
+        }
+        return sanitizedRecentFilesFilterFragment(value)
+    }
+    private func sanitizedRecentFilesFilterFragment(_ value: String) -> String {
+        let invalid = CharacterSet(charactersIn: #"/\:*?"<>|"#)
+        return String(value.unicodeScalars.compactMap { scalar -> Character? in
+            if CharacterSet.controlCharacters.contains(scalar)
+                || invalid.contains(scalar)
+                || scalar.value == 0xFFFD {
+                return nil
+            }
+            return Character(scalar)
+        })
     }
     func handleGoToLineKey(_ event: NSEvent, key: String, lowerKey: String, flags: NSEvent.ModifierFlags) -> Bool {
         if event.keyCode == 53 || lowerKey == "\u{1b}" {
@@ -121,9 +189,14 @@ extension MainWindowController {
         configureDiffEditorChromeVisibility(false)
         overlaySettingsScrollView.isHidden = true
         sourcePreviewScrollView.isHidden = true
+        fileHybridView.isHidden = true
+        diffHybridView.isHidden = true
+        historyGraphWebView.isHidden = true
         quickOpenRecentResultsScrollView.isHidden = !visible
         quickOpenRecentFooterLabel.isHidden = !visible
         if visible {
+            setFileTabsVisible(false)
+            updateSourceViewModeButtons(canToggle: false)
             codePane.setOldPaneHidden(true)
             codePane.setNewPaneHidden(true)
         }
@@ -134,8 +207,9 @@ extension MainWindowController {
         overlaySidebarWidthConstraint?.constant = MomentermDesign.Metrics.recentFilesSidebarWidth
         overlaySidebarWidthConstraint?.isActive = true
         overlaySidebarStack.spacing = 2
-        overlayContentView.layer?.borderColor = theme.panelBorder.withAlphaComponent(0.55).cgColor
-        overlayContentView.layer?.borderWidth = 1
+        overlayContentView.layer?.borderColor = NSColor.clear.cgColor
+        overlayContentView.layer?.borderWidth = 0
+        updateSourceViewModeButtons(canToggle: false)
     }
     private func configureFindInFilesOverlayBodyLayout() {
         overlayBodySplitView.isVertical = false
@@ -149,6 +223,7 @@ extension MainWindowController {
         overlaySidebarStack.spacing = 2
         overlayContentView.layer?.borderColor = theme.panelBorder.withAlphaComponent(0.85).cgColor
         overlayContentView.layer?.borderWidth = 1
+        updateSourceViewModeButtons(canToggle: false)
     }
     func quickOpenTitle() -> String {
         switch quickOpenMode {
@@ -179,6 +254,8 @@ extension MainWindowController {
         if quickOpenMode != .recent {
             setSingleCodePaneVisible(quickOpenUsesContentSearch(quickOpenMode))
         }
+        codePane.setReviewCursorHidden(true)
+        codePane.clearReviewCursors()
         setSourceLineRulerVisible(false)
         let items = quickOpenItems()
         selectedQuickOpenIndex = min(max(selectedQuickOpenIndex, 0), max(items.count - 1, 0))
@@ -210,15 +287,34 @@ extension MainWindowController {
         let selected = items[selectedQuickOpenIndex]
         if quickOpenUsesContentSearch(quickOpenMode) {
             renderQuickOpenContentPreview(selected)
+            focusQuickOpenResultsList()
         } else if quickOpenMode != .recent,
                   let file = currentDocument?.sourceFiles.first(where: { $0.path == selected.path }), file.embedded {
             codePane.setOldContent(styledText("\(selected.path)\n\(selected.detail)", color: theme.primaryText))
             codePane.setNewContent(NativeSyntaxHighlighter.highlight(file.content, language: file.language, theme: theme))
+            focusQuickOpenResultsList()
         } else {
             codePane.setOldContent(styledText("\(selected.path)\n\(selected.detail)", color: theme.primaryText))
             codePane.setNewString("")
+            focusQuickOpenResultsList()
         }
         ensureSelectedSidebarRowVisible(identifier: "quick:\(selectedQuickOpenIndex)")
+    }
+    private func focusQuickOpenResultsList() {
+        guard overlayMode == .quickOpen else {
+            return
+        }
+        if let selectedRow = collectButtons(in: overlaySidebarStack).first(where: {
+            $0.identifier?.rawValue == "quick:\(selectedQuickOpenIndex)"
+        }), window?.makeFirstResponder(selectedRow) == true {
+            return
+        }
+        if let overlaySidebarScrollView,
+           window?.makeFirstResponder(overlaySidebarScrollView) == true,
+           !firstResponderIsOrDescends(from: codePane.oldPaneCodeView) {
+            return
+        }
+        _ = window?.makeFirstResponder(nil)
     }
     private func resetQuickOpenRecentResults() {
         quickOpenRecentResultsStack.arrangedSubviews.forEach { view in
@@ -234,20 +330,38 @@ extension MainWindowController {
         guard !items.isEmpty else {
             quickOpenRecentResultsStack.addArrangedSubview(recentFilesMessageRow("No recent files matched."))
             quickOpenRecentFooterLabel.stringValue = compactHomePath(root?.path ?? currentTerminalDirectory().path)
+            focusRecentFilesCurrentRegion()
             return
         }
 
         for index in visibleSidebarIndexRange(count: items.count, selectedIndex: selectedQuickOpenIndex, limit: Self.quickOpenRenderedRowLimit) {
-            quickOpenRecentResultsStack.addArrangedSubview(recentFilesResultRowButton(item: items[index], index: index, selected: index == selectedQuickOpenIndex))
+            quickOpenRecentResultsStack.addArrangedSubview(recentFilesResultRowButton(
+                item: items[index],
+                index: index,
+                selected: recentFilesFocusRegion == .results && index == selectedQuickOpenIndex
+            ))
         }
 
         let selected = items[selectedQuickOpenIndex]
         let parent = parentPath(for: selected.path)
         quickOpenRecentFooterLabel.stringValue = compactHomePath(parent.isEmpty ? selected.path : parent)
         ensureSelectedRecentFileRowVisible(identifier: "quick:\(selectedQuickOpenIndex)")
+        focusRecentFilesCurrentRegion()
     }
     private func populateRecentFilesCategories() {
-        let rows: [(String, String, String, String)] = [
+        for (index, row) in recentFilesCategoryRows().enumerated() {
+            overlaySidebarStack.addArrangedSubview(recentFilesCategoryRow(
+                icon: row.0,
+                title: row.1,
+                shortcut: row.2,
+                identifier: row.3,
+                selected: recentFilesFocusRegion == .categories && index == selectedRecentFilesCategoryIndex
+            ))
+        }
+        overlaySidebarStack.addArrangedSubview(recentFilesDivider())
+    }
+    func recentFilesCategoryRows() -> [(String, String, String, String)] {
+        [
             ("point.3.filled.connected.trianglepath.dotted", "Changes", "⌘0", "changes"),
             ("folder", "Files", "⌘1", "files"),
             ("terminal", "Terminal", "⌥F12", "terminal"),
@@ -255,13 +369,12 @@ extension MainWindowController {
             ("square.and.pencil", "Prompt Memo", "⇧⌘N", "memo"),
             ("gearshape", "Settings", "⌘,", "settings")
         ]
-        for row in rows {
-            overlaySidebarStack.addArrangedSubview(recentFilesCategoryRow(icon: row.0, title: row.1, shortcut: row.2, identifier: row.3))
-        }
-        overlaySidebarStack.addArrangedSubview(recentFilesDivider())
     }
-    private func recentFilesCategoryRow(icon: String, title: String, shortcut: String, identifier: String) -> NSButton {
-        let row = NSButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
+    private func recentFilesCategoryRow(icon: String, title: String, shortcut: String, identifier: String, selected: Bool) -> NSButton {
+        let row = NativeRecentFilesRowButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
+        row.onKeyDown = { [weak self] event in
+            self?.handleShortcut(event) ?? false
+        }
         row.identifier = NSUserInterfaceItemIdentifier("recent-category:\(identifier)")
         row.isBordered = false
         row.bezelStyle = .regularSquare
@@ -270,26 +383,28 @@ extension MainWindowController {
         row.translatesAutoresizingMaskIntoConstraints = false
         row.wantsLayer = true
         row.layer?.cornerRadius = MomentermDesign.Metrics.controlRadius
-        row.layer?.backgroundColor = NSColor.clear.cgColor
+        row.layer?.backgroundColor = (selected ? theme.selectionBackground.withAlphaComponent(0.86) : NSColor.clear).cgColor
+        row.layer?.borderColor = (selected ? theme.selectionBorder.withAlphaComponent(0.95) : NSColor.clear).cgColor
+        row.layer?.borderWidth = selected ? 1 : 0
 
         let imageView = NSImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
         imageView.image = NSImage(systemSymbolName: icon, accessibilityDescription: title)
             ?? NSImage(systemSymbolName: "circle", accessibilityDescription: title)
         imageView.image?.isTemplate = true
-        imageView.contentTintColor = theme.secondaryText
+        imageView.contentTintColor = selected ? theme.primaryText : theme.secondaryText
         imageView.imageScaling = .scaleProportionallyDown
 
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        titleLabel.textColor = theme.secondaryText
+        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: selected ? .semibold : .medium)
+        titleLabel.textColor = selected ? theme.primaryText : theme.secondaryText
         titleLabel.lineBreakMode = .byTruncatingMiddle
 
         let shortcutLabel = NSTextField(labelWithString: shortcut)
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
         shortcutLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        shortcutLabel.textColor = theme.secondaryText.withAlphaComponent(0.82)
+        shortcutLabel.textColor = (selected ? theme.primaryText : theme.secondaryText).withAlphaComponent(0.82)
         shortcutLabel.alignment = .right
         shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -318,6 +433,66 @@ extension MainWindowController {
         line.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.recentFilesSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2).isActive = true
         line.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return line
+    }
+    private func focusRecentFilesCategories() {
+        guard quickOpenMode == .recent else {
+            return
+        }
+        recentFilesFocusRegion = .categories
+        selectedRecentFilesCategoryIndex = min(
+            max(selectedRecentFilesCategoryIndex, 0),
+            max(recentFilesCategoryRows().count - 1, 0)
+        )
+        refreshRecentFilesCategoryRows()
+        focusRecentFilesCurrentRegion()
+    }
+    private func focusRecentFilesResults() {
+        guard quickOpenMode == .recent else {
+            return
+        }
+        recentFilesFocusRegion = .results
+        refreshRecentFilesCategoryRows()
+        _ = updateVisibleRecentFilesSelection(items: quickOpenItems(), scrollSelection: false)
+        focusRecentFilesCurrentRegion()
+    }
+    private func refreshRecentFilesCategoryRows() {
+        resetOverlaySidebar()
+        populateRecentFilesCategories()
+        overlaySidebarStack.layoutSubtreeIfNeeded()
+    }
+    private func focusRecentFilesCurrentRegion() {
+        guard quickOpenMode == .recent else {
+            return
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+        overlaySidebarStack.layoutSubtreeIfNeeded()
+        quickOpenRecentResultsStack.layoutSubtreeIfNeeded()
+        switch recentFilesFocusRegion {
+        case .categories:
+            _ = window?.makeFirstResponder(overlaySidebarScrollView)
+        case .results:
+            _ = window?.makeFirstResponder(quickOpenRecentResultsScrollView)
+        }
+    }
+    private func moveRecentFilesCategorySelection(delta: Int) {
+        guard quickOpenMode == .recent else {
+            return
+        }
+        let rows = recentFilesCategoryRows()
+        guard !rows.isEmpty else {
+            return
+        }
+        selectedRecentFilesCategoryIndex = (selectedRecentFilesCategoryIndex + delta + rows.count) % rows.count
+        recentFilesFocusRegion = .categories
+        refreshRecentFilesCategoryRows()
+        focusRecentFilesCurrentRegion()
+    }
+    private func activateSelectedRecentFilesCategory() {
+        let rows = recentFilesCategoryRows()
+        guard rows.indices.contains(selectedRecentFilesCategoryIndex) else {
+            return
+        }
+        activateRecentFilesCategory(rows[selectedRecentFilesCategoryIndex].3)
     }
     private func recentFilesEditedOnlyControlRow() -> NSButton {
         let title = "Show edited only   ⌘E"
@@ -369,7 +544,10 @@ extension MainWindowController {
         return label
     }
     private func recentFilesResultRowButton(item: QuickOpenItem, index: Int, selected: Bool) -> NSButton {
-        let button = NSButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
+        let button = NativeRecentFilesRowButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
+        button.onKeyDown = { [weak self] event in
+            self?.handleShortcut(event) ?? false
+        }
         button.identifier = NSUserInterfaceItemIdentifier("quick:\(index)")
         button.isBordered = false
         button.bezelStyle = .regularSquare
@@ -377,7 +555,7 @@ extension MainWindowController {
         button.wantsLayer = true
         button.layer?.cornerRadius = 4
         button.layer?.backgroundColor = recentFilesRowBackground(for: item, selected: selected).cgColor
-        button.layer?.borderColor = selected ? theme.accent.cgColor : NSColor.clear.cgColor
+        button.layer?.borderColor = recentFilesRowBorderColor(selected: selected).cgColor
         button.layer?.borderWidth = selected ? 1 : 0
         button.translatesAutoresizingMaskIntoConstraints = false
         button.toolTip = item.path
@@ -439,7 +617,7 @@ extension MainWindowController {
     }
     private func recentFilesRowBackground(for item: QuickOpenItem, selected: Bool) -> NSColor {
         if selected {
-            return theme.accent.withAlphaComponent(0.55)
+            return theme.selectionBackground.withAlphaComponent(0.86)
         }
         if let vcs = item.preview?.vcs,
            let vcsColor = fileTreeVcsColor(vcs) {
@@ -449,6 +627,9 @@ extension MainWindowController {
             return theme.fileTreeVcsModified.withAlphaComponent(0.12)
         }
         return NSColor.clear
+    }
+    private func recentFilesRowBorderColor(selected: Bool) -> NSColor {
+        selected ? theme.selectionBorder.withAlphaComponent(0.95) : NSColor.clear
     }
     private func recentFilesTint(language: String, item: QuickOpenItem, selected: Bool) -> NSColor {
         if selected {
@@ -461,24 +642,10 @@ extension MainWindowController {
         if item.preview?.changed == true {
             return theme.fileTreeVcsModified
         }
-        switch NativeLanguageRegistry.normalized(language) {
-        case "markdown":
-            return theme.accent
-        case "csv", "tsv":
-            return theme.syntaxString
-        case "shell":
-            return theme.additionText
-        case "javascript", "typescript", "json":
-            return theme.syntaxNumber
-        case "swift", "kotlin", "java", "go", "rust", "python", "ruby":
-            return theme.accent
-        case "yaml", "toml", "ini", "properties", "dotenv":
-            return theme.syntaxString
-        case "markup", "xml", "svg", "css", "scss", "sass":
-            return theme.syntaxKeyword
-        default:
-            return theme.codeText
-        }
+        // IntelliJ Project-view convention: file names stay neutral; type is carried by icon
+        // shape, and only VCS state recolors rows. This prevents .md/.swift/etc. from reading as
+        // the app accent (yellow) in Recent Files.
+        return theme.primaryText
     }
     private func recentFilesIconName(language: String, path: String) -> String {
         switch NativeLanguageRegistry.normalized(language) {
@@ -504,7 +671,7 @@ extension MainWindowController {
         selectedQuickOpenIndex = 0
         populateQuickOpenOverlay()
     }
-    func updateVisibleRecentFilesSelection(items: [QuickOpenItem]) -> Bool {
+    func updateVisibleRecentFilesSelection(items: [QuickOpenItem], scrollSelection: Bool = true) -> Bool {
         guard quickOpenMode == .recent,
               items.indices.contains(selectedQuickOpenIndex)
         else {
@@ -524,9 +691,9 @@ extension MainWindowController {
                 continue
             }
             let item = items[index]
-            let selected = index == selectedQuickOpenIndex
+            let selected = recentFilesFocusRegion == .results && index == selectedQuickOpenIndex
             button.layer?.backgroundColor = recentFilesRowBackground(for: item, selected: selected).cgColor
-            button.layer?.borderColor = selected ? theme.accent.cgColor : NSColor.clear.cgColor
+            button.layer?.borderColor = recentFilesRowBorderColor(selected: selected).cgColor
             button.layer?.borderWidth = selected ? 1 : 0
             let language = item.preview?.language ?? languageForPath(item.path)
             let tint = recentFilesTint(language: language, item: item, selected: selected)
@@ -540,7 +707,9 @@ extension MainWindowController {
         let selected = items[selectedQuickOpenIndex]
         let parent = parentPath(for: selected.path)
         quickOpenRecentFooterLabel.stringValue = compactHomePath(parent.isEmpty ? selected.path : parent)
-        ensureSelectedRecentFileRowVisible(identifier: "quick:\(selectedQuickOpenIndex)")
+        if scrollSelection {
+            ensureSelectedRecentFileRowVisible(identifier: "quick:\(selectedQuickOpenIndex)")
+        }
         return true
     }
     private func ensureSelectedRecentFileRowVisible(identifier: String) {
@@ -588,6 +757,8 @@ extension MainWindowController {
         overlayDiffSplitView.isHidden = false
         setSingleCodePaneVisible(true)
         setSourceLineRulerVisible(false)
+        codePane.setReviewCursorHidden(true)
+        codePane.clearReviewCursors()
         guard let preview = item.preview else {
             codePane.setOldContent(styledText("\(item.path)\n\(item.detail)\n\nPreview is loading or the file is too large for instant search.", color: theme.secondaryText))
             codePane.setNewString("")
@@ -675,13 +846,20 @@ extension MainWindowController {
         let rootBounds = rootView.bounds
         let availableWidth = max(rootBounds.width - outerPadding, MomentermDesign.Metrics.recentFilesMinWidth)
         let availableHeight = max(rootBounds.height - outerPadding, MomentermDesign.Metrics.recentFilesMinHeight)
+        let itemCount = quickOpenMode == .recent ? quickOpenItems().count : 0
+        let visibleRows = min(max(itemCount, 6), 18)
+        let resultsHeight = CGFloat(visibleRows + 1) * MomentermDesign.Metrics.recentFilesResultRowHeight
+            + MomentermDesign.Metrics.panelInnerPadding * 2
+            + 28
+        let railHeight: CGFloat = 6 * 24 + 1 + MomentermDesign.Metrics.sidebarGutter * 2 + 12
+        let contentHeight = max(resultsHeight, railHeight)
         let width = min(
             MomentermDesign.Metrics.recentFilesMaxWidth,
             max(MomentermDesign.Metrics.recentFilesMinWidth, availableWidth * 0.64)
         )
         let height = min(
             MomentermDesign.Metrics.recentFilesMaxHeight,
-            max(MomentermDesign.Metrics.recentFilesMinHeight, availableHeight * 0.70)
+            max(MomentermDesign.Metrics.recentFilesMinHeight, 42 + contentHeight)
         )
         overlayCompactWidthConstraint?.constant = min(width, availableWidth)
         overlayCompactHeightConstraint?.constant = min(height, availableHeight)
@@ -697,13 +875,13 @@ extension MainWindowController {
         let placeholder = quickOpenMode == .usages ? "Find usages" : "파일 검색"
         let label = NSTextField(labelWithString: quickOpenFilter.isEmpty ? placeholder : quickOpenFilter)
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = NSFont.systemFont(ofSize: 18, weight: .regular)
+        label.font = NSFont.monospacedSystemFont(ofSize: MomentermDesign.Metrics.findPanelTextFontSize, weight: .regular)
         label.textColor = quickOpenFilter.isEmpty ? theme.secondaryText : theme.primaryText
         label.lineBreakMode = .byTruncatingMiddle
         container.addSubview(label)
 
         NSLayoutConstraint.activate([
-            container.heightAnchor.constraint(equalToConstant: 58),
+            container.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.findPanelSearchRowHeight),
             label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             label.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -12),
             label.centerYAnchor.constraint(equalTo: container.centerYAnchor)
@@ -720,7 +898,7 @@ extension MainWindowController {
         button.wantsLayer = true
         button.layer?.cornerRadius = MomentermDesign.Metrics.controlRadius
         button.layer?.backgroundColor = recentFilesRowBackground(for: item, selected: selected).cgColor
-        button.layer?.borderColor = selected ? theme.accent.cgColor : NSColor.clear.cgColor
+        button.layer?.borderColor = recentFilesRowBorderColor(selected: selected).cgColor
         button.layer?.borderWidth = selected ? 1 : 0
         button.toolTip = item.path
         button.translatesAutoresizingMaskIntoConstraints = false
@@ -731,21 +909,24 @@ extension MainWindowController {
         let tint = recentFilesTint(language: language, item: item, selected: selected)
         let nameLabel = NSTextField(labelWithString: name)
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = NSFont.monospacedSystemFont(ofSize: 15, weight: selected ? .semibold : .regular)
+        nameLabel.font = NSFont.monospacedSystemFont(
+            ofSize: MomentermDesign.Metrics.findPanelTextFontSize,
+            weight: selected ? .semibold : .regular
+        )
         nameLabel.textColor = selected ? theme.primaryText : tint
         nameLabel.lineBreakMode = .byTruncatingMiddle
         nameLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         let parentLabel = NSTextField(labelWithString: parent)
         parentLabel.translatesAutoresizingMaskIntoConstraints = false
-        parentLabel.font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        parentLabel.font = NSFont.monospacedSystemFont(ofSize: MomentermDesign.Metrics.findPanelTextFontSize, weight: .regular)
         parentLabel.textColor = theme.secondaryText
         parentLabel.lineBreakMode = .byTruncatingMiddle
         parentLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let detailLabel = NSTextField(labelWithString: item.detail)
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
-        detailLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        detailLabel.font = NSFont.monospacedSystemFont(ofSize: MomentermDesign.Metrics.findPanelTextFontSize, weight: .medium)
         detailLabel.textColor = item.preview?.vcs == nil ? theme.secondaryText : tint
         detailLabel.alignment = .right
         detailLabel.lineBreakMode = .byTruncatingMiddle
@@ -753,7 +934,7 @@ extension MainWindowController {
 
         [nameLabel, parentLabel, detailLabel].forEach { button.addSubview($0) }
         NSLayoutConstraint.activate([
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 31),
+            button.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.findPanelResultRowHeight),
             nameLabel.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
             nameLabel.centerYAnchor.constraint(equalTo: button.centerYAnchor),
             nameLabel.widthAnchor.constraint(lessThanOrEqualTo: button.widthAnchor, multiplier: 0.28),

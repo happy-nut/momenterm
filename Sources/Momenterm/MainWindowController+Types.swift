@@ -15,6 +15,49 @@ extension MainWindowController {
         case workspacePicker
     }
 
+    struct WorkspaceInterfaceSnapshot {
+        var root: URL?
+        var currentDocument: ReviewDocument?
+        var fileListingDocument: ReviewDocument?
+        var fileListingRoot: URL?
+        var selectedSourceIndex: Int
+        var fileTreeSelectedIdentifier: String?
+        var fileTreeExpandedFolders: Set<String>
+        var openFileTabs: [String]
+        var activeOpenFileTabPath: String?
+        var sourceViewMode: SourceViewMode
+        var sourcePreviewCursorLine: Int
+        var filesCursorLine: Int?
+        var filesFocusRegion: FileOverlayFocusRegion
+        var overlayMode: OverlayMode
+        var overlayVisible: Bool
+        var overlayMaximized: Bool
+        var selectedDiffIndex: Int
+        var selectedDiffHunkIndex: Int
+        var awaitingNextFileAfterLastHunk: Bool
+        var selectedHistoryIndex: Int
+        var selectedQuickOpenIndex: Int
+        var quickOpenMode: QuickOpenMode
+        var quickOpenFilter: String
+        var quickOpenRecentEditedOnly: Bool
+        var selectedSettingsCategory: SettingsCategory
+        var hiddenFilesOverlayRootPath: String?
+        var hiddenFilesOverlayWorkspaceId: String?
+        var hiddenFilesOverlayWorkspacePath: String?
+        var memoVisible: Bool
+    }
+
+    enum FileOverlayFocusRegion {
+        case sidebar
+        case preview
+        case other
+    }
+
+    enum RecentFilesFocusRegion {
+        case categories
+        case results
+    }
+
     enum SettingsCategory: String, CaseIterable {
         case general
         case appearance
@@ -380,13 +423,6 @@ extension MainWindowController {
         let viewed: Bool
         let questionCount: Int
         let changeRequestCount: Int
-    }
-
-    struct DiffSidebarStatSnapshot {
-        let identifier: String
-        let text: String
-        let frame: CGRect
-        let color: NSColor?
     }
 
     struct QuickOpenItem {

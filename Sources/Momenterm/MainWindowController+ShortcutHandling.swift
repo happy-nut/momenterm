@@ -95,24 +95,12 @@ extension MainWindowController {
             return true
         }
 
-        // File view: ⌥1/⌥2/⌥3 pick raw / side / rendered, mirroring the three header icons. Gated on
-        // the mode buttons being visible (a renderable file). Physical keyCodes 18/19/20 dodge the
-        // ¡™£ characters Option+number produces. Skipped for non-renderable files so the terminal /
-        // other panes keep those keys.
-        if overlayMode == .files, option, !command, !control, !shift, !sourceViewModeButtonStack.isHidden {
-            switch event.keyCode {
-            case 18:
-                setSourceViewMode(.raw)
-                return true
-            case 19:
-                setSourceViewMode(.side)
-                return true
-            case 20:
-                setSourceViewMode(.rendered)
-                return true
-            default:
-                break
-            }
+        // File view: Ctrl+Tab / Ctrl+Shift+Tab cycles the raw / side / rendered header modes.
+        // It is gated on those mode buttons being visible so ordinary Ctrl+Tab remains available
+        // everywhere else.
+        if overlayMode == .files, control, !command, !option, event.keyCode == 48, !sourceViewModeButtonStack.isHidden {
+            cycleSourceViewMode(delta: shift ? -1 : 1)
+            return true
         }
 
         if overlayMode == .files, option, !command, !control, event.keyCode == 48 {
@@ -484,6 +472,12 @@ extension MainWindowController {
             _ = codeView.moveReviewCursorForNavigationKey(event.keyCode)
             updateInlineReviewSelectionForCursor(in: codeView)
             return true
+        }
+        if overlayMode == .changes,
+           !diffHybridView.isHidden,
+           firstResponderIsOrDescends(from: diffHybridView),
+           [123, 124, 125, 126, 115, 116, 119, 121].contains(event.keyCode) {
+            return false
         }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.shift),
            (event.keyCode == 123 || event.keyCode == 124 || event.keyCode == 125 || event.keyCode == 126),

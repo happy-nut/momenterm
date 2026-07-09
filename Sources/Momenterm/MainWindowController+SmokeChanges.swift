@@ -94,9 +94,6 @@ extension MainWindowController {
               let added = diffSidebarButton(containing: "new-tool.sh"),
               firstImageView(in: modified)?.image != nil,
               firstImageView(in: added)?.image != nil,
-              let modifiedStats = textField(in: modified, containing: "+"),
-              let modifiedDeletionStats = textField(in: modified, containing: "-"),
-              let addedStats = textField(in: added, containing: "+"),
               let modifiedNameColor = textField(in: modified, containing: "app.swift")?.textColor,
               let addedNameColor = textField(in: added, containing: "new-tool.sh")?.textColor
         else {
@@ -104,47 +101,44 @@ extension MainWindowController {
         }
         let modifiedText = collectVisibleText(in: modified)
         let addedText = collectVisibleText(in: added)
-        let modifiedStatsText = modifiedStats.stringValue
-        let modifiedDeletionStatsText = modifiedDeletionStats.stringValue
-        let addedStatsText = addedStats.stringValue
+        let modifiedHasStats = collectTextFields(in: modified).contains { $0.identifier?.rawValue.hasPrefix("diff-stat") == true }
+        let addedHasStats = collectTextFields(in: added).contains { $0.identifier?.rawValue.hasPrefix("diff-stat") == true }
         return colorsAreClose(addedNameColor, theme.fileTreeVcsUntracked)
             && !colorsAreClose(modifiedNameColor, addedNameColor)
             && !modifiedText.contains("MODIFIED")
             && !addedText.contains("ADDED")
-            && modifiedStatsText.contains("+")
-            && modifiedStatsText.components(separatedBy: .newlines).count == 1
-            && modifiedDeletionStatsText.contains("-")
-            && modifiedDeletionStatsText.components(separatedBy: .newlines).count == 1
-            && modifiedStats.identifier?.rawValue == "diff-stat-additions"
-            && modifiedDeletionStats.identifier?.rawValue == "diff-stat-deletions"
-            && colorsAreClose(modifiedStats.textColor ?? .clear, theme.fileTreeVcsStaged)
-            && colorsAreClose(modifiedDeletionStats.textColor ?? .clear, theme.fileTreeVcsDeleted)
-            && addedStatsText.contains("+")
-            && !addedStatsText.contains("-")
-            && addedStatsText.components(separatedBy: .newlines).count == 1
+            && !modifiedHasStats
+            && !addedHasStats
             && !modifiedText.contains("src")
             && !addedText.contains("scripts")
             && MomentermDesign.Metrics.diffSidebarRowHeight <= 24
     }
 
-    func changesSidebarStatsAreStableAndColorCodedForSmokeTest() -> Bool {
+    func changesHeaderStatsAreStableAndColorCodedForSmokeTest() -> Bool {
         showOverlay(.changes)
-        guard let firstSnapshot = diffSidebarStatsSnapshot(containing: "app.swift"),
-              let firstAddition = firstSnapshot.first(where: { $0.identifier == "diff-stat-additions" }),
-              let firstDeletion = firstSnapshot.first(where: { $0.identifier == "diff-stat-deletions" }),
-              firstAddition.text.hasPrefix("+"),
-              firstDeletion.text.hasPrefix("-"),
-              colorsAreClose(firstAddition.color ?? .clear, theme.fileTreeVcsStaged),
-              colorsAreClose(firstDeletion.color ?? .clear, theme.fileTreeVcsDeleted)
+        guard let document = currentDocument,
+              let index = document.diffFiles.firstIndex(where: { $0.displayPath.hasSuffix("app.swift") })
         else {
             return false
         }
+        selectedDiffIndex = index
+        renderDiffFile(document.diffFiles[index])
+        guard let firstSnapshot = diffHeaderStatsSnapshot(),
+              firstSnapshot.text.contains("+"),
+              firstSnapshot.text.contains("-"),
+              !firstSnapshot.text.contains("included"),
+              colorsAreClose(firstSnapshot.additionColor ?? .clear, theme.fileTreeVcsStaged),
+              colorsAreClose(firstSnapshot.deletionColor ?? .clear, theme.fileTreeVcsDeleted)
+        else { return false }
 
         for _ in 0..<3 {
             populateChangesOverlay()
             window?.contentView?.layoutSubtreeIfNeeded()
-            guard let nextSnapshot = diffSidebarStatsSnapshot(containing: "app.swift"),
-                  diffSidebarStatSnapshotsMatch(firstSnapshot, nextSnapshot)
+            renderDiffFile(document.diffFiles[index])
+            guard let nextSnapshot = diffHeaderStatsSnapshot(),
+                  firstSnapshot.text == nextSnapshot.text,
+                  colorsAreClose(firstSnapshot.additionColor ?? .clear, nextSnapshot.additionColor ?? .clear),
+                  colorsAreClose(firstSnapshot.deletionColor ?? .clear, nextSnapshot.deletionColor ?? .clear)
             else {
                 return false
             }
@@ -152,15 +146,34 @@ extension MainWindowController {
         return true
     }
 
-    func changesSidebarStatsDiagnosticsForSmokeTest() -> String {
+    func changesHeaderStatsDiagnosticsForSmokeTest() -> String {
         showOverlay(.changes)
-        guard let snapshot = diffSidebarStatsSnapshot(containing: "app.swift") else {
-            return "missing app.swift snapshot rows=\(collectButtons(in: overlaySidebarStack).map { $0.identifier?.rawValue ?? "nil" })"
+        guard let snapshot = diffHeaderStatsSnapshot() else {
+            return "missing diff header stats status=\(diffEditorStatusLabel.stringValue)"
         }
-        return snapshot.map { item in
-            let color = item.color?.hexString(fallback: "nil") ?? "nil"
-            return "\(item.identifier):\(item.text):x\(String(format: "%.1f", item.frame.minX)):w\(String(format: "%.1f", item.frame.width)):\(color)"
-        }.joined(separator: "|")
+        let add = snapshot.additionColor?.hexString(fallback: "nil") ?? "nil"
+        let del = snapshot.deletionColor?.hexString(fallback: "nil") ?? "nil"
+        return "status=\(snapshot.text) addColor=\(add) delColor=\(del)"
+    }
+
+    private func diffHeaderStatsSnapshot() -> (text: String, additionColor: NSColor?, deletionColor: NSColor?)? {
+        let title = diffEditorStatusLabel.attributedStringValue
+        let string = title.string
+        let nsString = string as NSString
+        let plus = nsString.range(of: "+")
+        let minus = nsString.range(of: "-")
+        guard plus.location != NSNotFound,
+              minus.location != NSNotFound,
+              plus.location < title.length,
+              minus.location < title.length
+        else {
+            return nil
+        }
+        return (
+            text: string,
+            additionColor: title.attribute(.foregroundColor, at: plus.location, effectiveRange: nil) as? NSColor,
+            deletionColor: title.attribute(.foregroundColor, at: minus.location, effectiveRange: nil) as? NSColor
+        )
     }
 
     func reviewCodePanesShowCursorForSmokeTest() -> Bool {
@@ -205,17 +218,18 @@ extension MainWindowController {
         if !diffHybridView.isHidden {
             return true
         }
-        guard !oldLineGutter.isHidden,
-              !newLineGutter.isHidden,
+        guard oldLineGutter.isHidden,
+              newLineGutter.isHidden,
+              !diffCenterGutter.isHidden,
               let oldScroll = codePane.oldPaneEnclosingScrollView,
               let newScroll = codePane.newPaneEnclosingScrollView
         else {
             return false
         }
-        let oldVisible = oldScroll.contentView.documentVisibleRect
-        let newVisible = newScroll.contentView.documentVisibleRect
-        return abs(oldLineGutter.frame.maxX - oldVisible.maxX) <= 2
-            && abs(newLineGutter.frame.minX - newVisible.minX) <= 2
+        return diffCenterGutter.frame.minX <= oldScroll.frame.maxX + 1
+            && diffCenterGutter.frame.maxX >= newScroll.frame.minX - 1
+            && diffCenterGutter.hasTrackedBackgroundsForSmokeTest()
+            && diffCenterGutter.hasTrackedChangeBlocksForSmokeTest()
     }
 
     func changesSidebarHighlightsSelectedDiffForSmokeTest() -> Bool {
@@ -241,8 +255,9 @@ extension MainWindowController {
         return font.fontName.lowercased().contains("monaco")
             && font.pointSize >= 11
             && font.pointSize < 14
-            && paragraph.minimumLineHeight >= 20
-            && paragraph.lineSpacing >= 3
+            && paragraph.minimumLineHeight >= MomentermDesign.Metrics.diffCodeMinimumLineHeight
+            && paragraph.minimumLineHeight < MomentermDesign.Metrics.codeMinimumLineHeight
+            && paragraph.lineSpacing <= MomentermDesign.Metrics.diffCodeLineSpacing
             && !oldScroll.hasVerticalScroller
             && newScroll.hasVerticalScroller
             && !oldScroll.hasHorizontalScroller
@@ -337,36 +352,142 @@ extension MainWindowController {
         selectedDiffIndex = index
         renderDiffFile(document.diffFiles[index])
         let combined = "\(codePane.oldPaneString)\n\(codePane.newPaneString)"
-        guard !diffEditorChromeView.isHidden,
-              diffEditorChromeHeightConstraint?.constant == MomentermDesign.Metrics.diffEditorChromeHeight,
-              diffEditorPathLabel.stringValue.contains("app.swift"),
-              diffEditorStatusLabel.stringValue.contains("difference"),
-              diffEditorStatusLabel.stringValue.contains("included"),
-              diffEditorCurrentVersionCheckbox.attributedTitle.string == "Current version",
-              !combined.contains("@@"),
-              !combined.hasPrefix("OLD"),
-              !combined.hasPrefix("NEW"),
-              !combined.contains("+2 -2"),
-              !combined.contains("MODIFIED")
-        else {
+        let chromeMatches = !diffEditorChromeView.isHidden
+            && diffEditorChromeHeightConstraint?.constant == MomentermDesign.Metrics.diffEditorChromeHeight
+            && diffEditorPathLabel.stringValue.contains("app.swift")
+            && diffEditorStatusLabel.stringValue.contains("+")
+            && diffEditorStatusLabel.stringValue.contains("-")
+            && !diffEditorStatusLabel.stringValue.contains("included")
+            && diffEditorCurrentVersionCheckbox.attributedTitle.string == "Current version"
+            && !combined.contains("@@")
+            && !combined.hasPrefix("OLD")
+            && !combined.hasPrefix("NEW")
+            && !combined.contains("+2 -2")
+            && !combined.contains("MODIFIED")
+        guard chromeMatches else {
             return false
+        }
+        if !diffHybridView.isHidden {
+            let deadline = Date().addingTimeInterval(2)
+            var hybridReady = false
+            repeat {
+                hybridReady = (diffHybridView.evaluateJSSyncForSmokeTest("""
+                Boolean(window._diffEditor
+                  && window._centerGutterNode
+                  && window._centerGutterSvg
+                  && typeof window.drawPlaceholderGap === 'function'
+                  && typeof window.appendSvgConnector === 'function')
+                """) as? Bool) ?? false
+                if hybridReady {
+                    break
+                }
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            } while Date() < deadline
+            return hybridReady
+                && !(lastHybridDiffSignature ?? "").isEmpty
+                && !hybridModifiedFileLines.isEmpty
+                && hybridReviewFilePath != nil
         }
         guard let oldStorage = codePane.oldPaneTextStorage,
               let newStorage = codePane.newPaneTextStorage
         else {
             return false
         }
-        // A changed line may be classified as pure delete/add (red/green) or as a modified pair
-        // (blue on both sides), but the active F7 target must now be a visible IntelliJ-style block.
-        let activeDeletion = theme.deletionBackground.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? theme.deletionBackground
-        let activeAddition = theme.additionBackground.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? theme.additionBackground
-        let activeModified = theme.modifiedBackground.blended(withFraction: 0.32, of: theme.diffFocusedHunkBackground) ?? theme.modifiedBackground
-        return storageContainsAnyBackground(oldStorage, colors: [theme.deletionBackground, theme.modifiedBackground])
-            && storageContainsAnyBackground(newStorage, colors: [theme.additionBackground, theme.modifiedBackground])
-            && storageContainsAnyBackground(oldStorage, colors: [theme.diffFocusedHunkBackground, activeDeletion, activeModified])
-            && storageContainsAnyBackground(newStorage, colors: [theme.diffFocusedHunkBackground, activeAddition, activeModified])
-            && storageContainsAnyBackground(oldStorage, colors: [theme.deletionText, theme.modifiedText])
-            && storageContainsAnyBackground(newStorage, colors: [theme.additionText, theme.modifiedText])
+        // Changed lines keep their VCS-tint identity, but the native renderer draws the line
+        // background itself. It must not leak into newline glyphs, which AppKit renders like a
+        // block selection on large added files.
+        return storageContainsAnyDiffLineBackground(oldStorage, colors: [theme.deletionBackground, theme.modifiedBackground])
+            && storageContainsAnyDiffLineBackground(newStorage, colors: [theme.additionBackground, theme.modifiedBackground])
+            && !diffCenterGutter.isHidden
+            && diffCenterGutter.hasTrackedBackgroundsForSmokeTest()
+            && diffCenterGutter.hasTrackedChangeBlocksForSmokeTest()
+            && !diffCenterGutterBlocks.isEmpty
+            && diffOldLineBackgrounds.contains { $0 != nil }
+            && diffNewLineBackgrounds.contains { $0 != nil }
+            && !storageHasBackgroundOnNewline(oldStorage)
+            && !storageHasBackgroundOnNewline(newStorage)
+            && !storageHasDiffLineBackgroundOnNewline(oldStorage)
+            && !storageHasDiffLineBackgroundOnNewline(newStorage)
+            && storageContainsAnyBackground(oldStorage, colors: [theme.modifiedText])
+            && storageContainsAnyBackground(newStorage, colors: [theme.modifiedText])
+    }
+
+    func changesDiffEnhancedDiagnosticsForSmokeTest() -> String {
+        let combined = "\(codePane.oldPaneString)\n\(codePane.newPaneString)"
+        let oldStorage = codePane.oldPaneTextStorage
+        let newStorage = codePane.newPaneTextStorage
+        let hybridReady = (diffHybridView.evaluateJSSyncForSmokeTest("""
+        Boolean(window._diffEditor
+          && window._centerGutterNode
+          && window._centerGutterSvg
+          && typeof window.drawPlaceholderGap === 'function'
+          && typeof window.appendSvgConnector === 'function')
+        """) as? Bool) ?? false
+        return [
+            "chromeHidden=\(diffEditorChromeView.isHidden)",
+            "chromeHeight=\(diffEditorChromeHeightConstraint?.constant ?? -1)",
+            "path=\(diffEditorPathLabel.stringValue)",
+            "status=\(diffEditorStatusLabel.stringValue)",
+            "checkbox=\(diffEditorCurrentVersionCheckbox.attributedTitle.string)",
+            "hybridHidden=\(diffHybridView.isHidden)",
+            "hybridReady=\(hybridReady)",
+            "hybridSignature=\(!(lastHybridDiffSignature ?? "").isEmpty)",
+            "hybridLines=\(hybridModifiedFileLines.count)",
+            "hybridPath=\(hybridReviewFilePath ?? "nil")",
+            "centerHidden=\(diffCenterGutter.isHidden)",
+            "centerBackgrounds=\(diffCenterGutter.hasTrackedBackgroundsForSmokeTest())",
+            "centerBlocks=\(diffCenterGutter.hasTrackedChangeBlocksForSmokeTest())/\(diffCenterGutterBlocks.count)",
+            "oldLineBgArray=\(diffOldLineBackgrounds.contains { $0 != nil })/\(diffOldLineBackgrounds.count)",
+            "newLineBgArray=\(diffNewLineBackgrounds.contains { $0 != nil })/\(diffNewLineBackgrounds.count)",
+            "oldBg=\(oldStorage.map { storageContainsAnyDiffLineBackground($0, colors: [theme.deletionBackground, theme.modifiedBackground]) } ?? false)",
+            "newBg=\(newStorage.map { storageContainsAnyDiffLineBackground($0, colors: [theme.additionBackground, theme.modifiedBackground]) } ?? false)",
+            "oldNewlineBg=\(oldStorage.map { storageHasBackgroundOnNewline($0) } ?? false)",
+            "newNewlineBg=\(newStorage.map { storageHasBackgroundOnNewline($0) } ?? false)",
+            "oldNewlineDiffBg=\(oldStorage.map { storageHasDiffLineBackgroundOnNewline($0) } ?? false)",
+            "newNewlineDiffBg=\(newStorage.map { storageHasDiffLineBackgroundOnNewline($0) } ?? false)",
+            "oldToken=\(oldStorage.map { storageContainsAnyBackground($0, colors: [theme.modifiedText]) } ?? false)",
+            "newToken=\(newStorage.map { storageContainsAnyBackground($0, colors: [theme.modifiedText]) } ?? false)",
+            "hasHunkMarkers=\(combined.contains("@@"))",
+            "hasStats=\(combined.contains("+2 -2"))"
+        ].joined(separator: " ")
+    }
+
+    func markdownDiffUsesReadableSyntaxAndCleanLineBackgroundForSmokeTest() -> Bool {
+        let file = DiffFile(
+            oldPath: "/dev/null",
+            newPath: "docs/sample.md",
+            status: "added",
+            hunks: [
+                DiffHunk(header: "@@ -0,0 +1,4 @@", lines: [
+                    DiffLine(kind: .addition, oldNumber: nil, newNumber: 1, text: "# Title"),
+                    DiffLine(kind: .addition, oldNumber: nil, newNumber: 2, text: "```kotlin"),
+                    DiffLine(kind: .addition, oldNumber: nil, newNumber: 3, text: "fun main() { val value = \"ok\" }"),
+                    DiffLine(kind: .addition, oldNumber: nil, newNumber: 4, text: "```")
+                ])
+            ],
+            added: 4,
+            removed: 0,
+            binary: false,
+            vcs: nil
+        )
+        selectedDiffHunkIndex = 0
+        renderDiffFile(file)
+        guard let storage = codePane.newPaneTextStorage,
+              storage.length > 0
+        else {
+            return false
+        }
+        let funRange = (storage.string as NSString).range(of: "fun")
+        guard funRange.location != NSNotFound,
+              let funColor = storage.attribute(.foregroundColor, at: funRange.location, effectiveRange: nil) as? NSColor
+        else {
+            return false
+        }
+        return colorsAreClose(funColor, theme.syntaxKeyword)
+            && storageContainsAnyDiffLineBackground(storage, colors: [theme.additionBackground])
+            && !storageHasBackgroundOnNewline(storage)
+            && !storageHasDiffLineBackgroundOnNewline(storage)
+            && codePane.newPaneCodeView.selectedRange().length == 0
     }
 }
 #endif

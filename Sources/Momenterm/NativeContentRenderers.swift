@@ -338,7 +338,12 @@ enum NativeSyntaxHighlighter {
             rules.append(Rule(#"[-A-Za-z_][A-Za-z0-9_-]*(?=\s*:)"#, theme.syntaxKeyword))
             rules.append(Rule(#"\.[A-Za-z_][A-Za-z0-9_-]*|#[A-Za-z_][A-Za-z0-9_-]*"#, theme.syntaxString))
         case "markdown":
-            rules.append(Rule(#"^#{1,6}\s+.*$|^\s*[-*+]\s+|\[[^\]]+\]\([^)]+\)|`[^`]+`"#, theme.syntaxKeyword))
+            rules.append(Rule(#"^#{1,6}\s+.*$"#, theme.syntaxKeyword))
+            rules.append(Rule(#"^(```|~~~).*$"#, theme.syntaxComment))
+            rules.append(Rule(#"^\s*(?:[-*+]|\d+\.)\s+"#, theme.syntaxNumber))
+            rules.append(Rule(#"^>\s+.*$"#, theme.syntaxComment))
+            rules.append(Rule(#"\[[^\]]+\]\([^)]+\)"#, theme.syntaxString))
+            rules.append(Rule(#"`[^`]+`|\*\*[^*]+\*\*|__[^_]+__"#, theme.syntaxString))
         case "csv", "tsv":
             rules.append(Rule(#"[^,\t\n\r]+"#, theme.syntaxString))
         case "http":

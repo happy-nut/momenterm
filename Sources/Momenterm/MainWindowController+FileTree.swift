@@ -11,9 +11,9 @@ extension MainWindowController {
         fileOverlayPopulateCount += 1
         resetOverlaySidebar()
         if isLoadingFileListing && fileListingDocument == nil {
-            overlaySubtitleLabel.stringValue = "Loading"
-            addSidebarMessage(fileListingRoot?.path ?? root?.path ?? "Loading files")
-            codePane.setOldContent(styledText("Loading file list...", color: theme.primaryText))
+            overlaySubtitleLabel.stringValue = "Indexing"
+            addSidebarMessage(fileListingRoot?.path ?? root?.path ?? "Files")
+            codePane.setOldString("")
             codePane.setNewString("")
             return
         }
@@ -334,7 +334,8 @@ extension MainWindowController {
         depth: Int = 0,
         tooltip: String? = nil,
         badges: [NSView] = [],
-        trailing: NSView? = nil
+        trailing: NSView? = nil,
+        rowWidth: CGFloat = MomentermDesign.Metrics.sidebarWidth
     ) -> NSButton {
         let button = NSButton(title: "", target: self, action: #selector(selectOverlayItem(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(identifier)
@@ -379,7 +380,7 @@ extension MainWindowController {
 
         let leadingInset = MomentermDesign.Metrics.fileTreeLeadingInset + CGFloat(depth) * MomentermDesign.Metrics.fileTreeIndentStep
         var constraints: [NSLayoutConstraint] = [
-            button.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.sidebarWidth),
+            button.widthAnchor.constraint(equalToConstant: rowWidth),
             button.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.fileTreeRowHeight),
             icon.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: leadingInset),
             icon.centerYAnchor.constraint(equalTo: button.centerYAnchor),

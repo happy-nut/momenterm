@@ -4,22 +4,95 @@
 <meta charset="UTF-8">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body,#editor{height:100%;background:#1e1e1e;overflow:hidden}
+:root{
+  --mtm-darcula-editor:#2B2B2B;
+  --mtm-darcula-gutter:#2B2B2B;
+  --mtm-darcula-split:#3C3F41;
+  --mtm-line-height:18px;
+}
+html,body,#editor{height:100%;background:var(--mtm-darcula-editor);overflow:hidden}
 #loading{
   display:flex;align-items:center;justify-content:center;
-  height:100%;color:#666;font-family:-apple-system,sans-serif;font-size:13px;
+  height:100%;color:#8C8C8C;font-family:-apple-system,sans-serif;font-size:13px;
 }
-/* IntelliJ shows lines present on BOTH sides but changed in blue (not add-green / delete-red). Monaco
-   has no such state, so we overlay it: a whole-line blue on the modified block, a stronger blue on the
-   actually-changed tokens. Colors come from the native theme (matching the native diff pane exactly). */
-.mtm-modified-line{background-color:var(--mtm-mod-line,#2B3A52)!important;}
-.mtm-modified-token{background-color:var(--mtm-mod-token,rgba(104,151,187,0.42))!important;border-radius:2px;}
-.mtm-active-hunk-line{box-shadow:inset 3px 0 0 var(--mtm-active-hunk-edge,#6897BB),inset 0 0 0 9999px var(--mtm-active-hunk-wash,rgba(104,151,187,0.10))!important;}
-.monaco-editor .margin-view-overlays .mtm-active-hunk-margin{background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.55))!important;}
+/* IntelliJ Darcula density: flat editor surface, compact gutters, and no VS Code chrome shadows. */
+.monaco-diff-editor,.monaco-editor,.monaco-editor-background,.monaco-editor .margin,
+.monaco-editor .glyph-margin,.monaco-editor .margin-view-overlays,
+.monaco-editor .minimap,.monaco-editor .decorationsOverviewRuler{
+  background:var(--mtm-darcula-editor)!important;
+}
+.monaco-diff-editor .diffOverview,
+.monaco-diff-editor .diffOverview .diffViewport,
+.monaco-diff-editor .diffViewport,
+.monaco-editor .decorationsOverviewRuler,
+.monaco-editor .overviewRuler{
+  display:none!important;width:0!important;min-width:0!important;border:0!important;background:transparent!important;
+}
+.monaco-scrollable-element>.scrollbar{background:transparent!important;box-shadow:none!important;}
+.monaco-scrollable-element>.scrollbar.vertical{width:5px!important;right:1px!important;}
+.monaco-scrollable-element>.scrollbar.horizontal{height:5px!important;}
+.monaco-scrollable-element>.scrollbar>.slider{
+  background:rgba(144,144,144,0.55)!important;border-radius:0!important;
+}
+.monaco-scrollable-element>.scrollbar.vertical>.slider{width:5px!important;left:0!important;}
+.monaco-scrollable-element>.scrollbar.horizontal>.slider{height:5px!important;top:0!important;}
+.monaco-editor .view-line,.monaco-editor .margin-view-overlays .line-numbers{
+  line-height:var(--mtm-line-height)!important;
+}
+.monaco-editor .margin-view-overlays .line-numbers{
+  color:#6E6E6E!important;font-size:12px!important;padding-right:4px!important;
+}
+.monaco-editor .margin-view-overlays .current-line~.line-numbers,
+.monaco-editor .margin-view-overlays .active-line-number{
+  color:#A9B7C6!important;
+}
+.monaco-diff-editor .editor.original{border-right:1px solid var(--mtm-darcula-split)!important;}
+.monaco-diff-editor .editor.modified{border-left:1px solid #242424!important;}
+/* The original editor's default far-left ruler fights IntelliJ's shared center gutter. */
+.monaco-diff-editor .editor.original .margin-view-overlays .line-numbers{
+  visibility:hidden!important;color:transparent!important;
+}
+.monaco-diff-editor .margin-view-overlays .line-numbers{
+  visibility:hidden!important;color:transparent!important;
+}
+.monaco-editor .current-line{border:0!important;background:rgba(50,66,82,0.34)!important;}
+.monaco-editor .cursors-layer .cursor{background-color:#A9B7C6!important;border-color:#A9B7C6!important;}
+/* IntelliJ-style VCS tints stay visible but never read as selected text. */
+.mtm-added-line{background-color:var(--mtm-add-line,rgba(41,68,54,0.34))!important;}
+.mtm-deleted-line{background-color:var(--mtm-del-line,rgba(74,45,45,0.34))!important;}
+.mtm-modified-line{background-color:var(--mtm-mod-line,rgba(43,58,82,0.28))!important;}
+.monaco-editor .margin-view-overlays .mtm-added-edge{
+  background:linear-gradient(to right,var(--mtm-add-edge,#629755) 0 2px,transparent 2px)!important;
+}
+.monaco-editor .margin-view-overlays .mtm-deleted-edge{
+  background:linear-gradient(to right,var(--mtm-del-edge,#CC666E) 0 2px,transparent 2px)!important;
+}
+.monaco-editor .margin-view-overlays .mtm-modified-edge{
+  background:linear-gradient(to right,var(--mtm-mod-edge,#6897BB) 0 2px,transparent 2px)!important;
+}
+.monaco-editor .margin-view-overlays .mtm-added-margin{background-color:var(--mtm-add-line,rgba(41,68,54,0.34))!important;}
+.monaco-editor .margin-view-overlays .mtm-deleted-margin{background-color:var(--mtm-del-line,rgba(74,45,45,0.34))!important;}
+.monaco-editor .margin-view-overlays .mtm-modified-margin{background-color:var(--mtm-mod-line,rgba(43,58,82,0.28))!important;}
+.mtm-modified-token{background-color:var(--mtm-mod-token,rgba(104,151,187,0.36))!important;border-radius:0;}
+.mtm-active-hunk-line{
+  background-color:var(--mtm-active-hunk-line,rgba(44,64,75,0.34))!important;
+}
+.monaco-editor .margin-view-overlays .mtm-active-hunk-margin{background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.34))!important;}
 .monaco-editor .margin-view-overlays .mtm-active-hunk-gutter{
-  background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.55))!important;
-  box-shadow:inset 2px 0 0 var(--mtm-active-hunk-edge,#6897BB);
+  background-color:transparent!important;
 }
+#mtm-center-gutter{
+  position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:80;
+  font-family:"JetBrains Mono","SF Mono",Menlo,Monaco,monospace;font-size:12px;
+}
+#mtm-center-gutter svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.mtm-center-line-number{
+  position:absolute;height:var(--mtm-line-height);line-height:var(--mtm-line-height);
+  color:#6E6E6E;white-space:pre;font-size:12px;
+}
+.mtm-center-line-number.old{text-align:right}
+.mtm-center-line-number.new{text-align:left}
+.mtm-center-line-number.active{color:#A9B7C6}
 </style>
 </head>
 <body>
@@ -28,7 +101,11 @@ html,body,#editor{height:100%;background:#1e1e1e;overflow:hidden}
 
 <script>
 'use strict';
-var _diffEditor=null,_loaded=false,_pending=null,_fontSize=11.5;
+var _diffEditor=null,_loaded=false,_pending=null,_fontSize=13,_lineHeight=18;
+var _centerGutterNode=null,_centerGutterSvg=null,_centerGutterRaf=0,_centerGutterWired=false;
+var _bottomSpacerZoneIds={original:null,modified:null},_bottomSpacerSignature='';
+var _authoritativeLineDiffs={original:[],modified:[]};
+var _modifiedLineFill='rgba(43,58,82,0.28)',_activeLineFill='rgba(44,64,75,0.34)',_activeHunkEdge='#6897BB';
 
 // Surface any hard failure on-screen instead of silently sitting on "Loading diff…".
 window.onerror=function(message,source,lineno,colno){
@@ -46,9 +123,9 @@ window.MonacoEnvironment={getWorkerUrl:function(){
 
 // Review layer: the native side owns hunk/file navigation (it computes the target line and the
 // "last hunk in file" pause), then tells Monaco where to place its blinking cursor. Arrow keys move
-// the cursor natively inside the read-only modified editor. Cursor moves are reported back so the
-// native side can select/deselect the inline comment on that line.
-var _reviewLine=1,_suppressCursorReport=false,_lastHunkHintNode=null;
+// the cursor natively inside the focused read-only split pane. Modified-side cursor moves are reported
+// back so the native side can select/deselect the inline comment on that line.
+var _reviewLine=1,_reviewEditorSide='modified',_suppressCursorReport=false,_lastHunkHintNode=null;
 
 window.addEventListener('message',function(e){
   var msg=e.data;
@@ -66,7 +143,7 @@ window.addEventListener('message',function(e){
 // fill, a 1px panelBorder that thickens to a 2px accent when the caret selects it, and a kind-colored
 // "Question" / "Change request" title above the body. Colors arrive from the native theme (setComments),
 // cached so plain re-renders (selection changes) keep them without another palette round-trip.
-var _commentZoneIds=[],_commentTheme=null;
+var _commentZoneIds=[],_commentTheme=null,_commentDraftZoneId=null,_commentDraftNode=null,_commentDraftLine=1,_commentDraftKind='question';
 function renderComments(comments,theme){
   if(theme)_commentTheme=theme;
   var t=_commentTheme||{};
@@ -101,6 +178,103 @@ function renderComments(comments,theme){
   });
 }
 
+function removeCommentDraft(refocus){
+  var ed=modifiedEditor();
+  if(ed&&_commentDraftZoneId){
+    ed.changeViewZones(function(accessor){accessor.removeZone(_commentDraftZoneId);});
+  }
+  _commentDraftZoneId=null;
+  _commentDraftNode=null;
+  if(refocus)focusReview();
+}
+
+function commentThemeColors(){
+  var t=_commentTheme||{};
+  return {
+    bg:t.boxBackground||'#262628',
+    border:t.boxBorder||'#3a3a3a',
+    selected:t.selectedBorder||'#4a9d5b',
+    question:t.questionAccent||'#c8a24a',
+    change:t.changeAccent||'#4a9d5b',
+    body:t.bodyText||'#e6e6e6'
+  };
+}
+
+function showCommentDraft(kind,line){
+  var ed=modifiedEditor();if(!ed)return;
+  removeCommentDraft(false);
+  _commentDraftKind=kind||'question';
+  _commentDraftLine=Math.max(1,+line||_reviewLine||1);
+  var colors=commentThemeColors();
+  var isQ=_commentDraftKind==='question';
+  var accent=isQ?colors.question:colors.change;
+  var box=document.createElement('div');
+  box.className='mtm-comment-draft';
+  box.style.cssText='margin:3px 10px 8px 44px;border-radius:6px;overflow:hidden;'+
+    'background:'+colors.bg+';border:2px solid '+accent+';'+
+    'box-shadow:0 4px 14px rgba(0,0,0,0.32);font:13px -apple-system,sans-serif;';
+  var head=document.createElement('div');
+  head.style.cssText='display:flex;align-items:center;gap:10px;padding:7px 10px 0;';
+  var title=document.createElement('div');
+  title.textContent=isQ?'Question':'Change request';
+  title.style.cssText='font:600 12px -apple-system,sans-serif;color:'+accent+';';
+  var hint=document.createElement('div');
+  hint.textContent='Cmd+Enter';
+  hint.style.cssText='margin-left:auto;font:12px "JetBrains Mono","SF Mono",monospace;color:#8c8c8c;';
+  var close=document.createElement('button');
+  close.type='button';close.textContent='×';
+  close.style.cssText='width:20px;height:20px;border:0;background:transparent;color:#aaa;font:16px -apple-system,sans-serif;cursor:pointer;';
+  close.onclick=function(){removeCommentDraft(true);};
+  head.appendChild(title);head.appendChild(hint);head.appendChild(close);
+  var textarea=document.createElement('textarea');
+  textarea.placeholder=isQ?'무엇이 궁금한가요?':'무엇을 바꿔야 하나요?';
+  textarea.style.cssText='display:block;width:calc(100% - 16px);height:58px;margin:6px 8px 0;resize:none;'+
+    'border:0;outline:none;border-radius:4px;padding:7px 8px;background:#1e1e1e;color:'+colors.body+';'+
+    'font:13px/1.42 -apple-system,sans-serif;';
+  var actions=document.createElement('div');
+  actions.style.cssText='display:flex;justify-content:flex-end;gap:8px;padding:7px 8px 8px;';
+  var cancel=document.createElement('button');
+  cancel.type='button';cancel.textContent='Cancel';
+  cancel.style.cssText='border:1px solid '+colors.border+';background:transparent;color:'+colors.body+';border-radius:5px;padding:4px 10px;font:600 12px -apple-system,sans-serif;cursor:pointer;';
+  cancel.onclick=function(){removeCommentDraft(true);};
+  var save=document.createElement('button');
+  save.type='button';save.textContent='Add';
+  save.style.cssText='border:1px solid '+accent+';background:'+accent+';color:#111;border-radius:5px;padding:4px 12px;font:700 12px -apple-system,sans-serif;cursor:pointer;';
+  save.onclick=function(){submitCommentDraft();};
+  actions.appendChild(cancel);actions.appendChild(save);
+  box.appendChild(head);box.appendChild(textarea);box.appendChild(actions);
+  _commentDraftNode=box;
+  ed.changeViewZones(function(accessor){
+    _commentDraftZoneId=accessor.addZone({
+      afterLineNumber:_commentDraftLine,
+      heightInPx:132,
+      domNode:box
+    });
+  });
+  ed.revealLineInCenterIfOutside(_commentDraftLine);
+  setTimeout(function(){textarea.focus();textarea.select();},0);
+}
+
+function submitCommentDraft(){
+  if(!_commentDraftNode)return;
+  var field=_commentDraftNode.querySelector('textarea');
+  var text=(field&&field.value||'').trim();
+  postToNative('reviewComment',{kind:_commentDraftKind,line:_commentDraftLine,text:text});
+  removeCommentDraft(true);
+}
+
+function handleCommentDraftKeydown(e){
+  if(e.key==='Escape'){
+    removeCommentDraft(true);
+    e.preventDefault();e.stopPropagation();return true;
+  }
+  if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){
+    submitCommentDraft();
+    e.preventDefault();e.stopPropagation();return true;
+  }
+  return false;
+}
+
 function postToNative(name,payload){
   try{
     if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers[name]){
@@ -110,15 +284,23 @@ function postToNative(name,payload){
 }
 
 function modifiedEditor(){return _diffEditor?_diffEditor.getModifiedEditor():null;}
+function editorForSide(side){
+  if(!_diffEditor)return null;
+  return side==='original'?_diffEditor.getOriginalEditor():_diffEditor.getModifiedEditor();
+}
 
 // Code-navigation shortcuts (Cmd+B find usages, Cmd+↓ go to declaration) read the identifier under
 // whichever split pane holds focus, then bridge it to the native side. Monaco owns keyboard focus so
 // these never reach the app's Swift key monitor — they must be caught here.
-function focusedDiffEditor(){
-  if(!_diffEditor)return null;
+function focusedDiffEditorSide(){
+  if(!_diffEditor)return 'modified';
   var o=_diffEditor.getOriginalEditor(),m=_diffEditor.getModifiedEditor();
-  if(o&&o.hasTextFocus&&o.hasTextFocus())return o;
-  return m;
+  if(o&&o.hasTextFocus&&o.hasTextFocus())return 'original';
+  if(m&&m.hasTextFocus&&m.hasTextFocus())return 'modified';
+  return _reviewEditorSide||'modified';
+}
+function focusedDiffEditor(){
+  return editorForSide(focusedDiffEditorSide())||modifiedEditor();
 }
 function wordAtCursor(ed){
   if(!ed)return '';
@@ -133,6 +315,7 @@ function setReviewCursor(line){
   // the load callback so the very first navigation isn't dropped.
   _reviewLine=Math.max(1,+line||1);
   var ed=modifiedEditor();if(!ed)return;
+  _reviewEditorSide='modified';
   _suppressCursorReport=true;
   ed.setPosition({lineNumber:_reviewLine,column:1});
   ed.revealLineInCenter(_reviewLine);
@@ -141,9 +324,9 @@ function setReviewCursor(line){
 }
 
 function focusReview(){
-  var ed=modifiedEditor();if(!ed)return;
+  var ed=editorForSide(_reviewEditorSide)||modifiedEditor();if(!ed)return;
   ed.focus();
-  ed.setPosition({lineNumber:_reviewLine,column:1});
+  if(_reviewEditorSide==='modified')ed.setPosition({lineNumber:_reviewLine,column:1});
 }
 
 function showLastHunkHint(text){
@@ -163,7 +346,7 @@ function showLastHunkHint(text){
   n.style.cssText='position:absolute;left:50%;top:'+top+';transform:translateX(-50%);'+
     'background:rgba(30,30,30,0.94);color:#e6e6e6;border:1px solid rgba(255,255,255,0.12);'+
     'border-radius:9px;padding:7px 13px;font:600 12px -apple-system,sans-serif;'+
-    'box-shadow:0 6px 20px rgba(0,0,0,0.4);z-index:50;pointer-events:none;'+
+    'box-shadow:0 6px 20px rgba(0,0,0,0.4);z-index:140;pointer-events:none;'+
     'opacity:0;transition:opacity 0.18s ease';
   host.appendChild(n);
   _lastHunkHintNode=n;
@@ -177,13 +360,19 @@ function showLastHunkHint(text){
 
 function setFontSize(size){
   size=+size; if(!size)return;
-  _fontSize=size;
-  if(_diffEditor)_diffEditor.updateOptions({fontSize:_fontSize});
+  _fontSize=Math.max(12.5,size);
+  _lineHeight=Math.max(18,Math.round(_fontSize+5));
+  document.documentElement.style.setProperty('--mtm-line-height',_lineHeight+'px');
+  if(_diffEditor){
+    _diffEditor.updateOptions({fontSize:_fontSize,lineHeight:_lineHeight});
+    _bottomSpacerSignature='';
+    balanceBottomScrollSpacers();
+  }
 }
 
 // IntelliJ Darcula, matching the native panes' syntax + diff palette so the hybrid diff reads the same
 // as the rest of the app (keyword #CC7832, string #6A8759, number #6897BB, comment #808080, annotation
-// #BBB529 on #1A1A1A / #A9B7C6; diff add #294436, delete #4A2D2D — green/red backgrounds).
+// #BBB529 on IntelliJ Darcula #2B2B2B / #A9B7C6; diff add #294436, delete #4A2D2D).
 var _themeDefined=false;
 function defineDarculaTheme(){
   if(_themeDefined||typeof monaco==='undefined')return;
@@ -218,21 +407,29 @@ function defineDarculaTheme(){
       {token:'variable',foreground:'A9B7C6'}
     ],
     colors:{
-      'editor.background':'#1A1A1A',
+      'editor.background':'#2B2B2B',
       'editor.foreground':'#A9B7C6',
       'editorLineNumber.foreground':'#606366',
       'editorLineNumber.activeForeground':'#A4A3A3',
-      'editorCursor.foreground':'#FFD369',
+      'editorCursor.foreground':'#A9B7C6',
       'editor.selectionBackground':'#214283',
-      'editor.lineHighlightBackground':'#26262A',
-      'editorGutter.background':'#1A1A1A',
-      'diffEditor.insertedTextBackground':'#29443655',
-      'diffEditor.removedTextBackground':'#4A2D2D66',
-      'diffEditor.insertedLineBackground':'#2944364D',
-      'diffEditor.removedLineBackground':'#4A2D2D4D',
-      'diffEditor.diagonalFill':'#242424',
-      'diffEditorGutter.insertedLineBackground':'#2944364D',
-      'diffEditorGutter.removedLineBackground':'#4A2D2D4D'
+      'editor.lineHighlightBackground':'#323232',
+      'editor.lineHighlightBorder':'#00000000',
+      'editorGutter.background':'#2B2B2B',
+      'editorGutter.modifiedBackground':'#6897BB',
+      'editorGutter.addedBackground':'#629755',
+      'editorGutter.deletedBackground':'#CC666E',
+      'scrollbarSlider.background':'#5E5E5E99',
+      'scrollbarSlider.hoverBackground':'#6B6B6BCC',
+      'scrollbarSlider.activeBackground':'#7A7A7ADD',
+      'editorOverviewRuler.border':'#00000000',
+      'diffEditor.insertedTextBackground':'#00000000',
+      'diffEditor.removedTextBackground':'#00000000',
+      'diffEditor.insertedLineBackground':'#29443622',
+      'diffEditor.removedLineBackground':'#4A2D2D22',
+      'diffEditor.diagonalFill':'#3C3F41',
+      'diffEditorGutter.insertedLineBackground':'#29443633',
+      'diffEditorGutter.removedLineBackground':'#4A2D2D33'
     }
   });
 }
@@ -248,12 +445,31 @@ function hexToRgba(hex,a){
 // the native diff pane. Applied as CSS variables the decoration classes read.
 function applyModifiedDiffColors(msg){
   var root=document.documentElement.style;
-  root.setProperty('--mtm-mod-line',msg.modifiedLineBackground||'#2B3A52');
-  root.setProperty('--mtm-mod-token',hexToRgba(msg.modifiedTokenBackground||'#6897BB',0.42));
+  _modifiedLineFill=hexToRgba(msg.modifiedLineBackground||'#2B3A52',0.28);
+  root.setProperty('--mtm-mod-line',_modifiedLineFill);
+  root.setProperty('--mtm-mod-token',hexToRgba(msg.modifiedTokenBackground||'#6897BB',0.36));
+  root.setProperty('--mtm-mod-edge',msg.modifiedTokenBackground||'#6897BB');
+  root.setProperty('--mtm-add-line',hexToRgba(msg.addedLineBackground||'#294436',0.34));
+  root.setProperty('--mtm-del-line',hexToRgba(msg.deletedLineBackground||'#4A2D2D',0.34));
 }
-// Reclassify Monaco's add(green)/delete(red) diff into IntelliJ's add/delete/modify: a block that
-// changed on BOTH sides is "modified" → paint it blue on each pane, with a stronger blue on the
-// changed tokens. Pure additions/deletions keep Monaco's green/red. Recomputed on every diff update.
+function normalizeLineDiffs(raw){
+  if(!Array.isArray(raw))return [];
+  var out=[];
+  raw.forEach(function(d){
+    var line=+((d&&d.line)||0);
+    var kind=String((d&&d.kind)||'');
+    if(line>=1&&(kind==='added'||kind==='deleted'||kind==='modified'))out.push({line:line,kind:kind});
+  });
+  return out;
+}
+function setAuthoritativeLineDiffs(msg){
+  _authoritativeLineDiffs={
+    original:normalizeLineDiffs(msg.originalLineDiffs),
+    modified:normalizeLineDiffs(msg.modifiedLineDiffs)
+  };
+}
+// Reclassify using the Git hunks sent by native code, not Monaco's re-diff. That keeps the visible
+// colored lines aligned with the sidebar/header +N/-N counts even for large moved or rewritten files.
 var _origDecorations=[],_modDecorations=[],_activeOrigDecorations=[],_activeModDecorations=[],_activeHunk=null,_modToOrig={};
 // IntelliJ shows a SINGLE shared gutter in the center with BOTH the original and new line numbers.
 // Monaco side-by-side puts a separate gutter on the far left of each pane and exposes no line-mapping
@@ -292,28 +508,333 @@ function buildModOrigMap(){
 function installCenterLineNumbers(){
   if(!_diffEditor)return;
   try{
-    _diffEditor.getOriginalEditor().updateOptions({lineNumbers:'off'});
-    // Fresh closure each call so Monaco re-renders the gutter after the map is rebuilt.
-    var fn=function(mln){var o=_modToOrig[mln];return (o===undefined||o===null)?String(mln):(o+'  '+mln);};
-    _diffEditor.getModifiedEditor().updateOptions({lineNumbers:fn,lineNumbersMinChars:9});
+    _diffEditor.getOriginalEditor().updateOptions({lineNumbers:'off',lineNumbersMinChars:0,lineDecorationsWidth:4});
+    _diffEditor.getModifiedEditor().updateOptions({
+      lineNumbers:function(){return '';},
+      lineNumbersMinChars:4,
+      lineDecorationsWidth:4
+    });
   }catch(_){}
 }
 function onDiffUpdated(){
+  balanceBottomScrollSpacers();
   applyModifiedLineDecorations();
   applyActiveHunkDecorations();
   buildModOrigMap();
   installCenterLineNumbers();
+  scheduleCenterGutterRepaint();
 }
+function scheduleDiffRepaint(){
+  onDiffUpdated();
+  setTimeout(onDiffUpdated,0);
+  setTimeout(onDiffUpdated,80);
+  setTimeout(onDiffUpdated,240);
+}
+
+function resetBottomScrollSpacers(){
+  if(_diffEditor){
+    [['original',_diffEditor.getOriginalEditor()],['modified',_diffEditor.getModifiedEditor()]].forEach(function(pair){
+      var side=pair[0],ed=pair[1],id=_bottomSpacerZoneIds[side];
+      if(ed&&id){
+        ed.changeViewZones(function(accessor){accessor.removeZone(id);});
+      }
+    });
+  }
+  _bottomSpacerZoneIds={original:null,modified:null};
+  _bottomSpacerSignature='';
+}
+function balanceBottomScrollSpacers(){
+  if(!_diffEditor||typeof monaco==='undefined')return;
+  var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
+  var origModel=orig&&orig.getModel&&orig.getModel();
+  var modModel=mod&&mod.getModel&&mod.getModel();
+  if(!orig||!mod||!origModel||!modModel)return;
+  var lineHeight=orig.getOption(monaco.editor.EditorOption.lineHeight)||_lineHeight||18;
+  var origLines=origModel.getLineCount(),modLines=modModel.getLineCount();
+  var signature=origLines+'|'+modLines+'|'+lineHeight;
+  if(signature===_bottomSpacerSignature)return;
+  _bottomSpacerSignature=signature;
+
+  function setSpacer(ed,side,lineCount,linesToPad){
+    var existing=_bottomSpacerZoneIds[side];
+    ed.changeViewZones(function(accessor){
+      if(existing)accessor.removeZone(existing);
+      _bottomSpacerZoneIds[side]=null;
+      if(linesToPad<=0)return;
+      var node=document.createElement('div');
+      node.style.cssText='height:100%;pointer-events:none;background:transparent;';
+      _bottomSpacerZoneIds[side]=accessor.addZone({
+        afterLineNumber:Math.max(1,lineCount),
+        heightInPx:Math.ceil(linesToPad*lineHeight),
+        domNode:node
+      });
+    });
+  }
+
+  var delta=origLines-modLines;
+  setSpacer(orig,'original',origLines,delta<0?-delta:0);
+  setSpacer(mod,'modified',modLines,delta>0?delta:0);
+}
+
+function ensureCenterGutter(){
+  if(_centerGutterNode)return _centerGutterNode;
+  var host=document.getElementById('editor');if(!host)return null;
+  host.style.position='relative';
+  _centerGutterNode=document.createElement('div');
+  _centerGutterNode.id='mtm-center-gutter';
+  _centerGutterSvg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  _centerGutterNode.appendChild(_centerGutterSvg);
+  host.appendChild(_centerGutterNode);
+  return _centerGutterNode;
+}
+
+function editorRect(ed,hostRect){
+  var dom=ed&&ed.getDomNode&&ed.getDomNode();if(!dom)return null;
+  var rect=dom.getBoundingClientRect();
+  return {
+    left:rect.left-hostRect.left,
+    right:rect.right-hostRect.left,
+    top:rect.top-hostRect.top,
+    bottom:rect.bottom-hostRect.top,
+    width:rect.width,
+    height:rect.height
+  };
+}
+
+function editorLineRect(ed,line,hostRect){
+  if(!ed||!line||line<1)return null;
+  var dom=ed.getDomNode&&ed.getDomNode();if(!dom)return null;
+  var edRect=editorRect(ed,hostRect);if(!edRect)return null;
+  var model=ed.getModel&&ed.getModel();if(!model)return null;
+  var lineNumber=Math.min(Math.max(1,line),model.getLineCount());
+  var height=ed.getOption(monaco.editor.EditorOption.lineHeight)||_lineHeight;
+  var y=edRect.top+ed.getTopForLineNumber(lineNumber)-ed.getScrollTop();
+  return {top:y,bottom:y+height,height:height,line:lineNumber};
+}
+
+function editorLineSpan(ed,start,end,hostRect){
+  var model=ed&&ed.getModel&&ed.getModel();if(!model)return null;
+  var maxLine=model.getLineCount();
+  var s=Math.min(Math.max(1,+start||1),maxLine);
+  var e=Math.min(Math.max(s,+end||s),maxLine);
+  var first=editorLineRect(ed,s,hostRect),last=editorLineRect(ed,e,hostRect);
+  if(!first||!last)return null;
+  return {top:first.top,bottom:last.bottom,height:last.bottom-first.top,start:s,end:e};
+}
+
+function appendSvgRect(x,y,w,h,fill){
+  if(!_centerGutterSvg||h<=0||w<=0)return;
+  var r=document.createElementNS('http://www.w3.org/2000/svg','rect');
+  r.setAttribute('x',x.toFixed(1));r.setAttribute('y',y.toFixed(1));
+  r.setAttribute('width',w.toFixed(1));r.setAttribute('height',h.toFixed(1));
+  r.setAttribute('fill',fill);
+  _centerGutterSvg.appendChild(r);
+}
+
+function appendSvgConnector(x1,x2,leftSpan,rightSpan,fill){
+  if(!_centerGutterSvg||!leftSpan||!rightSpan||x2<=x1)return;
+  var dx=x2-x1;
+  var c1=x1+dx*0.45,c2=x2-dx*0.45;
+  var d=[
+    'M',x1.toFixed(1),leftSpan.top.toFixed(1),
+    'C',c1.toFixed(1),leftSpan.top.toFixed(1),c2.toFixed(1),rightSpan.top.toFixed(1),x2.toFixed(1),rightSpan.top.toFixed(1),
+    'L',x2.toFixed(1),rightSpan.bottom.toFixed(1),
+    'C',c2.toFixed(1),rightSpan.bottom.toFixed(1),c1.toFixed(1),leftSpan.bottom.toFixed(1),x1.toFixed(1),leftSpan.bottom.toFixed(1),
+    'Z'
+  ].join(' ');
+  var p=document.createElementNS('http://www.w3.org/2000/svg','path');
+  p.setAttribute('d',d);
+  p.setAttribute('fill',fill);
+  _centerGutterSvg.appendChild(p);
+}
+
+function centerGutterGeometry(hostRect,origEd,modEd){
+  var o=editorRect(origEd,hostRect),m=editorRect(modEd,hostRect);
+  if(!o||!m)return null;
+  var splitX=m.left;
+  var oldX=splitX-34,newX=splitX+4,newWidth=22;
+  return {
+    oldPaneLeft:o.left,
+    oldPaneRight:splitX,
+    newPaneLeft:splitX,
+    newPaneRight:m.right,
+    oldX:oldX,
+    oldWidth:22,
+    bridgeX1:splitX-10,
+    bridgeX2:splitX+2,
+    newX:newX,
+    newWidth:newWidth,
+    bandLeft:oldX,
+    bandRight:newX+newWidth
+  };
+}
+
+function drawCenterLineNumbers(layer,ed,x,width,side,hostRect){
+  var ranges=ed.getVisibleRanges&&ed.getVisibleRanges();if(!ranges||!ranges.length)return;
+  var model=ed.getModel&&ed.getModel();if(!model)return;
+  ranges.forEach(function(range){
+    var start=Math.max(1,range.startLineNumber),end=Math.min(model.getLineCount(),range.endLineNumber);
+    for(var line=start;line<=end;line++){
+      var rect=editorLineRect(ed,line,hostRect);if(!rect)continue;
+      if(rect.bottom<0||rect.top>hostRect.height)continue;
+      var n=document.createElement('div');
+      n.className='mtm-center-line-number '+side+(line===_reviewLine&&side==='new'?' active':'');
+      n.textContent=String(line);
+      n.style.left=x.toFixed(1)+'px';
+      n.style.top=rect.top.toFixed(1)+'px';
+      n.style.width=width.toFixed(1)+'px';
+      layer.appendChild(n);
+    }
+  });
+}
+
+function changeIntersectsActive(ch){
+  if(!_activeHunk)return false;
+  var oldOK=ch.originalEndLineNumber>0&&_activeHunk.originalEndLine>0&&
+    ch.originalStartLineNumber<=_activeHunk.originalEndLine&&ch.originalEndLineNumber>=_activeHunk.originalStartLine;
+  var newOK=ch.modifiedEndLineNumber>0&&_activeHunk.modifiedEndLine>0&&
+    ch.modifiedStartLineNumber<=_activeHunk.modifiedEndLine&&ch.modifiedEndLineNumber>=_activeHunk.modifiedStartLine;
+  return oldOK||newOK;
+}
+
+function cssVarColor(name,fallback){
+  var value=getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value||fallback;
+}
+
+function resolvedLineDiffFill(kind){
+  if(kind==='added')return cssVarColor('--mtm-add-line','rgba(41,68,54,0.34)');
+  if(kind==='deleted')return cssVarColor('--mtm-del-line','rgba(74,45,45,0.34)');
+  return cssVarColor('--mtm-mod-line','rgba(43,58,82,0.28)');
+}
+
+function drawCenterLineDiffBackgrounds(geometry,origEd,modEd,hostRect){
+  var oldLeft=geometry.oldX-4;
+  var oldRight=geometry.bridgeX1;
+  var newLeft=geometry.bridgeX2;
+  var newRight=geometry.newX+geometry.newWidth+8;
+  _authoritativeLineDiffs.original.forEach(function(d){
+    var rect=editorLineRect(origEd,d.line,hostRect);if(!rect)return;
+    if(rect.bottom<0||rect.top>hostRect.height)return;
+    appendSvgRect(oldLeft,rect.top,oldRight-oldLeft,rect.height,resolvedLineDiffFill(d.kind));
+  });
+  _authoritativeLineDiffs.modified.forEach(function(d){
+    var rect=editorLineRect(modEd,d.line,hostRect);if(!rect)return;
+    if(rect.bottom<0||rect.top>hostRect.height)return;
+    appendSvgRect(newLeft,rect.top,newRight-newLeft,rect.height,resolvedLineDiffFill(d.kind));
+  });
+}
+
+function drawCenterChangeBlocks(geometry,origEd,modEd,hostRect){
+  var changes=(_diffEditor&&_diffEditor.getLineChanges&&_diffEditor.getLineChanges())||[];
+  changes.forEach(function(ch){
+    var hasOld=ch.originalEndLineNumber>0;
+    var hasNew=ch.modifiedEndLineNumber>0;
+    var oldSpan=hasOld?editorLineSpan(origEd,ch.originalStartLineNumber,ch.originalEndLineNumber,hostRect):null;
+    var newSpan=hasNew?editorLineSpan(modEd,ch.modifiedStartLineNumber,ch.modifiedEndLineNumber,hostRect):null;
+    if(!oldSpan&&newSpan){
+      oldSpan={top:newSpan.top,bottom:newSpan.bottom,height:newSpan.height};
+    }else if(oldSpan&&!newSpan){
+      var anchor=editorLineRect(modEd,Math.max(1,ch.modifiedStartLineNumber||1),hostRect);
+      newSpan=anchor?{top:anchor.top,bottom:anchor.top+oldSpan.height,height:oldSpan.height}:{top:oldSpan.top,bottom:oldSpan.bottom,height:oldSpan.height};
+    }
+    if(!oldSpan||!newSpan)return;
+    var fill=changeIntersectsActive(ch)?'rgba(44,64,75,0.58)':(hasOld&&hasNew?'rgba(43,58,82,0.34)':(hasNew?'rgba(41,68,54,0.34)':'rgba(74,45,45,0.34)'));
+    drawPlaceholderGap(geometry,oldSpan,newSpan);
+    appendSvgConnector(geometry.bandLeft,geometry.bandRight,oldSpan,newSpan,fill);
+  });
+}
+
+function drawPlaceholderGap(geometry,oldSpan,newSpan){
+  // Empty-side placeholder blocks should not be painted in the shared gutter. IntelliJ leaves that
+  // area as editor background and keeps real line numbers visible; the blue/red/green connector is
+  // enough to describe the changed block.
+}
+
+function activeSideSpan(ed,start,end,hostRect,mirrorSpan){
+  if(end>=start&&end>0)return editorLineSpan(ed,start,end,hostRect);
+  var anchor=editorLineRect(ed,Math.max(1,+start||1),hostRect);
+  if(anchor&&mirrorSpan)return {top:anchor.top,bottom:anchor.top+mirrorSpan.height,height:mirrorSpan.height};
+  if(anchor)return {top:anchor.top,bottom:anchor.bottom,height:anchor.height};
+  return mirrorSpan||null;
+}
+
+function drawActiveCenterBlock(geometry,origEd,modEd,hostRect){
+  if(!_activeHunk)return;
+  var oldSpan=activeSideSpan(origEd,_activeHunk.originalStartLine,_activeHunk.originalEndLine,hostRect,null);
+  var newSpan=activeSideSpan(modEd,_activeHunk.modifiedStartLine,_activeHunk.modifiedEndLine,hostRect,oldSpan);
+  if(!oldSpan&&newSpan)oldSpan={top:newSpan.top,bottom:newSpan.bottom,height:newSpan.height};
+  if(!oldSpan||!newSpan)return;
+  var fill='rgba(44,64,75,0.58)';
+  drawPlaceholderGap(geometry,oldSpan,newSpan);
+  appendSvgConnector(geometry.bandLeft,geometry.bandRight,oldSpan,newSpan,fill);
+}
+
+function repaintCenterGutter(){
+  var node=ensureCenterGutter();if(!node||!_diffEditor||typeof monaco==='undefined')return;
+  var host=document.getElementById('editor');if(!host)return;
+  var hostRect=host.getBoundingClientRect();
+  var origEd=_diffEditor.getOriginalEditor(),modEd=_diffEditor.getModifiedEditor();
+  var geometry=centerGutterGeometry(hostRect,origEd,modEd);if(!geometry)return;
+  while(node.childNodes.length>1)node.removeChild(node.lastChild);
+  _centerGutterSvg.setAttribute('width',hostRect.width);
+  _centerGutterSvg.setAttribute('height',hostRect.height);
+  while(_centerGutterSvg.firstChild)_centerGutterSvg.removeChild(_centerGutterSvg.firstChild);
+  appendSvgRect(
+    geometry.oldX-4,
+    0,
+    geometry.newX+geometry.newWidth-geometry.oldX+8,
+    hostRect.height,
+    '#2B2B2B'
+  );
+  drawCenterLineDiffBackgrounds(geometry,origEd,modEd,hostRect);
+  drawCenterChangeBlocks(geometry,origEd,modEd,hostRect);
+  drawActiveCenterBlock(geometry,origEd,modEd,hostRect);
+  drawCenterLineNumbers(node,origEd,geometry.oldX,geometry.oldWidth,'old',hostRect);
+  drawCenterLineNumbers(node,modEd,geometry.newX,geometry.newWidth,'new',hostRect);
+}
+
+function scheduleCenterGutterRepaint(){
+  if(_centerGutterRaf)cancelAnimationFrame(_centerGutterRaf);
+  _centerGutterRaf=requestAnimationFrame(function(){
+    _centerGutterRaf=0;
+    repaintCenterGutter();
+  });
+}
+
+function wireCenterGutterRepaint(){
+  if(_centerGutterWired||!_diffEditor)return;
+  _centerGutterWired=true;
+  var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
+  [orig,mod].forEach(function(ed){
+    if(!ed)return;
+    ed.onDidScrollChange(scheduleCenterGutterRepaint);
+    ed.onDidLayoutChange(scheduleCenterGutterRepaint);
+    ed.onDidChangeModelContent(scheduleCenterGutterRepaint);
+  });
+  window.addEventListener('resize',scheduleCenterGutterRepaint);
+}
+
 function applyModifiedLineDecorations(){
   if(!_diffEditor||typeof monaco==='undefined')return;
   var changes=_diffEditor.getLineChanges()||[];
   var origDecos=[],modDecos=[];
+  var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
+  var origModel=orig&&orig.getModel&&orig.getModel(),modModel=mod&&mod.getModel&&mod.getModel();
+  var hasAuthoritative=(_authoritativeLineDiffs.original.length+_authoritativeLineDiffs.modified.length)>0;
+  if(hasAuthoritative){
+    appendLineDiffDecorations(origDecos,_authoritativeLineDiffs.original,origModel?origModel.getLineCount():0);
+    appendLineDiffDecorations(modDecos,_authoritativeLineDiffs.modified,modModel?modModel.getLineCount():0);
+  }else{
+    changes.forEach(function(ch){
+      if(!(ch.originalEndLineNumber>0&&ch.modifiedEndLineNumber>0))return; // pure add/delete: leave green/red
+      origDecos.push({range:new monaco.Range(ch.originalStartLineNumber,1,ch.originalEndLineNumber,1),
+        options:{isWholeLine:true,className:'mtm-modified-line',linesDecorationsClassName:'mtm-modified-edge',marginClassName:'mtm-modified-margin'}});
+      modDecos.push({range:new monaco.Range(ch.modifiedStartLineNumber,1,ch.modifiedEndLineNumber,1),
+        options:{isWholeLine:true,className:'mtm-modified-line',linesDecorationsClassName:'mtm-modified-edge',marginClassName:'mtm-modified-margin'}});
+    });
+  }
   changes.forEach(function(ch){
-    if(!(ch.originalEndLineNumber>0&&ch.modifiedEndLineNumber>0))return; // pure add/delete: leave green/red
-    origDecos.push({range:new monaco.Range(ch.originalStartLineNumber,1,ch.originalEndLineNumber,1),
-      options:{isWholeLine:true,className:'mtm-modified-line'}});
-    modDecos.push({range:new monaco.Range(ch.modifiedStartLineNumber,1,ch.modifiedEndLineNumber,1),
-      options:{isWholeLine:true,className:'mtm-modified-line'}});
     (ch.charChanges||[]).forEach(function(cc){
       if(cc.originalEndColumn>cc.originalStartColumn)
         origDecos.push({range:new monaco.Range(cc.originalStartLineNumber,cc.originalStartColumn,cc.originalEndLineNumber,cc.originalEndColumn),
@@ -323,9 +844,37 @@ function applyModifiedLineDecorations(){
           options:{className:'mtm-modified-token'}});
     });
   });
-  var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
   _origDecorations=orig.deltaDecorations(_origDecorations,origDecos);
   _modDecorations=mod.deltaDecorations(_modDecorations,modDecos);
+}
+
+function lineDiffClass(kind){
+  if(kind==='added')return 'mtm-added-line';
+  if(kind==='deleted')return 'mtm-deleted-line';
+  return 'mtm-modified-line';
+}
+
+function lineDiffEdgeClass(kind){
+  if(kind==='added')return 'mtm-added-edge';
+  if(kind==='deleted')return 'mtm-deleted-edge';
+  return 'mtm-modified-edge';
+}
+
+function lineDiffMarginClass(kind){
+  if(kind==='added')return 'mtm-added-margin';
+  if(kind==='deleted')return 'mtm-deleted-margin';
+  return 'mtm-modified-margin';
+}
+
+function appendLineDiffDecorations(target,diffs,maxLine){
+  diffs.forEach(function(d){
+    var line=+d.line||0;
+    if(line<1||line>maxLine)return;
+    target.push({
+      range:new monaco.Range(line,1,line,1),
+      options:{isWholeLine:true,className:lineDiffClass(d.kind),linesDecorationsClassName:lineDiffEdgeClass(d.kind),marginClassName:lineDiffMarginClass(d.kind)}
+    });
+  });
 }
 
 function setActiveHunk(msg){
@@ -335,9 +884,10 @@ function setActiveHunk(msg){
     var root=document.documentElement.style;
     var bg=msg.activeHunkBackground||'#2c404b';
     var edge=msg.activeHunkEdge||'#6897BB';
-    root.setProperty('--mtm-active-hunk',hexToRgba(bg,0.78));
-    root.setProperty('--mtm-active-hunk-wash',hexToRgba(edge,0.10));
-    root.setProperty('--mtm-active-hunk-margin',hexToRgba(bg,0.55));
+    _activeLineFill=hexToRgba(bg,0.34);
+    _activeHunkEdge=edge;
+    root.setProperty('--mtm-active-hunk-line',_activeLineFill);
+    root.setProperty('--mtm-active-hunk-margin',_activeLineFill);
     root.setProperty('--mtm-active-hunk-edge',edge);
     _activeHunk={
       originalStartLine:+msg.originalStartLine||0,
@@ -347,13 +897,10 @@ function setActiveHunk(msg){
     };
   }
   applyActiveHunkDecorations();
+  scheduleCenterGutterRepaint();
 }
 function activeHunkDecorationOptions(){
-  var options={isWholeLine:true,className:'mtm-active-hunk-line',marginClassName:'mtm-active-hunk-margin',
-    linesDecorationsClassName:'mtm-active-hunk-gutter'};
-  if(typeof monaco!=='undefined'&&monaco.editor&&monaco.editor.OverviewRulerLane){
-    options.overviewRuler={color:'rgba(104,151,187,0.9)',position:monaco.editor.OverviewRulerLane.Full};
-  }
+  var options={isWholeLine:true,className:'mtm-active-hunk-line',marginClassName:'mtm-active-hunk-margin'};
   return options;
 }
 function activeHunkRange(start,end,maxLine){
@@ -382,9 +929,12 @@ function loadDiff(msg){
   var original=msg.original||'';
   var modified=msg.modified||'';
   var lang=(msg.language||'').toLowerCase();
-  if(msg.fontSize)_fontSize=+msg.fontSize;
+  if(msg.fontSize)_fontSize=Math.max(12.5,+msg.fontSize||13);
+  if(msg.lineHeight)_lineHeight=Math.max(18,+msg.lineHeight||18);
+  document.documentElement.style.setProperty('--mtm-line-height',_lineHeight+'px');
   applyModifiedDiffColors(msg);
-  if(_loaded){_diffEditor.updateOptions({fontSize:_fontSize});updateDiff(original,modified,lang);return;}
+  setAuthoritativeLineDiffs(msg);
+  if(_loaded){_diffEditor.updateOptions({fontSize:_fontSize,lineHeight:_lineHeight});updateDiff(original,modified,lang);return;}
   _pending={original:original,modified:modified,lang:lang};
   if(document.getElementById('_monacoLoader'))return;
   var s=document.createElement('script');
@@ -406,25 +956,33 @@ function loadDiff(msg){
         _diffEditor=monaco.editor.createDiffEditor(document.getElementById('editor'),{
           theme:'momenterm-darcula',readOnly:true,
           minimap:{enabled:false},scrollBeyondLastLine:false,
-          fontSize:_fontSize,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
+          fontSize:_fontSize,lineHeight:_lineHeight,
+          fontFamily:"'JetBrains Mono','SF Mono',Menlo,Monaco,monospace",
           renderSideBySide:true,automaticLayout:true,
           contextmenu:false,
           diffWordWrap:'off',
+          glyphMargin:false,folding:false,lineDecorationsWidth:4,lineNumbersMinChars:4,
+          overviewRulerBorder:false,overviewRulerLanes:0,hideCursorInOverviewRuler:true,renderLineHighlight:'all',
+          renderIndicators:false,renderMarginRevertIcon:false,
+          renderWhitespace:'none',roundedSelection:false,
           // Review cursor: a read-only editor still shows and blinks a caret when focused, and arrow
           // keys move it — that's the diff-view cursor the native side positions on each hunk.
           cursorBlinking:'blink',cursorStyle:'line',
-          scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}
+          scrollbar:{verticalScrollbarSize:5,horizontalScrollbarSize:5,verticalSliderSize:5,horizontalSliderSize:5,useShadows:false,alwaysConsumeMouseWheel:false}
         });
-        _diffEditor.setModel({
-          original:monaco.editor.createModel(p.original,mapLang(p.lang)),
-          modified:monaco.editor.createModel(p.modified,mapLang(p.lang))
-        });
-        wireReviewCursor();
         // onDidUpdateDiff fires after each diff computation (initial load + every setModel), which is
         // the only point getLineChanges() is valid — repaint the blue "modified" overlay + rebuild the
         // center line-number gutter there.
         _diffEditor.onDidUpdateDiff(onDiffUpdated);
-        applyActiveHunkDecorations();
+        _diffEditor.setModel({
+          original:monaco.editor.createModel(p.original,mapLang(p.lang)),
+          modified:monaco.editor.createModel(p.modified,mapLang(p.lang))
+        });
+        resetBottomScrollSpacers();
+        wireCenterGutterRepaint();
+        wireReviewCursor();
+        balanceBottomScrollSpacers();
+        scheduleDiffRepaint();
         setReviewCursor(_reviewLine);
       }
     },function(err){
@@ -444,17 +1002,28 @@ function updateDiff(original,modified,lang){
   var newModified=monaco.editor.createModel(modified,mLang);
   _diffEditor.setModel({original:newOriginal,modified:newModified});
   if(oldModel){oldModel.original.dispose();oldModel.modified.dispose();}
+  resetBottomScrollSpacers();
+  wireCenterGutterRepaint();
   wireReviewCursor();
+  balanceBottomScrollSpacers();
+  scheduleDiffRepaint();
 }
 
 var _cursorWired=false;
 function wireReviewCursor(){
-  var ed=modifiedEditor();if(!ed||_cursorWired)return;
+  if(!_diffEditor||_cursorWired)return;
   _cursorWired=true;
-  ed.onDidChangeCursorPosition(function(ev){
-    _reviewLine=ev.position.lineNumber;
-    if(_suppressCursorReport)return;
-    postToNative('reviewCursorMoved',{line:_reviewLine});
+  [['original',_diffEditor.getOriginalEditor()],['modified',_diffEditor.getModifiedEditor()]].forEach(function(pair){
+    var side=pair[0],ed=pair[1];if(!ed)return;
+    ed.onDidFocusEditorText(function(){_reviewEditorSide=side;});
+    ed.onDidChangeCursorPosition(function(ev){
+      _reviewEditorSide=side;
+      if(side==='modified')_reviewLine=ev.position.lineNumber;
+      if(ed.revealLineInCenterIfOutside)ed.revealLineInCenterIfOutside(ev.position.lineNumber);
+      scheduleCenterGutterRepaint();
+      if(_suppressCursorReport||side!=='modified')return;
+      postToNative('reviewCursorMoved',{line:_reviewLine});
+    });
   });
 }
 
@@ -463,6 +1032,10 @@ function wireReviewCursor(){
 // Arrow keys are intentionally left to Monaco (native cursor movement, reported via onDidChangeCursorPosition).
 document.addEventListener('keydown',function(e){
   if(!_diffEditor)return;
+  if(_commentDraftNode&&_commentDraftNode.contains(e.target)){
+    handleCommentDraftKeydown(e);
+    return;
+  }
   if(e.metaKey&&(e.key==='b'||e.key==='B')){         // Cmd+B → find usages of the symbol under the cursor
     var wb=wordAtCursor(focusedDiffEditor());
     if(wb)postToNative('findUsages',{word:wb});
@@ -475,7 +1048,7 @@ document.addEventListener('keydown',function(e){
   }
   if(e.key==='Tab'&&e.shiftKey){                     // Shift+Tab → switch between the split panes
     var orig=_diffEditor.getOriginalEditor(),mod=_diffEditor.getModifiedEditor();
-    if(orig&&orig.hasTextFocus()){mod.focus();}else{orig.focus();}
+    if(orig&&orig.hasTextFocus()){_reviewEditorSide='modified';mod.focus();}else{_reviewEditorSide='original';orig.focus();}
     e.preventDefault();e.stopPropagation();return;
   }
   if(e.key==='F7'||e.keyCode===118){                 // F7 / Shift+F7 → next / previous hunk
@@ -483,11 +1056,11 @@ document.addEventListener('keydown',function(e){
     e.preventDefault();e.stopPropagation();return;
   }
   if(e.shiftKey&&(e.key==='?'||e.key==='/')){         // Shift+? → question comment
-    postToNative('reviewComment',{kind:'question',line:_reviewLine});
+    showCommentDraft('question',_reviewLine);
     e.preventDefault();e.stopPropagation();return;
   }
   if(e.shiftKey&&(e.key==='>'||e.key==='.')){         // Shift+> → change/fix comment
-    postToNative('reviewComment',{kind:'change',line:_reviewLine});
+    showCommentDraft('change',_reviewLine);
     e.preventDefault();e.stopPropagation();return;
   }
   if(e.key==='Backspace'){                            // delete the comment selected at the cursor
@@ -508,6 +1081,7 @@ var LANG={
   sh:'shell',bash:'shell',zsh:'shell',
   sql:'sql',rb:'ruby',ruby:'ruby',php:'php',
   dart:'dart',lua:'lua',dockerfile:'dockerfile',makefile:'makefile',
+  md:'markdown',markdown:'markdown',mdx:'markdown',
   txt:'plaintext',text:'plaintext',log:'plaintext'
 };
 function mapLang(l){return LANG[l]||'plaintext';}

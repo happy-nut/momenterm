@@ -436,6 +436,42 @@ extension MainWindowController {
         !collectRenameFields(in: workspaceStack).isEmpty
     }
 
+    func beginSelectedWorkspaceRenameFromFocusedRowKeyForSmokeTest() -> Bool {
+        guard workspaces.indices.contains(selectedWorkspacePickerIndex) else {
+            return false
+        }
+        setWorkspaceRailPickerVisible(true, animated: false)
+        rebuildWorkspaceButtons()
+        window?.contentView?.layoutSubtreeIfNeeded()
+        let workspaceId = workspaces[selectedWorkspacePickerIndex].id
+        guard let row = workspaceStack.arrangedSubviews
+            .compactMap({ $0 as? NSButton })
+            .first(where: { $0.identifier?.rawValue == workspaceId }),
+            let event = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window?.windowNumber ?? 0,
+                context: nil,
+                characters: "e",
+                charactersIgnoringModifiers: "e",
+                isARepeat: false,
+                keyCode: 14
+            )
+        else {
+            return false
+        }
+        window?.makeFirstResponder(row)
+        row.keyDown(with: event)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        return renamingWorkspaceId == workspaceId && workspaceRenameFieldIsPresentForSmokeTest()
+    }
+
+    func cancelWorkspaceInlineRenameForSmokeTest() {
+        cancelWorkspaceRename()
+    }
+
     // Simulates typing a name and pressing Enter (Return) in the inline rail rename field, exercising
     // the field's onCommit wiring rather than the core rename in isolation.
     @discardableResult
@@ -694,11 +730,16 @@ extension MainWindowController {
     }
 
     func resetWorkspaceSelectionForSmokeTest() {
+        fileListingRequestID += 1
+        isLoadingFileListing = false
         setActiveWorkspace(id: nil)
         root = nil
         currentDocument = nil
         fileListingDocument = nil
         fileListingRoot = nil
+        selectedSourceIndex = 0
+        fileTreeModel.selectedIdentifier = nil
+        clearOpenFileTabs()
         if let tab = terminalTabs.first(where: { $0.workspaceId == nil }) {
             activeTerminalTabId = tab.id
             activeTerminalId = tab.activePaneId ?? tab.panes.first?.id
@@ -710,12 +751,18 @@ extension MainWindowController {
 
     func loadWorkspaceSynchronouslyForSmokeTest(_ url: URL) {
         let workspace = service.gitRoot(from: url) ?? url.standardizedFileURL
+        fileListingRequestID += 1
+        isLoadingFileListing = false
         root = workspace
         addWorkspaceIfNeeded(workspace)
         setActiveWorkspace(id: workspaces.first(where: { normalizedWorkspacePath($0.path) == normalizedWorkspacePath(workspace.path) })?.id)
         currentDocument = try? service.build(root: workspace, ignoreWhitespace: ignoreWhitespace)
         fileListingDocument = nil
         fileListingRoot = nil
+        selectedSourceIndex = 0
+        fileTreeModel.selectedIdentifier = nil
+        fileTreeModel.expandedFolders = storedFileTreeExpandedFolders(forRoot: normalizedWorkspacePath(workspace.path))
+        clearOpenFileTabs()
         showOverlay(.changes)
     }
 }

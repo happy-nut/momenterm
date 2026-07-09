@@ -16,6 +16,45 @@ extension MainWindowController {
         return true
     }
 
+    func memoOpensWithoutLegacyPrefillForSmokeTest() -> Bool {
+        showMemoPanel()
+        return memoTextView?.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+    }
+
+    func memoMarkdownStylesForSmokeTest() -> Bool {
+        showMemoPanel()
+        guard let memoTextView = memoTextView else {
+            return false
+        }
+        memoTextView.replaceTextForSmokeTest("# Title\n**bold** *em* ~~gone~~ `code`\n[link](https://example.com)")
+        guard let storage = memoTextView.textStorage else {
+            return false
+        }
+        let text = storage.string as NSString
+        func range(_ value: String) -> NSRange {
+            text.range(of: value)
+        }
+        let titleRange = range("Title")
+        let goneRange = range("gone")
+        let codeRange = range("code")
+        let linkRange = range("link")
+        guard titleRange.location != NSNotFound,
+              goneRange.location != NSNotFound,
+              codeRange.location != NSNotFound,
+              linkRange.location != NSNotFound else {
+            return false
+        }
+        let titleFont = storage.attribute(.font, at: titleRange.location, effectiveRange: nil) as? NSFont
+        let codeFont = storage.attribute(.font, at: codeRange.location, effectiveRange: nil) as? NSFont
+        let strike = storage.attribute(.strikethroughStyle, at: goneRange.location, effectiveRange: nil) as? Int
+        let underline = storage.attribute(.underlineStyle, at: linkRange.location, effectiveRange: nil) as? Int
+        return (titleFont?.pointSize ?? 0) >= 19
+            && (codeFont?.fontName.lowercased().contains("mono") == true
+                || codeFont?.fontName.lowercased().contains("menlo") == true)
+            && (strike ?? 0) != 0
+            && (underline ?? 0) != 0
+    }
+
     func memoIsFirstResponderForSmokeTest() -> Bool {
         guard let window = window, let memoTextView = memoTextView, !memoSidePanel.isHidden else {
             return false
@@ -33,6 +72,20 @@ extension MainWindowController {
         return !scrollView.hasHorizontalScroller
             && textView.frame.width >= contentSize.width - 1
             && textView.frame.height >= min(contentSize.height, 1)
+    }
+
+    func memoEditorUsesCodeBackgroundForSmokeTest() -> Bool {
+        showMemoPanel()
+        guard let textView = memoTextView,
+              let scrollView = textView.enclosingScrollView
+        else {
+            return false
+        }
+        let panelBackground = memoSidePanel.layer?.backgroundColor.flatMap(NSColor.init(cgColor:))
+        return MainWindowController.colorsAreCloseForSmokeTest(textView.backgroundColor, theme.codeBackground)
+            && MainWindowController.colorsAreCloseForSmokeTest(scrollView.backgroundColor, theme.codeBackground)
+            && MainWindowController.colorsAreCloseForSmokeTest(scrollView.contentView.backgroundColor, theme.codeBackground)
+            && panelBackground.map { MainWindowController.colorsAreCloseForSmokeTest($0, theme.codeBackground) } == true
     }
 
     func memoSidePanelIsVisibleForSmokeTest() -> Bool {
@@ -163,13 +216,20 @@ extension MainWindowController {
             && overlayFrame.height <= rootBounds.height - 40
             && abs(overlayFrame.midX - rootBounds.midX) <= 3
             && abs(overlayFrame.midY - rootBounds.midY) <= 3
+            && overlayFrame.width <= MomentermDesign.Metrics.settingsMaxWidth + 1
         return compactOverlayModeActive
             && hasModalGeometry
             && !overlaySettingsScrollView.isHidden
+            && overlaySettingsScrollView.documentView?.isFlipped == true
             && overlayDiffSplitView.isHidden
             && overlaySidebarWidthConstraint?.constant == MomentermDesign.Metrics.settingsSidebarWidth
             && containsView(identifier: "settings-sidebar-search", in: overlayView)
-            && countViews(identifier: "settings-row-divider", in: overlayView) >= 1
+            && countViews(identifier: "settings-row-group", in: overlayView) >= 1
+            && countViews(identifier: "settings-row-surface", in: overlayView) >= 2
+            && countViews(identifier: "settings-row-separator", in: overlayView) == 0
+            && countViews(identifier: "settings-row-divider", in: overlayView) == 0
+            && settingsRowsUseDividerlessPlateLayoutForSmokeTest()
+            && settingsContentLabelsUseArrowCursorForSmokeTest()
             && hasExpectedCopy
             && removedFakeOptions
             && settingsOverlayHasNoClippedControlsForSmokeTest()
@@ -178,7 +238,28 @@ extension MainWindowController {
     func settingsOverlayLayoutDiagnosticsForSmokeTest() -> String {
         showOverlay(.settings)
         window?.contentView?.layoutSubtreeIfNeeded()
-        return "overlay=\(overlayView.frame) root=\(rootView.bounds) sidebarWidth=\(overlaySidebarWidthConstraint?.constant ?? -1) category=\(selectedSettingsCategory.rawValue) text=\(collectVisibleText(in: overlayView).joined(separator: "|")) dividers=\(countViews(identifier: "settings-row-divider", in: overlayView))"
+        return "overlay=\(overlayView.frame) root=\(rootView.bounds) sidebarWidth=\(overlaySidebarWidthConstraint?.constant ?? -1) category=\(selectedSettingsCategory.rawValue) text=\(collectVisibleText(in: overlayView).joined(separator: "|")) groups=\(countViews(identifier: "settings-row-group", in: overlayView)) surfaces=\(countViews(identifier: "settings-row-surface", in: overlayView)) separators=\(countViews(identifier: "settings-row-separator", in: overlayView)) dividers=\(countViews(identifier: "settings-row-divider", in: overlayView))"
+    }
+
+    func settingsRowsUseDividerlessPlateLayoutForSmokeTest() -> Bool {
+        let rowGroups = collectViews(identifier: "settings-row-group", in: overlayView)
+        let rowSurfaces = collectViews(identifier: "settings-row-surface", in: overlayView)
+        return !rowGroups.isEmpty
+            && !rowSurfaces.isEmpty
+            && rowGroups.allSatisfy { group in
+                (group.layer?.borderWidth ?? 0) == 0
+                    && ((group.layer?.backgroundColor?.alpha ?? 0) <= 0.01)
+            }
+            && rowSurfaces.allSatisfy { row in
+                (row.layer?.cornerRadius ?? 0) == 0
+                    && (row.layer?.borderWidth ?? 0) == 0
+                    && ((row.layer?.backgroundColor?.alpha ?? 0) <= 0.01)
+            }
+    }
+
+    func settingsContentLabelsUseArrowCursorForSmokeTest() -> Bool {
+        let labels = collectTextFields(in: overlaySettingsStack)
+        return !labels.isEmpty && labels.allSatisfy { $0 is NativeSettingsLabel }
     }
 
     func selectSettingsCategoryForSmokeTest(_ rawValue: String) -> Bool {

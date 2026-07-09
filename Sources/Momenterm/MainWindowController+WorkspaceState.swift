@@ -166,8 +166,11 @@ extension MainWindowController {
         guard current != next else {
             return false
         }
+        saveCurrentWorkspaceInterfaceSnapshot()
         saveCurrentPromptMemoText()
         saveCurrentReviewNotes()
+        fileListingRequestID += 1
+        isLoadingFileListing = false
         return true
     }
     func finishWorkspaceScopedStateChange(changed: Bool) {

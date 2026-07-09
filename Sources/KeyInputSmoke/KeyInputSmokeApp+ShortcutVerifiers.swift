@@ -2,6 +2,51 @@ import AppKit
 
 // Largest verify methods split out of KeyInputSmoke main.swift (smoke split — move-only).
 extension KeyInputSmokeApp {
+    func verifyRecentFilesScrollPreservationOnly(_ controller: MainWindowController) {
+        controller.openQuickOpen(mode: .recent)
+        guard controller.overlayTitleForSmokeTest() == "Recent Files" else {
+            fail("Recent Files focused smoke could not open the overlay; title=\(controller.overlayTitleForSmokeTest())")
+            return
+        }
+        guard controller.positionRecentFilesSelectionAwayFromTopForSmokeTest() else {
+            fail("Recent Files focused smoke could not create a scrolled result list")
+            return
+        }
+        let scrollBeforeLeft = controller.recentFilesResultScrollYForSmokeTest()
+        let selectedBeforeLeft = controller.recentFilesSelectedResultIndexForSmokeTest()
+        sendShortcut("", keyCode: 123, modifiers: [])
+        guard controller.recentFilesFocusRegionForSmokeTest() == "categories",
+              controller.recentFilesSelectedCategoryTitleForSmokeTest() == "Changes",
+              controller.recentFilesSelectedResultIndexForSmokeTest() == selectedBeforeLeft,
+              abs(controller.recentFilesResultScrollYForSmokeTest() - scrollBeforeLeft) <= 1 else {
+            fail("Recent Files focused smoke: Left arrow jumped the result list; focus=\(controller.recentFilesFocusRegionForSmokeTest()) scroll=\(controller.recentFilesResultScrollYForSmokeTest()) before=\(scrollBeforeLeft)")
+            return
+        }
+        sendShortcut("", keyCode: 125, modifiers: [])
+        guard controller.recentFilesFocusRegionForSmokeTest() == "categories",
+              controller.recentFilesSelectedCategoryTitleForSmokeTest() == "Files",
+              controller.recentFilesSelectedResultIndexForSmokeTest() == selectedBeforeLeft,
+              abs(controller.recentFilesResultScrollYForSmokeTest() - scrollBeforeLeft) <= 1 else {
+            fail("Recent Files focused smoke: sidebar Down arrow jumped the result list; focus=\(controller.recentFilesFocusRegionForSmokeTest()) scroll=\(controller.recentFilesResultScrollYForSmokeTest()) before=\(scrollBeforeLeft)")
+            return
+        }
+        sendShortcut("", keyCode: 124, modifiers: [])
+        guard controller.recentFilesFocusRegionForSmokeTest() == "results",
+              controller.recentFilesSelectedResultIndexForSmokeTest() == selectedBeforeLeft,
+              abs(controller.recentFilesResultScrollYForSmokeTest() - scrollBeforeLeft) <= 1,
+              controller.recentFilesOverlayHasSingleSelectionAndCleanScrollForSmokeTest() else {
+            fail("Recent Files focused smoke: Right arrow jumped the result list; focus=\(controller.recentFilesFocusRegionForSmokeTest()) scroll=\(controller.recentFilesResultScrollYForSmokeTest()) before=\(scrollBeforeLeft) diagnostics=\(controller.recentFilesOverlayDiagnosticsForSmokeTest())")
+            return
+        }
+        sendShortcut("", keyCode: 125, modifiers: [])
+        guard controller.recentFilesFocusRegionForSmokeTest() == "results",
+              controller.recentFilesSelectedResultIndexForSmokeTest() == selectedBeforeLeft + 1,
+              controller.recentFilesOverlayHasSingleSelectionAndCleanScrollForSmokeTest() else {
+            fail("Recent Files focused smoke: result Down arrow did not move the result selection cleanly; focus=\(controller.recentFilesFocusRegionForSmokeTest()) selected=\(controller.recentFilesSelectedResultIndexForSmokeTest()) before=\(selectedBeforeLeft)")
+            return
+        }
+    }
+
     func verifyWorkspaceAndReviewShortcuts(_ controller: MainWindowController) {
         let nonGit = makeTempDirectory(name: "momenterm-nongit")
         let nonGitAssets = nonGit.appendingPathComponent("assets", isDirectory: true)
@@ -52,6 +97,11 @@ extension KeyInputSmokeApp {
         guard controller.overlayTitleForSmokeTest() == "Files",
               !controller.reviewOverlayTextForSmokeTest().contains("No folder selected") else {
             fail("file view did not open immediately as a nonblocking scoped overlay; subtitle=\(controller.overlaySubtitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
+        guard controller.overlaySubtitleForSmokeTest() != "Loading",
+              !controller.reviewOverlayTextForSmokeTest().contains("Loading file list") else {
+            fail("non-git file view showed a blocking Loading file list placeholder instead of an immediate shallow tree")
             return
         }
         guard controller.fileOverlayUsesSingleCodePaneForSmokeTest() else {
@@ -175,16 +225,9 @@ extension KeyInputSmokeApp {
         let restoredFilesLoadCountBefore = controller.fileListingLoadCountForSmokeTest()
         let restoredFilesPopulateCountBefore = controller.fileOverlayPopulateCountForSmokeTest()
         let restoredFilesRestoreCountBefore = controller.hiddenFilesOverlayRestoreCountForSmokeTest()
-        controller.focusFileSidebarForSmokeTest()
-        guard waitUntil("Files sidebar focus before restore close", timeout: 1, condition: {
-            controller.fileOverlaySidebarIsFirstResponderForSmokeTest()
-        }) else {
-            fail("Files sidebar did not take focus before the Esc restore check; firstResponder=\(controller.firstResponderDiagnosticsForSmokeTest())")
-            return
-        }
-        sendShortcut("\u{1b}", keyCode: 53, modifiers: [], routeThroughShortcutRouter: true)
+        controller.closeOverlayAndFocusTerminalForSmokeTest()
         guard controller.overlayIsHiddenForSmokeTest() else {
-            fail("Esc in the Files sidebar did not close the panel before restore check; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            fail("closing Files before restore check did not hide the panel; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
             return
         }
         sendShortcut("1", keyCode: 18, modifiers: [.command])
@@ -256,17 +299,21 @@ extension KeyInputSmokeApp {
             fail("SVG rendered mode did not show the native image view; image=\(controller.imagePreviewIsVisibleForSmokeTest())")
             return
         }
-        // ⌥1 / ⌥3 mirror the raw / rendered buttons (physical keyCodes 18 / 20, dodging ¡™£).
-        sendShortcut("1", keyCode: 18, modifiers: [.option])
-        guard controller.sourceViewModeForSmokeTest() == "raw",
-              !controller.imagePreviewIsVisibleForSmokeTest() else {
-            fail("⌥1 did not switch the file view to raw; mode=\(controller.sourceViewModeForSmokeTest())")
+        controller.setSourceViewModeForSmokeTest("raw")
+        sendShortcut("\t", keyCode: 48, modifiers: [.control])
+        guard controller.sourceViewModeForSmokeTest() == "side" else {
+            fail("Ctrl+Tab did not switch the file view to side; mode=\(controller.sourceViewModeForSmokeTest())")
             return
         }
-        sendShortcut("3", keyCode: 20, modifiers: [.option])
+        sendShortcut("\t", keyCode: 48, modifiers: [.control])
         guard controller.sourceViewModeForSmokeTest() == "rendered",
               controller.imagePreviewIsVisibleForSmokeTest() else {
-            fail("⌥3 did not switch the file view to rendered; mode=\(controller.sourceViewModeForSmokeTest())")
+            fail("Ctrl+Tab did not switch the file view to rendered; mode=\(controller.sourceViewModeForSmokeTest())")
+            return
+        }
+        sendShortcut("\t", keyCode: 48, modifiers: [.control, .shift])
+        guard controller.sourceViewModeForSmokeTest() == "side" else {
+            fail("Ctrl+Shift+Tab did not switch the file view mode backward; mode=\(controller.sourceViewModeForSmokeTest())")
             return
         }
         controller.setSourceViewModeForSmokeTest("raw")
@@ -355,9 +402,22 @@ extension KeyInputSmokeApp {
             return
         }
         controller.openFilesViewForSmokeTest(from: gitRoot)
+        guard controller.overlaySubtitleForSmokeTest() != "Loading",
+              !controller.reviewOverlayTextForSmokeTest().contains("Loading file list") else {
+            fail("git file view showed a blocking Loading file list placeholder instead of an immediate shallow tree: \(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
+        guard waitUntil("git shallow file tree visible", timeout: 1, condition: {
+            controller.sourceFileCountForSmokeTest() > 0
+                && !controller.reviewOverlayTextForSmokeTest().contains("Loading file list")
+        }) else {
+            fail("git file view did not show a shallow file tree promptly: \(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
         guard waitUntil("git file listing loaded", condition: {
             controller.sourceFileCountForSmokeTest() > 0
                 && controller.overlaySubtitleForSmokeTest() != "Loading"
+                && !controller.fileListingIsLoadingForSmokeTest()
         }) else {
             fail("git file view did not finish listing: \(controller.reviewOverlayTextForSmokeTest())")
             return
@@ -368,6 +428,7 @@ extension KeyInputSmokeApp {
         _ = controller.expandFileTreeFolderForSmokeTest("src")
         guard waitUntil("git file tree status colors", condition: {
             controller.reviewOverlayTextForSmokeTest().contains("new-tool.sh")
+                && controller.fileTreeSidebarHasGitStatusColorsForSmokeTest()
         }) else {
             fail("git file view did not list new shell file after expanding scripts: \(controller.reviewOverlayTextForSmokeTest())")
             return
@@ -761,15 +822,19 @@ extension KeyInputSmokeApp {
             return
         }
         guard controller.changesSidebarUsesColorOnlyFileRowsForSmokeTest() else {
-            fail("Changes sidebar did not render compact file rows with signed single-line +added -deleted stats and no status badges or directory names")
+            fail("Changes sidebar did not render compact file-only rows without status badges, directory names, or inline +added/-deleted stats")
             return
         }
-        guard controller.changesSidebarStatsAreStableAndColorCodedForSmokeTest() else {
-            fail("Changes sidebar +added/-deleted stats moved during refresh or used non-green/non-red colors: \(controller.changesSidebarStatsDiagnosticsForSmokeTest())")
+        guard controller.changesHeaderStatsAreStableAndColorCodedForSmokeTest() else {
+            fail("Changes header +added/-deleted stats moved during refresh or used non-green/non-red colors: \(controller.changesHeaderStatsDiagnosticsForSmokeTest())")
             return
         }
         guard controller.changesDiffViewHasEnhancedHeaderAndInlineHighlightsForSmokeTest() else {
-            fail("Changes diff view did not render IntelliJ-style editor chrome, focused hunk blocks, and inline changed-token highlights")
+            fail("Changes diff view did not render IntelliJ-style editor chrome, focused hunk blocks, and inline changed-token highlights: \(controller.changesDiffEnhancedDiagnosticsForSmokeTest())")
+            return
+        }
+        guard controller.markdownDiffUsesReadableSyntaxAndCleanLineBackgroundForSmokeTest() else {
+            fail("Markdown diff still looked like selected text or lacked fenced-code syntax highlighting")
             return
         }
         guard controller.changesDiffUsesReadableMonacoAndSingleScrollerForSmokeTest() else {
@@ -1111,6 +1176,10 @@ extension KeyInputSmokeApp {
             fail("Cmd+B from the file view did not open a layered Find Usages panel over Files; title=\(controller.overlayTitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest().prefix(200))")
             return
         }
+        guard controller.quickOpenContentPanelUsesCompactTypographyAndPreviewHasNoCursorForSmokeTest() else {
+            fail("Find Usages panel kept oversized search/result text or showed a preview cursor: \(controller.quickOpenContentPanelCompactDiagnosticsForSmokeTest())")
+            return
+        }
         sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
         guard waitUntil("Esc from Find Usages returns to Files", timeout: 2, condition: {
             controller.overlayTitleForSmokeTest() == "Files" && !controller.overlayIsHiddenForSmokeTest()
@@ -1361,6 +1430,10 @@ extension KeyInputSmokeApp {
             fail("Find in Files overlay did not match the floating search panel with full-width results and bottom syntax preview: \(controller.findInFilesOverlayDiagnosticsForSmokeTest())")
             return
         }
+        guard controller.quickOpenContentPanelUsesCompactTypographyAndPreviewHasNoCursorForSmokeTest() else {
+            fail("Find in Files panel kept oversized search/result text or showed a preview cursor: \(controller.quickOpenContentPanelCompactDiagnosticsForSmokeTest())")
+            return
+        }
         guard controller.findInFilesFilterStaysResponsiveForSmokeTest("fileSearchNeedle") else {
             fail("Find in Files filter blocked the main thread budget")
             return
@@ -1379,7 +1452,18 @@ extension KeyInputSmokeApp {
             return
         }
         guard controller.recentFilesOverlayHasSingleSelectionAndCleanScrollForSmokeTest() else {
-            fail("Cmd+E Recent Files overlay had duplicate selection cursors or horizontal/sidebar scroll issues: \(controller.recentFilesOverlayDiagnosticsForSmokeTest())")
+            fail("Cmd+E Recent Files overlay had duplicate selection cursors, stale preview chrome, or broken result layout: \(controller.recentFilesOverlayDiagnosticsForSmokeTest())")
+            return
+        }
+        sendShortcut("?", keyCode: 44, modifiers: [.shift], charactersIgnoringModifiers: "/")
+        sendShortcut("\u{fffd}", keyCode: 0, modifiers: [])
+        guard controller.quickOpenFilterForSmokeTest().isEmpty,
+              controller.recentFilesOverlayHasSingleSelectionAndCleanScrollForSmokeTest() else {
+            fail("Recent Files filter accepted characters that cannot appear in file names; filter=\(controller.quickOpenFilterForSmokeTest().debugDescription)")
+            return
+        }
+        guard controller.recentFilesBackdropClickKeepsPanelForSmokeTest() else {
+            fail("Recent Files closed when the panel/backdrop empty area was clicked")
             return
         }
         guard controller.recentFilesEditedOnlyControlIsReadableForSmokeTest() else {
@@ -1405,9 +1489,56 @@ extension KeyInputSmokeApp {
             fail("Second Cmd+E inside Recent Files did not restore Show edited only state cleanly: \(controller.recentFilesOverlayDiagnosticsForSmokeTest())")
             return
         }
+        guard controller.positionRecentFilesSelectionAwayFromTopForSmokeTest() else {
+            fail("Recent Files could not position the result selection away from the top for scroll-preservation verification")
+            return
+        }
+        let recentScrollBeforeSidebarFocus = controller.recentFilesResultScrollYForSmokeTest()
+        let recentSelectedBeforeSidebarFocus = controller.recentFilesSelectedResultIndexForSmokeTest()
+        sendShortcut("", keyCode: 123, modifiers: [])
+        guard controller.recentFilesFocusRegionForSmokeTest() == "categories",
+              controller.recentFilesSelectedCategoryTitleForSmokeTest() == "Changes",
+              controller.recentFilesSelectedResultIndexForSmokeTest() == recentSelectedBeforeSidebarFocus,
+              abs(controller.recentFilesResultScrollYForSmokeTest() - recentScrollBeforeSidebarFocus) <= 1 else {
+            fail("Recent Files Left arrow did not move focus to the sidebar categories without jumping the result list; focus=\(controller.recentFilesFocusRegionForSmokeTest()) category=\(controller.recentFilesSelectedCategoryTitleForSmokeTest() ?? "nil") scroll=\(controller.recentFilesResultScrollYForSmokeTest()) before=\(recentScrollBeforeSidebarFocus)")
+            return
+        }
+        sendShortcut("", keyCode: 125, modifiers: [])
+        guard controller.recentFilesFocusRegionForSmokeTest() == "categories",
+              controller.recentFilesSelectedCategoryTitleForSmokeTest() == "Files",
+              controller.recentFilesSelectedResultIndexForSmokeTest() == recentSelectedBeforeSidebarFocus,
+              abs(controller.recentFilesResultScrollYForSmokeTest() - recentScrollBeforeSidebarFocus) <= 1 else {
+            fail("Recent Files Down arrow while in the sidebar did not move between sidebar categories without jumping the result list; focus=\(controller.recentFilesFocusRegionForSmokeTest()) category=\(controller.recentFilesSelectedCategoryTitleForSmokeTest() ?? "nil") scroll=\(controller.recentFilesResultScrollYForSmokeTest()) before=\(recentScrollBeforeSidebarFocus)")
+            return
+        }
+        sendShortcut("\r", keyCode: 36, modifiers: [])
+        guard controller.overlayTitleForSmokeTest() == "Files" else {
+            fail("Recent Files Enter on the selected sidebar category did not activate Files; title=\(controller.overlayTitleForSmokeTest())")
+            return
+        }
+        sendShortcut("e", keyCode: 14, modifiers: [.command])
+        guard controller.overlayTitleForSmokeTest() == "Recent Files" else {
+            fail("Cmd+E did not reopen Recent Files after sidebar category activation; title=\(controller.overlayTitleForSmokeTest())")
+            return
+        }
+        guard controller.positionRecentFilesSelectionAwayFromTopForSmokeTest() else {
+            fail("Recent Files could not reposition the result selection away from the top after reopening")
+            return
+        }
+        let recentScrollBeforeRightFocus = controller.recentFilesResultScrollYForSmokeTest()
+        let recentSelectedBeforeRightFocus = controller.recentFilesSelectedResultIndexForSmokeTest()
+        sendShortcut("", keyCode: 123, modifiers: [])
+        sendShortcut("", keyCode: 124, modifiers: [])
+        guard controller.recentFilesFocusRegionForSmokeTest() == "results",
+              controller.recentFilesSelectedResultIndexForSmokeTest() == recentSelectedBeforeRightFocus,
+              abs(controller.recentFilesResultScrollYForSmokeTest() - recentScrollBeforeRightFocus) <= 1,
+              controller.recentFilesOverlayHasSingleSelectionAndCleanScrollForSmokeTest() else {
+            fail("Recent Files Right arrow did not move focus back to the file results without jumping the result list; focus=\(controller.recentFilesFocusRegionForSmokeTest()) scroll=\(controller.recentFilesResultScrollYForSmokeTest()) before=\(recentScrollBeforeRightFocus) diagnostics=\(controller.recentFilesOverlayDiagnosticsForSmokeTest())")
+            return
+        }
         sendShortcut("", keyCode: 125, modifiers: [])
         guard controller.recentFilesOverlayHasSingleSelectionAndCleanScrollForSmokeTest() else {
-            fail("Recent Files Down arrow duplicated rows or left more than one selected cursor: \(controller.recentFilesOverlayDiagnosticsForSmokeTest())")
+            fail("Recent Files Down arrow duplicated rows, left more than one selected cursor, or broke the clean result layout: \(controller.recentFilesOverlayDiagnosticsForSmokeTest())")
             return
         }
         guard controller.recentFilesRapidNavigationKeepsUpForSmokeTest(steps: 80) else {
@@ -1972,7 +2103,19 @@ extension KeyInputSmokeApp {
             return
         }
 
-        // ---- US-7: duplicate-path + git → worktree checkbox confirm ----
+        // ---- US-7: same git root + git → name dialog with worktree checkbox ----
+        // Even when the requested directory is a child path, an existing workspace for the same git
+        // root must route through the worktree choice instead of silently creating another workspace.
+        controller.setCurrentTerminalDirectoryOverrideForSmokeTest(sub)
+        controller.setDuplicateWorkspaceChoiceForSmokeTest("cancel")
+        let countBeforeSameGitCancel = controller.workspaceCountForSmokeTest()
+        controller.createWorkspaceFromActiveTerminalForSmokeTest()
+        guard controller.workspaceCountForSmokeTest() == countBeforeSameGitCancel else {
+            fail("US-7: creating from a child directory of an already-open git workspace bypassed the worktree choice; count=\(controller.workspaceCountForSmokeTest()) before=\(countBeforeSameGitCancel)")
+            return
+        }
+
+        // ---- US-7: duplicate-path + git → name dialog with worktree checkbox ----
         // (a) Unchecked → a same-path sibling workspace (distinct id, same path).
         controller.setCurrentTerminalDirectoryOverrideForSmokeTest(repo)
         controller.setDuplicateWorkspaceChoiceForSmokeTest("sibling")

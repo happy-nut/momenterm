@@ -143,6 +143,12 @@ private func verifyTerminalRenderer() {
         exit(1)
     }
 
+    let memoAsteriskBullet = MainWindowController.renderMemoMarkdownForSmokeTest("* item")
+    guard memoAsteriskBullet == "• item" else {
+        fputs("key input smoke failed: memo asterisk bullet renderer output=\(memoAsteriskBullet)\n", stderr)
+        exit(1)
+    }
+
     verifyHangulImeBackspaceRouting()
     verifyHangulJamoImeRouting()
 }
@@ -247,10 +253,50 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
     private var smokeControllers: [MainWindowController] = []
     private var mainTerminalStartedAt = Date.distantPast
     private let deadline = Date().addingTimeInterval(20)
+    private let smokeOnly = ProcessInfo.processInfo.environment["MOMENTERM_KEY_INPUT_SMOKE_ONLY"]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setenv("MOMENTERM_DISABLE_TMUX_PERSISTENCE", "1", 1)
         clearPersistedState()
+        if smokeOnly == "recent-files" {
+            let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+            self.controller = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self else { return }
+                self.verifyRecentFilesScrollPreservationOnly(controller)
+                self.smokeControllers.forEach { controller in
+                    controller.disposeForSmokeTest()
+                    controller.close()
+                }
+                self.smokeControllers.removeAll()
+                self.clearPersistedState()
+                print("key input smoke recent-files ok")
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if smokeOnly == "prompt-memo" {
+            let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+            self.controller = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self else { return }
+                self.verifyPromptMemoEditorSurface(controller)
+                self.smokeControllers.forEach { controller in
+                    controller.disposeForSmokeTest()
+                    controller.close()
+                }
+                self.smokeControllers.removeAll()
+                self.clearPersistedState()
+                print("key input smoke prompt-memo ok")
+                NSApp.terminate(nil)
+            }
+            return
+        }
+
         verifyPlainLaunchStaysHomeWithoutWorkspace()
         clearPersistedState()
         verifyInitialRootStartsPlainTerminalWithoutWorkspace()
@@ -674,6 +720,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             verifySettingsOverlay(controller)
             verifyWorkspaceAndReviewShortcuts(controller)
             verifyHomeWorkspaceCreationRenameAndIsolation(controller)
+            verifyOptionWorkspaceSwitchRestoresInterfaceState(controller)
             verifyNativeShortcutEvents(controller)
             // Runs late (its fixtures/worktrees leave workspaces behind); the next verifier's
             // prepareLastHomeTerminalForSmokeTest() then clears everything for a fresh baseline.
@@ -1130,6 +1177,14 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo editable document does not fill viewport")
             return
         }
+        guard controller.memoEditorUsesCodeBackgroundForSmokeTest() else {
+            fail("prompt memo editable document does not use the code/editor background")
+            return
+        }
+        guard controller.memoOpensWithoutLegacyPrefillForSmokeTest() else {
+            fail("prompt memo opened with legacy prefilled content: \(controller.memoTextForSmokeTest().debugDescription)")
+            return
+        }
         // US-12: opening Settings (Cmd+,) while the memo is up must NOT close or cover the memo.
         // The memo stays open and the settings overlay reflows beside it.
         controller.openSettings()
@@ -1200,6 +1255,16 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo did not continue markdown list on Enter: \(listText.debugDescription)")
             return
         }
+        guard controller.setMemoTextForSmokeTest("1. first") else {
+            fail("prompt memo could not be reset for ordered-list continuation smoke")
+            return
+        }
+        sendKey("\r", keyCode: 36, window: memoWindow)
+        let orderedListText = controller.memoTextForSmokeTest()
+        guard orderedListText == "1. first\n2. " else {
+            fail("prompt memo did not continue ordered markdown list on Enter: \(orderedListText.debugDescription)")
+            return
+        }
         // Checkbox lines continue as a fresh unchecked box on Enter (Notion behaviour).
         guard controller.setMemoTextForSmokeTest("[x] done") else {
             fail("prompt memo could not be reset for checkbox continuation smoke")
@@ -1218,11 +1283,28 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo did not exit the list on Enter at an empty item: \(exitListText.debugDescription)")
             return
         }
+        guard controller.memoMarkdownStylesForSmokeTest() else {
+            fail("prompt memo did not apply natural Markdown styling attributes")
+            return
+        }
         sendKey("\u{1b}", keyCode: 53, window: memoWindow)
         guard waitUntil("prompt memo Esc close", timeout: 1, condition: {
             !controller.memoSidePanelIsVisibleForSmokeTest()
         }) else {
             fail("Esc did not close prompt memo while memo text view was focused")
+            return
+        }
+    }
+
+    private func verifyPromptMemoEditorSurface(_ controller: MainWindowController) {
+        controller.openMemo()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.memoSidePanelIsVisibleForSmokeTest(),
+              controller.memoIsFirstResponderForSmokeTest(),
+              controller.memoDocumentFillsViewportForSmokeTest(),
+              controller.memoEditorUsesCodeBackgroundForSmokeTest(),
+              controller.memoOpensWithoutLegacyPrefillForSmokeTest() else {
+            fail("prompt memo editor surface did not open as a focused code-background editor")
             return
         }
     }
@@ -1572,6 +1654,11 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
         controller.selectWorkspacePickerIndexForSmokeTest(indexB)
+        guard controller.beginSelectedWorkspaceRenameFromFocusedRowKeyForSmokeTest() else {
+            fail("pressing e while a workspace picker row is focused did not enter inline rename")
+            return
+        }
+        controller.cancelWorkspaceInlineRenameForSmokeTest()
         guard controller.renameSelectedWorkspacePickerItemForSmokeTest(to: "home-beta-renamed") else {
             fail("rename of the selected picker workspace failed")
             return
@@ -1629,6 +1716,113 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
 
         controller.closeMemoAndFocusTerminalForSmokeTest()
+    }
+
+    private func verifyOptionWorkspaceSwitchRestoresInterfaceState(_ controller: MainWindowController) {
+        controller.resetWorkspaceSelectionForSmokeTest()
+        let workspaceA = makeTempDirectory(name: "momenterm-opt-state-a")
+        let workspaceB = makeTempDirectory(name: "momenterm-opt-state-b")
+        try? """
+        struct Alpha {
+            let one = 1
+            let cursor = 3
+            let four = 4
+        }
+        """.write(to: workspaceA.appendingPathComponent("alpha.swift"), atomically: true, encoding: .utf8)
+        try? """
+        struct Beta {
+            let cursor = 2
+            let three = 3
+        }
+        """.write(to: workspaceB.appendingPathComponent("beta.swift"), atomically: true, encoding: .utf8)
+
+        controller.openWorkspaceForSmokeTest(workspaceA)
+        guard waitUntil("workspace A active", timeout: 1, condition: {
+            controller.activeWorkspacePathForSmokeTest() == workspaceA.path
+        }), let idA = controller.activeWorkspaceIdForSmokeTest() else {
+            fail("workspace A did not activate for Option-state restore smoke")
+            return
+        }
+        controller.openFilesViewForSmokeTest(from: workspaceA)
+        guard waitUntil("workspace A files loaded", timeout: 3, condition: {
+            controller.sourceFileCountForSmokeTest() > 0
+        }), controller.previewSourceFileForSmokeTest("alpha.swift", preferredLine: 3) else {
+            fail("workspace A Files state could not open alpha.swift; count=\(controller.sourceFileCountForSmokeTest())")
+            return
+        }
+        guard waitUntil("workspace A cursor line", timeout: 1, condition: {
+            controller.fileOverlayPreviewCursorLineForSmokeTest() == 3
+        }) else {
+            fail("workspace A cursor did not move to line 3 before switch; line=\(controller.fileOverlayPreviewCursorLineForSmokeTest())")
+            return
+        }
+
+        controller.openWorkspaceForSmokeTest(workspaceB)
+        guard waitUntil("workspace B active", timeout: 1, condition: {
+            controller.activeWorkspacePathForSmokeTest() == workspaceB.path
+        }), let idB = controller.activeWorkspaceIdForSmokeTest(),
+              idB != idA else {
+            fail("workspace B did not activate as a separate workspace; idA=\(idA) idB=\(controller.activeWorkspaceIdForSmokeTest() ?? "nil")")
+            return
+        }
+        controller.openFilesViewForSmokeTest(from: workspaceB)
+        guard waitUntil("workspace B files loaded", timeout: 3, condition: {
+            controller.sourceFileCountForSmokeTest() > 0
+        }), controller.previewSourceFileForSmokeTest("beta.swift", preferredLine: 2) else {
+            fail("workspace B Files state could not open beta.swift; count=\(controller.sourceFileCountForSmokeTest())")
+            return
+        }
+        guard waitUntil("workspace B cursor line", timeout: 1, condition: {
+            controller.fileOverlayPreviewCursorLineForSmokeTest() == 2
+        }) else {
+            fail("workspace B cursor did not move to line 2 before switch; line=\(controller.fileOverlayPreviewCursorLineForSmokeTest())")
+            return
+        }
+        let optionKeys: [(String, UInt16)] = [
+            ("1", 18), ("2", 19), ("3", 20), ("4", 21), ("5", 23),
+            ("6", 22), ("7", 26), ("8", 28), ("9", 25)
+        ]
+        guard let indexA = controller.workspacePickerIndexForSmokeTest(id: idA),
+              let indexB = controller.workspacePickerIndexForSmokeTest(id: idB),
+              optionKeys.indices.contains(indexA),
+              optionKeys.indices.contains(indexB) else {
+            fail("Option workspace restore smoke workspaces were not addressable by Opt+1...9; indexA=\(controller.workspacePickerIndexForSmokeTest(id: idA).map(String.init) ?? "nil") indexB=\(controller.workspacePickerIndexForSmokeTest(id: idB).map(String.init) ?? "nil")")
+            return
+        }
+
+        sendShortcut(optionKeys[indexA].0, keyCode: optionKeys[indexA].1, modifiers: [.option])
+        guard waitUntil("Option+1 restores workspace A", timeout: 2, condition: {
+            controller.activeWorkspaceIdForSmokeTest() == idA
+        }) else {
+            fail("Option+\(indexA + 1) did not activate workspace A; active=\(controller.activeWorkspaceIdForSmokeTest() ?? "nil")")
+            return
+        }
+        guard controller.overlayTitleForSmokeTest() == "Files",
+              controller.activeOpenFileTabForSmokeTest() == "alpha.swift",
+              controller.openFileTabsForSmokeTest() == ["alpha.swift"],
+              controller.selectedSourcePathForSmokeTest() == "alpha.swift",
+              controller.fileOverlayPreviewCursorLineForSmokeTest() == 3 else {
+            fail("Option+\(indexA + 1) did not restore workspace A Files state; overlay=\(controller.overlayTitleForSmokeTest()) tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") selected=\(controller.selectedSourcePathForSmokeTest() ?? "nil") cursor=\(controller.fileOverlayPreviewCursorLineForSmokeTest())")
+            return
+        }
+
+        sendShortcut(optionKeys[indexB].0, keyCode: optionKeys[indexB].1, modifiers: [.option])
+        guard waitUntil("Option+2 restores workspace B", timeout: 2, condition: {
+            controller.activeWorkspaceIdForSmokeTest() == idB
+        }) else {
+            fail("Option+\(indexB + 1) did not activate workspace B; active=\(controller.activeWorkspaceIdForSmokeTest() ?? "nil")")
+            return
+        }
+        guard controller.overlayTitleForSmokeTest() == "Files",
+              controller.activeOpenFileTabForSmokeTest() == "beta.swift",
+              controller.openFileTabsForSmokeTest() == ["beta.swift"],
+              controller.selectedSourcePathForSmokeTest() == "beta.swift",
+              controller.fileOverlayPreviewCursorLineForSmokeTest() == 2 else {
+            fail("Option+\(indexB + 1) did not restore workspace B Files state; overlay=\(controller.overlayTitleForSmokeTest()) tabs=\(controller.openFileTabsForSmokeTest()) active=\(controller.activeOpenFileTabForSmokeTest() ?? "nil") selected=\(controller.selectedSourcePathForSmokeTest() ?? "nil") cursor=\(controller.fileOverlayPreviewCursorLineForSmokeTest())")
+            return
+        }
+        controller.resetWorkspaceSelectionForSmokeTest()
+        controller.closeOverlayAndFocusTerminalForSmokeTest()
     }
 
 

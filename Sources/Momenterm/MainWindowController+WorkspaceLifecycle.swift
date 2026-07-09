@@ -7,20 +7,9 @@ extension MainWindowController {
     @discardableResult
     func createHomeWorkspace(named name: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
-        let workspaceId = UUID().uuidString
-        let colors = [theme.workspaceBlue, theme.workspaceGreen, theme.workspaceYellow, theme.workspacePink, theme.workspacePurple]
-        let icons = ["diamond.fill", "circle.hexagongrid.fill", "seal.fill", "bolt.fill", "square.grid.2x2.fill", "triangle.fill"]
-        let hash = abs(workspaceId.hashValue)
-        workspaces.append(Workspace(
-            id: workspaceId,
-            path: home.path,
-            name: name,
-            color: colors[hash % colors.count],
-            iconName: icons[hash % icons.count],
-            branchName: service.branchName(from: home)
-        ))
-        rebuildWorkspaceButtons()
-        openWorkspace(home, revealReview: false, attachActiveTab: false, announce: true, workspaceId: workspaceId)
+        let workspaceId = createWorkspaceInstance(at: home, name: name)
+        openWorkspace(home, revealReview: false, attachActiveTab: false, announce: false, workspaceId: workspaceId)
+        showWorkspaceFeedback(forId: workspaceId, created: true)
         return workspaceId
     }
 
@@ -68,6 +57,7 @@ extension MainWindowController {
             ?? "workspace"
         let removedWorkspaceCount = workspaces.count
         workspaces.removeAll { $0.id == workspaceId }
+        workspaceInterfaceSnapshots.removeValue(forKey: workspaceScopeKey(forWorkspaceId: workspaceId))
 
         let removedTabs = terminalTabs.filter { $0.workspaceId == workspaceId }
         for tab in removedTabs {
@@ -140,67 +130,188 @@ extension MainWindowController {
 
     func createWorkspaceFromActiveTerminal(revealReview: Bool) {
         let directory = currentTerminalDirectory()
-        let duplicate = workspacePathExists(directory.path)
-        // US-7: creating another workspace at a path that already has a git-backed workspace asks
-        // (checkbox) whether to spin a linked worktree. Checked → worktree; unchecked → a same-path
-        // sibling (US-15) that shares the git dir but keeps independent memo/notes; cancel → nothing.
-        if duplicate, service.gitRoot(from: directory) != nil {
-            switch promptDuplicateWorkspaceChoice(for: directory) {
-            case .worktree:
-                do {
-                    let linked = try service.createLinkedWorktree(from: directory)
-                    openWorkspace(linked.url, revealReview: revealReview, attachActiveTab: false, announce: true)
-                    showWorkspaceToast("Linked worktree: \(linked.branch)")
-                } catch {
-                    showWorkspaceToast("Linked worktree failed: \(String(describing: error))")
-                }
-            case .sibling:
-                createSamePathSiblingWorkspace(at: directory, revealReview: revealReview)
-            case .cancel:
-                break
+        let duplicatePath = workspacePathExists(directory.path)
+        let duplicateGitRoot = duplicateWorkspaceGitRoot(for: directory)
+        guard let request = promptWorkspaceCreationRequest(
+            for: directory,
+            duplicateGitRoot: duplicateGitRoot
+        ) else {
+            return
+        }
+
+        // US-7: creating another workspace inside a git repo that already has a registered
+        // workspace offers a linked worktree in the same naming dialog. Checked → worktree;
+        // unchecked → another workspace instance on the requested directory.
+        if request.createLinkedWorktree, duplicateGitRoot != nil {
+            do {
+                let linked = try service.createLinkedWorktree(from: directory)
+                let workspaceId = createWorkspaceInstance(at: linked.url, name: request.name, branchName: linked.branch)
+                openWorkspace(linked.url, revealReview: revealReview, attachActiveTab: false, announce: false, workspaceId: workspaceId)
+                pulseWorkspaceButton(workspaceId: workspaceId)
+                showWorkspaceToast("Linked worktree: \(linked.branch)")
+            } catch {
+                showWorkspaceToast("Linked worktree failed: \(String(describing: error))")
             }
             return
         }
-        openWorkspace(directory, revealReview: revealReview, attachActiveTab: true, announce: true)
+
+        if duplicatePath || duplicateGitRoot != nil {
+            createSamePathSiblingWorkspace(at: directory, name: request.name, revealReview: revealReview)
+            return
+        }
+
+        let workspaceId = createWorkspaceInstance(at: directory, name: request.name)
+        openWorkspace(directory, revealReview: revealReview, attachActiveTab: true, announce: false, workspaceId: workspaceId)
+        showWorkspaceFeedback(forId: workspaceId, created: true)
     }
 
     enum DuplicateWorkspaceChoice { case worktree, sibling, cancel }
-    private func promptDuplicateWorkspaceChoice(for directory: URL) -> DuplicateWorkspaceChoice {
-        if let override = duplicateWorkspaceChoiceOverrideForSmokeTest {
-            return override
+
+    struct WorkspaceCreationRequest {
+        let name: String
+        let createLinkedWorktree: Bool
+    }
+
+    private func promptWorkspaceCreationRequest(for directory: URL, duplicateGitRoot: URL?) -> WorkspaceCreationRequest? {
+        let defaultName = defaultWorkspaceName(for: directory)
+        if let override = duplicateWorkspaceChoiceOverrideForSmokeTest, duplicateGitRoot != nil {
+            switch override {
+            case .worktree:
+                return WorkspaceCreationRequest(name: defaultName, createLinkedWorktree: true)
+            case .sibling:
+                return WorkspaceCreationRequest(name: defaultName, createLinkedWorktree: false)
+            case .cancel:
+                return nil
+            }
         }
+        // Headless smokes set the current-directory override; showing an NSAlert there would hang.
+        if currentTerminalDirectoryOverrideForSmokeTest != nil {
+            return WorkspaceCreationRequest(name: defaultName, createLinkedWorktree: false)
+        }
+
         let alert = NSAlert()
-        alert.messageText = "이미 이 경로의 워크스페이스가 있습니다"
-        alert.informativeText = "\(directory.path)\n\n같은 경로에 또 하나의 워크스페이스를 만듭니다. git worktree를 생성하면 서로 다른 브랜치/작업 트리에서 독립적으로 작업할 수 있습니다."
-        alert.showsSuppressionButton = true
-        alert.suppressionButton?.title = "git worktree 생성 후 진행"
-        alert.suppressionButton?.state = .off
+        alert.messageText = "새 워크스페이스"
+        if let duplicateGitRoot {
+            alert.informativeText = "\(directory.path)\n\n이미 이 git 저장소를 사용하는 워크스페이스가 있습니다.\n체크하면 linked git worktree를 만들고 그 경로를 새 워크스페이스로 엽니다.\n\nGit: \(duplicateGitRoot.path)"
+        } else {
+            alert.informativeText = directory.path
+        }
         alert.addButton(withTitle: "생성")
         alert.addButton(withTitle: "취소")
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            return .cancel
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let nameField = NSTextField(string: defaultName)
+        nameField.placeholderString = "워크스페이스 이름"
+        nameField.lineBreakMode = .byTruncatingMiddle
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(nameField)
+
+        var worktreeCheckbox: NSButton?
+        if duplicateGitRoot != nil {
+            let checkbox = NSButton(checkboxWithTitle: "git worktree를 만들어 그 경로로 열기", target: nil, action: nil)
+            checkbox.state = .off
+            checkbox.translatesAutoresizingMaskIntoConstraints = false
+            stack.addArrangedSubview(checkbox)
+            worktreeCheckbox = checkbox
         }
-        return alert.suppressionButton?.state == .on ? .worktree : .sibling
+
+        NSLayoutConstraint.activate([
+            nameField.widthAnchor.constraint(equalToConstant: 360)
+        ])
+        alert.accessoryView = stack
+
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            return nil
+        }
+        let name = normalizedWorkspaceDisplayName(nameField.stringValue, fallback: defaultName)
+        return WorkspaceCreationRequest(
+            name: name,
+            createLinkedWorktree: worktreeCheckbox?.state == .on
+        )
     }
     // A fresh workspace instance at an already-registered path (US-15 sibling). Shares the filesystem
     // path (and its git dir) with the existing workspace but gets its own id, so its terminals and
     // workspace-scoped memo/notes are independent.
-    private func createSamePathSiblingWorkspace(at url: URL, revealReview: Bool) {
+    private func createSamePathSiblingWorkspace(at url: URL, name: String, revealReview: Bool) {
         let standardized = url.standardizedFileURL
+        let workspaceId = createWorkspaceInstance(at: standardized, name: name)
+        openWorkspace(standardized, revealReview: revealReview, attachActiveTab: false, announce: false, workspaceId: workspaceId)
+        showWorkspaceFeedback(forId: workspaceId, created: true)
+    }
+
+    @discardableResult
+    private func createWorkspaceInstance(at url: URL, name: String, branchName: String? = nil) -> String {
+        let standardized = url.standardizedFileURL
+        let workspaceId = UUID().uuidString
         let colors = [theme.workspaceBlue, theme.workspaceGreen, theme.workspaceYellow, theme.workspacePink, theme.workspacePurple]
         let icons = ["diamond.fill", "circle.hexagongrid.fill", "seal.fill", "bolt.fill", "square.grid.2x2.fill", "triangle.fill"]
-        let workspaceId = UUID().uuidString
         let hash = abs(workspaceId.hashValue)
         workspaces.append(Workspace(
             id: workspaceId,
             path: standardized.path,
-            name: displayName(for: standardized),
+            name: normalizedWorkspaceDisplayName(name, fallback: displayName(for: standardized)),
             color: colors[hash % colors.count],
             iconName: icons[hash % icons.count],
-            branchName: service.branchName(from: standardized)
+            branchName: branchName ?? service.branchName(from: standardized)
         ))
         rebuildWorkspaceButtons()
-        openWorkspace(standardized, revealReview: revealReview, attachActiveTab: false, announce: true, workspaceId: workspaceId)
+        persistWorkspaceState()
+        return workspaceId
+    }
+
+    private func duplicateWorkspaceGitRoot(for directory: URL) -> URL? {
+        guard let gitRoot = service.gitRoot(from: directory)?.standardizedFileURL else {
+            return nil
+        }
+        let normalizedGitRoot = normalizedWorkspacePath(gitRoot.path)
+        let hasExistingWorkspace = workspaces.contains { workspace in
+            if normalizedWorkspacePath(workspace.path) == normalizedGitRoot {
+                return true
+            }
+            if let detectedGitRoot = workspace.detectedGitRoot,
+               normalizedWorkspacePath(detectedGitRoot) == normalizedGitRoot {
+                return true
+            }
+            let workspaceURL = URL(fileURLWithPath: workspace.path).standardizedFileURL
+            return service.gitRoot(from: workspaceURL)
+                .map { normalizedWorkspacePath($0.path) == normalizedGitRoot } ?? false
+        }
+        return hasExistingWorkspace ? gitRoot : nil
+    }
+
+    private func defaultWorkspaceName(for directory: URL) -> String {
+        let adjectives = ["quiet", "brisk", "clear", "steady", "lunar", "bright", "fresh", "sharp"]
+        let nouns = ["orbit", "signal", "harbor", "summit", "garden", "anchor", "vector", "studio"]
+        let token = abs(UUID().uuidString.hashValue)
+        let candidate = "\(adjectives[token % adjectives.count])-\(nouns[(token / adjectives.count) % nouns.count])"
+        return uniqueWorkspaceName(candidate, fallback: displayName(for: directory))
+    }
+
+    private func uniqueWorkspaceName(_ candidate: String, fallback: String) -> String {
+        let base = normalizedWorkspaceDisplayName(candidate, fallback: fallback)
+        let existing = Set(workspaces.map(\.name))
+        guard existing.contains(base) else {
+            return base
+        }
+        for index in 2...99 {
+            let next = "\(base)-\(index)"
+            if !existing.contains(next) {
+                return next
+            }
+        }
+        return "\(base)-\(Int(Date().timeIntervalSince1970))"
+    }
+
+    private func normalizedWorkspaceDisplayName(_ name: String, fallback: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = trimmed.isEmpty ? fallback.trimmingCharacters(in: .whitespacesAndNewlines) : trimmed
+        let fallbackValue = value.isEmpty ? "workspace" : value
+        return String(fallbackValue.prefix(64))
     }
     func workspacePathExists(_ path: String) -> Bool {
         let normalizedPath = normalizedWorkspacePath(path)
@@ -236,8 +347,17 @@ extension MainWindowController {
         if let tabToAttach = tabToAttach {
             attachTab(tabToAttach, to: standardized, workspaceId: resolvedId, activeDirectory: activeDirectory)
         }
-        loadDocument(forceReload: true)
         _ = activateOrCreateWorkspaceTerminal(for: standardized, workspaceId: resolvedId, focus: true)
+        finishWorkspaceScopedStateChange(changed: workspaceScopeChanged)
+        let restoredInterface: Bool
+        if workspaceScopeChanged && !revealReview {
+            restoredInterface = restoreWorkspaceInterfaceSnapshot(forWorkspaceId: resolvedId, fallbackRoot: standardized)
+        } else {
+            restoredInterface = false
+        }
+        if !restoredInterface {
+            loadDocument(forceReload: true)
+        }
         rebuildWorkspaceButtons()
         if announce {
             showWorkspaceFeedback(forId: resolvedId, created: workspaces.count > previousCount)
@@ -247,26 +367,13 @@ extension MainWindowController {
         }
         persistWorkspaceState()
         persistTerminalState()
-        finishWorkspaceScopedStateChange(changed: workspaceScopeChanged)
     }
     func addWorkspaceIfNeeded(_ url: URL, branchName: String? = nil) {
         let path = url.path
         guard !workspaces.contains(where: { $0.path == path }) else {
             return
         }
-        let colors = [theme.workspaceBlue, theme.workspaceGreen, theme.workspaceYellow, theme.workspacePink, theme.workspacePurple]
-        let icons = ["diamond.fill", "circle.hexagongrid.fill", "seal.fill", "bolt.fill", "square.grid.2x2.fill", "triangle.fill"]
-        let hash = abs(path.hashValue)
-        workspaces.append(Workspace(
-            id: UUID().uuidString,
-            path: path,
-            name: displayName(for: url),
-            color: colors[hash % colors.count],
-            iconName: icons[hash % icons.count],
-            branchName: branchName ?? service.branchName(from: url)
-        ))
-        rebuildWorkspaceButtons()
-        persistWorkspaceState()
+        createWorkspaceInstance(at: url, name: displayName(for: url), branchName: branchName)
     }
     private func showWorkspaceFeedback(forId id: String?, created: Bool) {
         guard let workspace = workspace(forId: id) else {

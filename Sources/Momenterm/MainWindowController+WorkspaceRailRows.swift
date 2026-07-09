@@ -80,7 +80,10 @@ extension MainWindowController {
             if let gitRoot = workspace.detectedGitRoot {
                 tooltip += "\nGit: \((gitRoot as NSString).abbreviatingWithTildeInPath)"
             }
-            let button = NSButton(title: "", target: self, action: #selector(selectWorkspaceButton(_:)))
+            let button = NativeWorkspaceRowButton(title: "", target: self, action: #selector(selectWorkspaceButton(_:)))
+            button.onKeyDown = { [weak self] event in
+                self?.handleWorkspaceRailKey(event) ?? false
+            }
             // Identity: the button identifier is the workspace id (US-15), not the path, so two
             // ~/ workspaces get distinct, individually-clickable rows.
             button.identifier = NSUserInterfaceItemIdentifier(workspace.id)
@@ -253,6 +256,7 @@ extension MainWindowController {
         closeButton.identifier = NSUserInterfaceItemIdentifier(workspace.id)
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.isBordered = false
+        closeButton.refusesFirstResponder = true
         closeButton.bezelStyle = .regularSquare
         closeButton.imagePosition = .imageOnly
         closeButton.imageScaling = .scaleProportionallyDown

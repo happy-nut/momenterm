@@ -62,6 +62,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     private var paneStatusBarHeight: CGFloat { terminalComfortableDensity ? 28 : 22 }
     var paneStatusFontSize: CGFloat { terminalComfortableDensity ? 12.5 : 11 }
     var persistedSettings: [String: JSONValue] = [:]
+    var workspaceInterfaceSnapshots: [String: WorkspaceInterfaceSnapshot] = [:]
     let initialTerminalCommand: String?
     let initialTerminalDirectory: URL?
     var didRunInitialTerminalCommand = false
@@ -134,7 +135,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     //   .raw      — source text only (Monaco / native code pane, has a caret)
     //   .side     — source + rendered preview side by side
     //   .rendered — rendered preview only (still shows a source-line caret)
-    // Default is .raw. Switched via ⌥1/⌥2/⌥3, the three header icons, and ⇧⌘R (cycle).
+    // Default is .raw. Switched via Ctrl+Tab / Ctrl+Shift+Tab, the three header icons,
+    // and ⇧⌘R (cycle).
     enum SourceViewMode: String {
         case raw
         case side
@@ -162,6 +164,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var lastSidebarFocusDiagnostic = ""
     var quickOpenMode: QuickOpenMode = .all
     var quickOpenFilter = ""
+    var recentFilesFocusRegion: RecentFilesFocusRegion = .results
+    var selectedRecentFilesCategoryIndex = 0
     var quickOpenRecentEditedOnly = false
     var quickOpenRecentPopulateCount = 0
     var quickOpenContentResults: [QuickOpenItem] = []
@@ -276,7 +280,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let overlaySubtitleLabel = NSTextField(labelWithString: "")
     // Header segmented control shown only in the file view for renderable files (Markdown /
     // CSV / TSV / SVG): switches between raw source, side-by-side, and rendered preview. The
-    // active mode's button is tinted; ⌥1/⌥2/⌥3 mirror the three buttons.
+    // active mode's button is tinted; Ctrl+Tab / Ctrl+Shift+Tab cycles the modes.
     let sourceViewModeRawButton = NSButton(title: "", target: nil, action: nil)
     let sourceViewModeSideButton = NSButton(title: "", target: nil, action: nil)
     let sourceViewModeRenderedButton = NSButton(title: "", target: nil, action: nil)
@@ -297,14 +301,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let quickOpenRecentResultsStack = NSStackView()
     let quickOpenRecentFooterLabel = NSTextField(labelWithString: "")
     let codePane = CodePaneController()
-    // Center line-number gutters for the side-by-side diff (old right-aligned, new left-aligned).
+    // Legacy per-pane gutters stay hidden; the visible diff gutter is a single independent center
+    // view so line numbers and change connectors are not owned by either text pane.
     let oldLineGutter = DiffLineNumberGutter()
     let newLineGutter = DiffLineNumberGutter()
-    let diffGutterWidth: CGFloat = 44
+    let diffCenterGutter = DiffCenterGutterView()
+    let diffGutterWidth: CGFloat = 28
     // Per-render line numbers, one entry per rendered visual line in each pane (nil = blank/meta),
     // kept in lockstep with oldOutput/newOutput so the gutters align exactly with the code.
     var diffOldGutterNumbers: [Int?] = []
     var diffNewGutterNumbers: [Int?] = []
+    var diffOldLineBackgrounds: [NSColor?] = []
+    var diffNewLineBackgrounds: [NSColor?] = []
+    var diffCenterGutterBlocks: [DiffCenterGutterChangeBlock] = []
     enum DiffGutterPane { case old, new }
     let sourcePreviewScrollView = NSScrollView()
     let sourcePreviewDocumentView = NSView()
@@ -340,6 +349,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var overlayCompactHeightConstraint: NSLayoutConstraint?
     var overlayCompactCenterXConstraint: NSLayoutConstraint?
     var overlayCompactCenterYConstraint: NSLayoutConstraint?
+    var overlayHeaderHeightConstraint: NSLayoutConstraint?
+    var overlayHeaderDividerLeadingConstraint: NSLayoutConstraint?
+    var overlayHeaderDividerTrailingConstraint: NSLayoutConstraint?
+    var overlayBodyLeadingConstraint: NSLayoutConstraint?
+    var overlayBodyTrailingConstraint: NSLayoutConstraint?
+    var overlayBodyBottomConstraint: NSLayoutConstraint?
     // US-12: when a right-edge side panel (memo / merged prompt) is open, overlays sit BESIDE it
     // instead of covering it, so opening Settings never visually closes the memo. Trailing pins to
     // the side panel's leading edge.
@@ -865,9 +880,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         button.imagePosition = .noImage
         button.title = ""
         button.layer?.cornerRadius = MomentermDesign.Radius.medium
-        button.layer?.backgroundColor = theme.surfaceElevated.cgColor
+        button.layer?.backgroundColor = (selected ? theme.selectionBackground.withAlphaComponent(0.16) : theme.surfaceElevated).cgColor
         button.layer?.borderWidth = selected ? MomentermDesign.Border.emphasis : MomentermDesign.Border.hairline
-        button.layer?.borderColor = (selected ? theme.accent : theme.separator).cgColor
+        button.layer?.borderColor = (selected ? theme.modifiedText : theme.separator).cgColor
         button.translatesAutoresizingMaskIntoConstraints = false
         button.widthAnchor.constraint(equalToConstant: 250).isActive = true
         button.heightAnchor.constraint(equalToConstant: 64).isActive = true
@@ -899,7 +914,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         if selected {
             let mark = NSTextField(labelWithString: "선택됨")
             mark.font = MomentermDesign.Fonts.UI.caption.font
-            mark.textColor = theme.accent
+            mark.textColor = theme.modifiedText
             labels.addArrangedSubview(mark)
         }
 
@@ -928,7 +943,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
         button.layer?.cornerRadius = MomentermDesign.Radius.medium
         button.layer?.backgroundColor = preset.colors.background.cgColor
         button.layer?.borderWidth = selected ? MomentermDesign.Border.emphasis : MomentermDesign.Border.hairline
-        button.layer?.borderColor = (selected ? theme.accent : theme.separator).cgColor
+        button.layer?.borderColor = (selected ? theme.modifiedText : theme.separator).cgColor
         button.translatesAutoresizingMaskIntoConstraints = false
         button.widthAnchor.constraint(equalToConstant: 512).isActive = true
         button.heightAnchor.constraint(equalToConstant: 66).isActive = true

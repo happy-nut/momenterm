@@ -465,6 +465,7 @@ enum MomentermDesign {
 
     enum Metrics {
         static let sidebarWidth: CGFloat = 214
+        static let diffSidebarWidth: CGFloat = 176
         static let railCollapsedWidth: CGFloat = 38
         static let railExpandedWidth: CGFloat = 236
         static let sidebarRowHeight: CGFloat = 22
@@ -493,10 +494,13 @@ enum MomentermDesign {
         static let findPanelMinHeight: CGFloat = 520
         static let findPanelMaxHeight: CGFloat = 700
         static let findPanelResultsHeight: CGFloat = 280
+        static let findPanelSearchRowHeight: CGFloat = 34
+        static let findPanelResultRowHeight: CGFloat = 22
+        static let findPanelTextFontSize: CGFloat = 12
         static let recentFilesSidebarWidth: CGFloat = 236
         static let recentFilesMinWidth: CGFloat = 640
         static let recentFilesMaxWidth: CGFloat = 900
-        static let recentFilesMinHeight: CGFloat = 420
+        static let recentFilesMinHeight: CGFloat = 320
         static let recentFilesMaxHeight: CGFloat = 700
         static let recentFilesControlRowHeight: CGFloat = 22
         static let recentFilesResultRowHeight: CGFloat = 22
@@ -507,14 +511,17 @@ enum MomentermDesign {
         static let settingsSidebarWidth: CGFloat = 260
         static let settingsContentWidth: CGFloat = 620
         static let settingsMinWidth: CGFloat = 900
-        static let settingsMaxWidth: CGFloat = 1180
+        static let settingsMaxWidth: CGFloat = 980
         static let settingsMinHeight: CGFloat = 560
-        static let settingsMaxHeight: CGFloat = 760
+        static let settingsMaxHeight: CGFloat = 720
         static let settingsRowHeight: CGFloat = 52
-        static let settingsPromptTextWidth: CGFloat = 350
+        static let settingsPromptTextWidth: CGFloat = 328
         static let sidebarSelectionScrollMarginRatio: CGFloat = 0.15
         static let codeMinimumLineHeight: CGFloat = 20
         static let codeLineSpacing: CGFloat = 3
+        static let diffCodeMinimumLineHeight: CGFloat = 15
+        static let diffCodeLineSpacing: CGFloat = 0
+        static let diffCodeTextInset = NSSize(width: 0, height: 2)
         static let diffEditorChromeHeight: CGFloat = 46
         static let minimalScrollbarWidth: CGFloat = 5
     }
@@ -522,12 +529,12 @@ enum MomentermDesign {
     enum Fonts {
         static let sidebar = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         static let sidebarSelected = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
-        // The code + diff CONTENT font size is user-adjustable (Settings → 리뷰). `code` and
-        // `diffCode` resolve to the SAME size so the Files and Changes views match; the Monaco web
-        // views are sent this same value (codeFontSize) in their load payloads. `codeSmall` and the
-        // sidebar fonts are UI chrome and stay fixed.
+        // The Files/source CONTENT font size is user-adjustable (Settings → 리뷰). Changes diff
+        // uses its own smaller fixed font so the review pane matches IntelliJ's dense diff view
+        // instead of inheriting an oversized editor preference.
         static let codeFontSizeKey = "momenterm.code.fontSize"
         static let defaultCodeFontSize: CGFloat = 12
+        static let diffCodeFontSize: CGFloat = 11
         static let codeFontSizeOptions: [CGFloat] = [11, 12, 13, 14, 16]
         static var codeFontSize: CGFloat {
             let stored = UserDefaults.standard.object(forKey: codeFontSizeKey) as? Double
@@ -535,7 +542,7 @@ enum MomentermDesign {
             return min(max(size, 9), 22)
         }
         static var code: NSFont { NSFont(name: "Monaco", size: codeFontSize) ?? NSFont.monospacedSystemFont(ofSize: codeFontSize, weight: .regular) }
-        static var diffCode: NSFont { code }
+        static var diffCode: NSFont { NSFont(name: "Monaco", size: diffCodeFontSize) ?? NSFont.monospacedSystemFont(ofSize: diffCodeFontSize, weight: .regular) }
         static let codeSmall = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
         /// A single typographic token: size + weight + optional letter-spacing.
@@ -598,6 +605,14 @@ enum MomentermDesign {
         style.minimumLineHeight = Metrics.codeMinimumLineHeight
         style.maximumLineHeight = Metrics.codeMinimumLineHeight
         style.lineSpacing = Metrics.codeLineSpacing
+        return style
+    }
+
+    static func diffCodeParagraphStyle() -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = Metrics.diffCodeMinimumLineHeight
+        style.maximumLineHeight = Metrics.diffCodeMinimumLineHeight
+        style.lineSpacing = Metrics.diffCodeLineSpacing
         return style
     }
 

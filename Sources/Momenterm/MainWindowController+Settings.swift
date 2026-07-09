@@ -63,13 +63,25 @@ extension MainWindowController {
         }
     }
     private func configureSettingsOverlayBodyLayout() {
+        let canvasColor = settingsCanvasBackgroundColor()
+        let contentColor = settingsContentBackgroundColor()
         overlayBodySplitView.isVertical = true
         overlaySidebarHeightConstraint?.isActive = false
         overlaySidebarWidthConstraint?.constant = MomentermDesign.Metrics.settingsSidebarWidth
         overlaySidebarWidthConstraint?.isActive = true
-        overlaySidebarStack.spacing = 8
+        overlaySidebarStack.spacing = 4
+        overlayView.layer?.backgroundColor = canvasColor.cgColor
+        overlayBodySplitView.wantsLayer = true
+        overlayBodySplitView.layer?.backgroundColor = canvasColor.cgColor
+        overlaySidebarStack.superview?.wantsLayer = true
+        overlaySidebarStack.superview?.layer?.backgroundColor = canvasColor.cgColor
+        overlayContentView.layer?.backgroundColor = contentColor.cgColor
         overlayContentView.layer?.borderColor = NSColor.clear.cgColor
         overlayContentView.layer?.borderWidth = 0
+        overlaySettingsScrollView.drawsBackground = true
+        overlaySettingsScrollView.backgroundColor = contentColor
+        overlaySettingsScrollView.documentView?.wantsLayer = true
+        overlaySettingsScrollView.documentView?.layer?.backgroundColor = contentColor.cgColor
         MomentermDesign.styleMinimalScrollbars(overlaySettingsScrollView)
     }
     func populateSettingsOverlay() {
@@ -81,7 +93,7 @@ extension MainWindowController {
             overlaySettingsStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
-        overlaySettingsStack.spacing = 0
+        overlaySettingsStack.spacing = 14
 
         settingsPromptTextViews.removeAll()
 
@@ -105,6 +117,26 @@ extension MainWindowController {
         settingsSections(for: selectedSettingsCategory).forEach {
             overlaySettingsStack.addArrangedSubview($0)
         }
+    }
+
+    private func settingsCanvasBackgroundColor() -> NSColor {
+        MomentermDesign.Colors.blend(theme.primaryBackground, into: theme.surfacePanel, amount: 0.28)
+    }
+
+    private func settingsContentBackgroundColor() -> NSColor {
+        MomentermDesign.Colors.blend(theme.primaryBackground, into: theme.surfacePanel, amount: 0.20)
+    }
+
+    private func settingsStrongTextColor() -> NSColor {
+        theme.primaryText.withAlphaComponent(0.96)
+    }
+
+    private func settingsBodyTextColor() -> NSColor {
+        theme.primaryText.withAlphaComponent(0.78)
+    }
+
+    private func settingsValueTextColor() -> NSColor {
+        theme.primaryText.withAlphaComponent(0.90)
     }
     private func settingsSections(for category: SettingsCategory) -> [NSView] {
         switch category {
@@ -269,23 +301,44 @@ extension MainWindowController {
         overlayCompactHeightConstraint?.constant = min(height, availableHeight)
     }
     private func settingsIntro(title: String, detail: String) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let iconView = NSImageView()
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.image = NSImage(systemSymbolName: selectedSettingsCategory.icon, accessibilityDescription: title)
+            ?? NSImage(systemSymbolName: "gearshape", accessibilityDescription: title)
+        iconView.image?.isTemplate = true
+        iconView.contentTintColor = theme.modifiedText
+        iconView.imageScaling = .scaleProportionallyDown
+
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 3
         stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = MomentermDesign.Fonts.UI.display.font
-        titleLabel.textColor = theme.primaryText
-        let detailLabel = NSTextField(labelWithString: detail)
-        detailLabel.font = NSFont.systemFont(ofSize: 13, weight: .regular)
-        detailLabel.textColor = theme.secondaryText
+        let titleLabel = NativeSettingsLabel(text: title)
+        titleLabel.font = NSFont.systemFont(ofSize: 23, weight: .bold)
+        titleLabel.textColor = settingsStrongTextColor()
+        let detailLabel = NativeSettingsLabel(text: detail)
+        detailLabel.font = NSFont.systemFont(ofSize: 12.5, weight: .medium)
+        detailLabel.textColor = settingsBodyTextColor()
         stack.addArrangedSubview(titleLabel)
         stack.addArrangedSubview(detailLabel)
-        stack.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
-        stack.heightAnchor.constraint(greaterThanOrEqualToConstant: 68).isActive = true
-        return stack
+        container.addSubview(iconView)
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            container.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth),
+            container.heightAnchor.constraint(equalToConstant: 58),
+            iconView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 2),
+            iconView.centerYAnchor.constraint(equalTo: stack.centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 20),
+            iconView.heightAnchor.constraint(equalToConstant: 20),
+            stack.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor)
+        ])
+        return container
     }
     private func settingsSection(title: String, rows: [NSView]) -> NSView {
         let width = MomentermDesign.Metrics.settingsContentWidth
@@ -293,14 +346,14 @@ extension MainWindowController {
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
+        stack.spacing = 9
         stack.identifier = NSUserInterfaceItemIdentifier("settings-section-\(title)")
 
         // Show the section eyebrow only when it adds information — i.e. when it differs from the
         // big intro title (which is the category name). This drops the redundant "터미널 / 터미널"
         // stack the user flagged, while keeping meaningful sub-labels like "프롬프트 합본".
         if title != selectedSettingsCategory.title {
-            let header = NSTextField(labelWithString: "")
+            let header = NativeSettingsLabel(text: "")
             MomentermDesign.styleEyebrowLabel(header, text: title, color: theme.secondaryText)
             header.translatesAutoresizingMaskIntoConstraints = false
             header.heightAnchor.constraint(equalToConstant: 26).isActive = true
@@ -308,53 +361,38 @@ extension MainWindowController {
             stack.addArrangedSubview(header)
         }
 
-        // Grouped rows sit in a single rounded, elevated card (macOS System Settings feel)
-        // instead of floating flush on the panel — clearer grouping, softer overall look.
-        let card = NSView()
-        card.translatesAutoresizingMaskIntoConstraints = false
-        card.wantsLayer = true
-        card.layer?.backgroundColor = theme.surfaceElevated.cgColor
-        card.layer?.cornerRadius = 12
-        card.layer?.borderWidth = 1
-        card.layer?.borderColor = theme.separator.cgColor
-        card.layer?.masksToBounds = true
-
         let rowStack = NSStackView()
         rowStack.translatesAutoresizingMaskIntoConstraints = false
         rowStack.orientation = .vertical
-        rowStack.alignment = .leading
-        rowStack.spacing = 0
-        for (index, row) in rows.enumerated() {
+        rowStack.alignment = .centerX
+        rowStack.spacing = 16
+        rowStack.identifier = NSUserInterfaceItemIdentifier("settings-row-group")
+        rowStack.wantsLayer = false
+        for row in rows {
             rowStack.addArrangedSubview(row)
-            if index < rows.count - 1 {
-                rowStack.addArrangedSubview(settingsDivider())
-            }
         }
-        card.addSubview(rowStack)
-        NSLayoutConstraint.activate([
-            card.widthAnchor.constraint(equalToConstant: width),
-            rowStack.topAnchor.constraint(equalTo: card.topAnchor, constant: 6),
-            rowStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -6),
-            rowStack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            rowStack.trailingAnchor.constraint(equalTo: card.trailingAnchor)
-        ])
-        stack.addArrangedSubview(card)
+        rowStack.widthAnchor.constraint(equalToConstant: width).isActive = true
+        stack.addArrangedSubview(rowStack)
 
         let spacer = NSView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        spacer.heightAnchor.constraint(equalToConstant: 10).isActive = true
         spacer.widthAnchor.constraint(equalToConstant: width).isActive = true
         stack.addArrangedSubview(spacer)
         stack.widthAnchor.constraint(equalToConstant: width).isActive = true
         return stack
     }
+    private func applySettingsSurface(_ view: NSView, selected: Bool = false) {
+        view.identifier = NSUserInterfaceItemIdentifier("settings-row-surface")
+        view.wantsLayer = false
+    }
     private func settingsInfoRow(title: String, value: String, detail: String) -> NSView {
         let row = settingsRowBase(title: title, detail: detail)
         // Technical values (shell path, cwd) read cleaner in a muted monospace, like macOS
         // System Settings' secondary value column — not a loud bold white.
-        let valueLabel = NSTextField(labelWithString: value)
-        valueLabel.font = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        valueLabel.textColor = theme.secondaryText
+        let valueLabel = NativeSettingsLabel(text: value)
+        valueLabel.font = NSFont(name: "Monaco", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        valueLabel.textColor = settingsValueTextColor()
         valueLabel.alignment = .right
         valueLabel.lineBreakMode = .byTruncatingMiddle
         valueLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -369,8 +407,8 @@ extension MainWindowController {
         toggle.action = action
         toggle.configure(
             isOn: isOn,
-            onColor: theme.accent,
-            offColor: theme.secondaryText.withAlphaComponent(0.28),
+            onColor: theme.modifiedText.withAlphaComponent(0.82),
+            offColor: theme.primaryText.withAlphaComponent(0.18),
             knobColor: NSColor.white.withAlphaComponent(0.95)
         )
         toggle.translatesAutoresizingMaskIntoConstraints = false
@@ -384,9 +422,11 @@ extension MainWindowController {
         row.orientation = .horizontal
         row.alignment = .top
         row.spacing = 20
+        row.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         row.translatesAutoresizingMaskIntoConstraints = false
+        applySettingsSurface(row)
         row.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: CGFloat(rows * 26 + 38)).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: CGFloat(rows * 26 + 62)).isActive = true
 
         let labels = NSStackView()
         labels.orientation = .vertical
@@ -395,13 +435,13 @@ extension MainWindowController {
         labels.translatesAutoresizingMaskIntoConstraints = false
         labels.widthAnchor.constraint(equalToConstant: 230).isActive = true
 
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-        titleLabel.textColor = theme.primaryText
+        let titleLabel = NativeSettingsLabel(text: title)
+        titleLabel.font = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
+        titleLabel.textColor = settingsStrongTextColor()
         titleLabel.lineBreakMode = .byWordWrapping
-        let detailLabel = NSTextField(wrappingLabelWithString: detail)
+        let detailLabel = NativeSettingsLabel(text: detail, wrapping: true)
         detailLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
-        detailLabel.textColor = theme.secondaryText
+        detailLabel.textColor = settingsBodyTextColor()
         labels.addArrangedSubview(titleLabel)
         labels.addArrangedSubview(detailLabel)
         row.addArrangedSubview(labels)
@@ -422,7 +462,11 @@ extension MainWindowController {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = textView
         MomentermDesign.styleMinimalScrollbars(scroll)
-        scroll.borderType = .lineBorder
+        scroll.borderType = .noBorder
+        scroll.wantsLayer = true
+        scroll.layer?.cornerRadius = 8
+        scroll.layer?.borderWidth = 0.5
+        scroll.layer?.borderColor = theme.separator.withAlphaComponent(0.55).cgColor
         scroll.drawsBackground = true
         scroll.backgroundColor = theme.codeBackground
         scroll.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsPromptTextWidth).isActive = true
@@ -441,9 +485,11 @@ extension MainWindowController {
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 12
+        row.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
         row.translatesAutoresizingMaskIntoConstraints = false
+        applySettingsSurface(row)
         row.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
-        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
+        row.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
 
         let spacer = NSView()
         spacer.translatesAutoresizingMaskIntoConstraints = false
@@ -455,7 +501,7 @@ extension MainWindowController {
         reset.translatesAutoresizingMaskIntoConstraints = false
         row.addArrangedSubview(reset)
 
-        let saved = NSTextField(labelWithString: "")
+        let saved = NativeSettingsLabel(text: "")
         saved.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         saved.textColor = theme.secondaryText
         saved.translatesAutoresizingMaskIntoConstraints = false
@@ -468,10 +514,9 @@ extension MainWindowController {
         let row = NSStackView()
         row.orientation = .horizontal
         row.alignment = .centerY
-        row.spacing = 18
-        // Consistent inner padding so text/controls never touch the card edge, and a matched
-        // vertical inset for a calmer rhythm.
-        row.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
+        row.spacing = 16
+        applySettingsSurface(row)
+        row.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
         row.translatesAutoresizingMaskIntoConstraints = false
         row.heightAnchor.constraint(greaterThanOrEqualToConstant: MomentermDesign.Metrics.settingsRowHeight).isActive = true
         row.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth).isActive = true
@@ -480,12 +525,12 @@ extension MainWindowController {
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 3
-        let titleLabel = NSTextField(labelWithString: title)
+        let titleLabel = NativeSettingsLabel(text: title)
         titleLabel.font = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
-        titleLabel.textColor = theme.primaryText
-        let detailLabel = NSTextField(wrappingLabelWithString: detail)
+        titleLabel.textColor = settingsStrongTextColor()
+        let detailLabel = NativeSettingsLabel(text: detail, wrapping: true)
         detailLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
-        detailLabel.textColor = theme.secondaryText
+        detailLabel.textColor = settingsBodyTextColor()
         detailLabel.lineBreakMode = .byWordWrapping
         detailLabel.preferredMaxLayoutWidth = 340
         labels.addArrangedSubview(titleLabel)
@@ -503,27 +548,6 @@ extension MainWindowController {
         row.addArrangedSubview(spacer)
         return row
     }
-    private func settingsDivider() -> NSView {
-        // Inset hairline (aligned with the row's inner padding) instead of an edge-to-edge line —
-        // the macOS System Settings look, and softer than the old panel-border color.
-        let container = NSView()
-        container.identifier = NSUserInterfaceItemIdentifier("settings-row-divider")
-        container.translatesAutoresizingMaskIntoConstraints = false
-        let line = NSView()
-        line.translatesAutoresizingMaskIntoConstraints = false
-        line.wantsLayer = true
-        line.layer?.backgroundColor = theme.separator.withAlphaComponent(0.7).cgColor
-        container.addSubview(line)
-        NSLayoutConstraint.activate([
-            container.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsContentWidth),
-            container.heightAnchor.constraint(equalToConstant: 1),
-            line.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-            line.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
-            line.topAnchor.constraint(equalTo: container.topAnchor),
-            line.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-        ])
-        return container
-    }
     private func settingsSidebarSearchField() -> NSView {
         let width = MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2
         // A themed, inset search bar instead of the stock white-bezel NSSearchField (which read as a
@@ -531,10 +555,10 @@ extension MainWindowController {
         // darkened container with our own magnifier glyph.
         let container = NSView()
         container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
-        container.layer?.cornerRadius = 9
-        container.layer?.borderWidth = 1
-        container.layer?.borderColor = theme.separator.cgColor
+        container.layer?.backgroundColor = theme.primaryText.withAlphaComponent(0.035).cgColor
+        container.layer?.cornerRadius = 8
+        container.layer?.borderWidth = 0.5
+        container.layer?.borderColor = theme.separator.withAlphaComponent(0.28).cgColor
         container.translatesAutoresizingMaskIntoConstraints = false
 
         let icon = NSImageView()
@@ -547,7 +571,7 @@ extension MainWindowController {
         let search = NSSearchField()
         search.identifier = NSUserInterfaceItemIdentifier("settings-sidebar-search")
         search.placeholderString = "검색"
-        search.font = NSFont.systemFont(ofSize: 13.5, weight: .regular)
+        search.font = NSFont.systemFont(ofSize: 12.5, weight: .regular)
         search.textColor = theme.primaryText
         search.focusRingType = .none
         search.isBordered = false
@@ -565,7 +589,7 @@ extension MainWindowController {
         container.addSubview(search)
         NSLayoutConstraint.activate([
             container.widthAnchor.constraint(equalToConstant: width),
-            container.heightAnchor.constraint(equalToConstant: 38),
+            container.heightAnchor.constraint(equalToConstant: 32),
             icon.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 14),
@@ -577,7 +601,7 @@ extension MainWindowController {
         return container
     }
     private func settingsSidebarGroupLabel(_ title: String) -> NSView {
-        let label = NSTextField(labelWithString: title)
+        let label = NativeSettingsLabel(text: title)
         label.identifier = NSUserInterfaceItemIdentifier("settings-sidebar-group")
         // A quiet, tracked eyebrow above the category list — clearer hierarchy than a plain label.
         label.attributedStringValue = NSAttributedString(string: title, attributes: [
@@ -591,7 +615,7 @@ extension MainWindowController {
         return label
     }
     private func settingsSidebarItem(title: String, icon: String, shortcut: String, selected: Bool, category: SettingsCategory? = nil) -> NSView {
-        let button = NSButton(title: "", target: self, action: category == nil ? nil : #selector(selectSettingsCategoryAction(_:)))
+        let button = NativeSettingsButton(title: "", target: self, action: category == nil ? nil : #selector(selectSettingsCategoryAction(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(category.map { "settings-sidebar-category-\($0.rawValue)" } ?? "settings-sidebar-item-\(title)")
         button.isBordered = false
         button.bezelStyle = .regularSquare
@@ -599,16 +623,15 @@ extension MainWindowController {
         button.toolTip = tooltipText(label: title, shortcut: shortcut)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.wantsLayer = true
-        button.layer?.cornerRadius = 8
-        // Selected item: a soft accent wash plus a left accent indicator bar and an accent-tinted
-        // icon — a cleaner, more modern read than a flat gold fill.
-        button.layer?.backgroundColor = selected ? theme.accent.withAlphaComponent(0.12).cgColor : NSColor.clear.cgColor
+        button.layer?.cornerRadius = 7
+        button.layer?.backgroundColor = selected ? theme.selectionBackground.withAlphaComponent(0.24).cgColor : NSColor.clear.cgColor
         button.layer?.borderWidth = 0
+        button.layer?.borderColor = NSColor.clear.cgColor
 
         let accentBar = NSView()
         accentBar.translatesAutoresizingMaskIntoConstraints = false
         accentBar.wantsLayer = true
-        accentBar.layer?.backgroundColor = (selected ? theme.accent : NSColor.clear).cgColor
+        accentBar.layer?.backgroundColor = (selected ? theme.modifiedText : NSColor.clear).cgColor
         accentBar.layer?.cornerRadius = 1.5
 
         let imageView = NSImageView()
@@ -616,16 +639,18 @@ extension MainWindowController {
         imageView.image = NSImage(systemSymbolName: icon, accessibilityDescription: title)
             ?? NSImage(systemSymbolName: "circle", accessibilityDescription: title)
         imageView.image?.isTemplate = true
-        imageView.contentTintColor = selected ? theme.accent : theme.secondaryText
+        imageView.contentTintColor = selected ? theme.primaryText : theme.secondaryText
         imageView.imageScaling = .scaleProportionallyDown
 
-        let titleLabel = NSTextField(labelWithString: title)
+        let titleLabel = NativeSettingsLabel(text: title)
+        titleLabel.cursor = .pointingHand
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: 14.5, weight: selected ? .semibold : .medium)
+        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
         titleLabel.textColor = selected ? theme.primaryText : theme.secondaryText
         titleLabel.lineBreakMode = .byTruncatingTail
 
-        let shortcutLabel = NSTextField(labelWithString: shortcut)
+        let shortcutLabel = NativeSettingsLabel(text: shortcut)
+        shortcutLabel.cursor = .pointingHand
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
         shortcutLabel.font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
         shortcutLabel.textColor = theme.tertiaryText
@@ -635,12 +660,12 @@ extension MainWindowController {
         [accentBar, imageView, titleLabel, shortcutLabel].forEach { button.addSubview($0) }
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2),
-            button.heightAnchor.constraint(equalToConstant: 44),
+            button.heightAnchor.constraint(equalToConstant: 34),
             accentBar.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 3),
             accentBar.centerYAnchor.constraint(equalTo: button.centerYAnchor),
             accentBar.widthAnchor.constraint(equalToConstant: 3),
-            accentBar.heightAnchor.constraint(equalToConstant: 18),
-            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 16),
+            accentBar.heightAnchor.constraint(equalToConstant: 16),
+            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 15),
             imageView.centerYAnchor.constraint(equalTo: button.centerYAnchor),
             imageView.widthAnchor.constraint(equalToConstant: 18),
             imageView.heightAnchor.constraint(equalToConstant: 18),
@@ -657,7 +682,7 @@ extension MainWindowController {
         let line = NSView()
         line.translatesAutoresizingMaskIntoConstraints = false
         line.wantsLayer = true
-        line.layer?.backgroundColor = theme.panelBorder.withAlphaComponent(0.62).cgColor
+        line.layer?.backgroundColor = theme.separator.withAlphaComponent(0.35).cgColor
         line.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2).isActive = true
         line.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return line
@@ -757,10 +782,10 @@ extension MainWindowController {
         segmented.configure(
             labels: labels,
             selectedIndex: selectedIndex,
-            trackColor: theme.panelBackground,
-            borderColor: theme.separator,
-            accent: theme.accent,
-            selectedText: NSColor.white,
+            trackColor: theme.primaryText.withAlphaComponent(0.045),
+            borderColor: theme.separator.withAlphaComponent(0.35),
+            accent: theme.selectionBackground.withAlphaComponent(0.78),
+            selectedText: theme.primaryText,
             normalText: theme.secondaryText
         )
         segmented.translatesAutoresizingMaskIntoConstraints = false

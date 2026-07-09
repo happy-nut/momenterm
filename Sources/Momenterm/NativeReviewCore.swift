@@ -159,6 +159,30 @@ final class NativeReviewCore {
         )
     }
 
+    func shallowFileListing(root requestedRoot: URL) throws -> ReviewDocument {
+        let repoRoot = try? gitClient.repoRoot(from: requestedRoot)
+        let root = repoRoot ?? requestedRoot.standardizedFileURL
+        let isGitRepository = repoRoot != nil
+        let sourceCollector = NativeSourceCollector(gitClient: gitClient)
+        let sourceFiles = try sourceCollector.shallowList(root: root)
+        let branch = isGitRepository
+            ? "Indexing files"
+            : "Not a Git repository"
+        return ReviewDocument(
+            root: root.path,
+            branch: branch,
+            isGitRepository: isGitRepository,
+            diffFiles: [],
+            sourceFiles: sourceFiles,
+            fileStates: sourceCollector.fileStates(files: [], sourceFiles: sourceFiles),
+            httpEnvironments: .array([]),
+            files: 0,
+            hunks: 0,
+            signature: sha1((["files-shallow", root.path] + sourceFiles.map { "\($0.path)\0\($0.size)" }).joined(separator: "\n")),
+            generatedAt: isoNow()
+        )
+    }
+
     func fileListingChildren(root requestedRoot: URL, folderPath: String) throws -> [SourceFile] {
         let repoRoot = try? gitClient.repoRoot(from: requestedRoot)
         let root = repoRoot ?? requestedRoot.standardizedFileURL

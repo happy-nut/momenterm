@@ -109,6 +109,7 @@ extension MainWindowController {
         } else if value.hasPrefix("quick:"), let index = Int(value.dropFirst(6)) {
             selectedQuickOpenIndex = index
             if quickOpenMode == .recent {
+                recentFilesFocusRegion = .results
                 let items = quickOpenItems()
                 if !updateVisibleRecentFilesSelection(items: items) {
                     populateQuickOpenOverlay()
@@ -117,7 +118,12 @@ extension MainWindowController {
                 populateQuickOpenOverlay()
             }
         } else if value.hasPrefix("recent-category:") {
-            activateRecentFilesCategory(String(value.dropFirst("recent-category:".count)))
+            let identifier = String(value.dropFirst("recent-category:".count))
+            recentFilesFocusRegion = .categories
+            if let index = recentFilesCategoryRows().firstIndex(where: { $0.3 == identifier }) {
+                selectedRecentFilesCategoryIndex = index
+            }
+            activateRecentFilesCategory(identifier)
         } else if value.hasPrefix("workspace-picker:"), let index = Int(value.dropFirst(17)) {
             selectedWorkspacePickerIndex = index
             populateWorkspacePickerOverlay()

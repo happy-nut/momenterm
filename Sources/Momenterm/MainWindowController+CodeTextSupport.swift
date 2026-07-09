@@ -147,8 +147,12 @@ extension MainWindowController {
         // Line numbers live in the center gutters now (drawn by DiffLineNumberGutter), not
         // embedded in the text. Record this line's number so the gutter stays in lockstep.
         switch pane {
-        case .old: diffOldGutterNumbers.append(number)
-        case .new: diffNewGutterNumbers.append(number)
+        case .old:
+            diffOldGutterNumbers.append(number)
+            diffOldLineBackgrounds.append(background)
+        case .new:
+            diffNewGutterNumbers.append(number)
+            diffNewLineBackgrounds.append(background)
         }
         let rendered: NSMutableAttributedString
         if let language = language, !text.isEmpty {
@@ -157,11 +161,11 @@ extension MainWindowController {
             rendered = NSMutableAttributedString(string: text, attributes: diffCodeAttributes(color: color, background: nil))
         }
         if rendered.length > 0 {
-            rendered.addAttribute(.paragraphStyle, value: MomentermDesign.codeParagraphStyle(), range: NSRange(location: 0, length: rendered.length))
+            rendered.addAttribute(.paragraphStyle, value: MomentermDesign.diffCodeParagraphStyle(), range: NSRange(location: 0, length: rendered.length))
             rendered.addAttribute(.font, value: MomentermDesign.Fonts.diffCode, range: NSRange(location: 0, length: rendered.length))
         }
         if let background = background, rendered.length > 0 {
-            rendered.addAttribute(.backgroundColor, value: background, range: NSRange(location: 0, length: rendered.length))
+            rendered.addAttribute(.momentermDiffLineBackground, value: background, range: NSRange(location: 0, length: rendered.length))
         }
         if let inlineHighlight = inlineHighlight,
            let inlineHighlightColor = inlineHighlightColor,
@@ -175,7 +179,8 @@ extension MainWindowController {
             }
         }
         output.append(rendered)
-        appendDiffAttributed("\n", to: output, color: color, background: background)
+        let newline = NSMutableAttributedString(string: "\n", attributes: diffCodeAttributes(color: color, background: nil))
+        output.append(newline)
     }
 
     private func appendAttributed(_ value: String, to output: NSMutableAttributedString, color: NSColor, background: NSColor?) {

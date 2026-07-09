@@ -478,18 +478,16 @@ extension MainWindowController {
     private func hybridMonacoLine(forFileLine fileLine: Int) -> Int? {
         hybridModifiedFileLines.firstIndex(of: fileLine).map { $0 + 1 }
     }
-    // Shift+? / Shift+> in the Monaco diff → add a question/change comment at the caret's file line.
-    // Text is entered via a small native prompt so Monaco stays a read-only display surface.
-    func addHybridReviewComment(kind: String, monacoLine: Int) {
+    // Shift+? / Shift+> in the Monaco diff opens an inline Monaco view-zone draft. Saving the draft
+    // posts the text here, so the diff context is never interrupted by an NSAlert.
+    func addHybridReviewComment(kind: String, monacoLine: Int, text: String) {
         guard let path = hybridReviewFilePath, !path.isEmpty,
               let fileLine = hybridFileLine(forMonacoLine: monacoLine) else {
             return
         }
-        guard let text = promptReviewCommentText(kind: kind), !text.isEmpty else {
-            diffHybridView.postJSON(["type": "focusReview"])
-            return
-        }
-        reviewNotes.append(ReviewNote(kind: kind, path: path, line: fileLine, text: text))
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = kind == "question" ? "Question comment" : "Change request comment"
+        reviewNotes.append(ReviewNote(kind: kind, path: path, line: fileLine, text: trimmed.isEmpty ? fallback : trimmed))
         selectedReviewNoteIndex = reviewNotes.count - 1
         sendHybridReviewComments()
         populateMergedPromptSidePanelIfVisible()
@@ -523,21 +521,6 @@ extension MainWindowController {
         sendHybridReviewComments()
         populateMergedPromptSidePanelIfVisible()
         diffHybridView.postJSON(["type": "focusReview"])
-    }
-    private func promptReviewCommentText(kind: String) -> String? {
-        let alert = NSAlert()
-        alert.messageText = kind == "question" ? "질문 코멘트" : "수정 코멘트"
-        alert.informativeText = "이 변경에 남길 코멘트를 입력하세요."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        field.placeholderString = kind == "question" ? "무엇이 궁금한가요?" : "무엇을 바꿔야 하나요?"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "추가")
-        alert.addButton(withTitle: "취소")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            return nil
-        }
-        return field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     private func confirmReviewCommentDeletion() -> Bool {
         let alert = NSAlert()
