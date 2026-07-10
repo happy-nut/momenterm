@@ -23,7 +23,7 @@ extension MainWindowController {
             && !flags.contains(.command)
             && !flags.contains(.control)
             && !flags.contains(.shift)
-        setWorkspaceShortcutHintsVisible(optionOnly)
+        setWorkspaceShortcutHintsVisible(optionOnly && !promptPanelsConsumeOptionWorkspaceShortcuts())
     }
 
     private func shortcutEventTargetsCurrentWindow(_ event: NSEvent) -> Bool {
@@ -63,6 +63,17 @@ extension MainWindowController {
         let option = flags.contains(.option)
         let shift = flags.contains(.shift)
         let terminalFocused = terminalIsFirstResponderForSmokeTest()
+
+        if command, shift, !control, !option {
+            if event.keyCode == 33 || lowerKey == "[" || typedKey == "{" {
+                focusTerminalTab(delta: -1)
+                return true
+            }
+            if event.keyCode == 30 || lowerKey == "]" || typedKey == "}" {
+                focusTerminalTab(delta: 1)
+                return true
+            }
+        }
 
         // Phase 2 of the merged-prompt send: the panel is closed and the user is picking which terminal
         // pane to insert into. Arrow keys move the selection, Enter inserts, Esc cancels; other keys are
@@ -119,7 +130,14 @@ extension MainWindowController {
             }
         }
 
+        if command, !option, !control, (overlayMode == .files || overlayMode == .changes),
+           let delta = codeFontShortcutDelta(event: event, key: key, typedKey: typedKey, lowerKey: lowerKey, shift: shift) {
+            adjustCodeFontSize(delta: delta)
+            return true
+        }
+
         if option, !command, !control, !shift,
+           !promptPanelsConsumeOptionWorkspaceShortcuts(),
            let workspaceIndex = workspaceShortcutIndex(forKeyCode: event.keyCode),
            activateWorkspaceShortcut(at: workspaceIndex) {
             return true
@@ -142,10 +160,9 @@ extension MainWindowController {
             return true
         }
 
-        // Option+Enter no longer sends immediately. It closes the merged prompt and enters pane-
-        // selection mode (see the early pane-selection block), so the terminal is never written to or
-        // focused until the user picks a pane and presses Enter.
-        if option, !command, !control, !shift, (event.keyCode == 36 || event.keyCode == 76), beginMergedPromptPaneSelection() {
+        // Option+Enter in prompt memo / merged prompt is owned by the prompt panel. Full selection and
+        // comment-cursor cases show a local dropdown; otherwise it enters terminal pane selection.
+        if option, !command, !control, !shift, (event.keyCode == 36 || event.keyCode == 76), handlePromptPanelOptionEnter() {
             return true
         }
         if option, !command, !control, !shift, (event.keyCode == 36 || event.keyCode == 76), httpRunner.runRequestAtCaretIfAvailable() {
@@ -251,15 +268,6 @@ extension MainWindowController {
         }
 
         if command, shift, !control, !option {
-            // Cmd+Shift+[ / ] cycles terminal tabs (works while the send-target picker is open).
-            if event.keyCode == 33 {
-                focusTerminalTab(delta: -1)
-                return true
-            }
-            if event.keyCode == 30 {
-                focusTerminalTab(delta: 1)
-                return true
-            }
             if typedKey == "?" || lowerKey == "/" || event.keyCode == 44 {
                 openMergedView(kind: "q")
                 return true
@@ -402,12 +410,13 @@ extension MainWindowController {
         }
 
         if !option, shift {
+            if typedKey == "<" || key == "<" || (lowerKey == "," && event.keyCode == 43) {
+                openMemo()
+                return true
+            }
             switch lowerKey {
             case "f":
                 openQuickOpen(mode: .content)
-                return true
-            case "n":
-                openMemo()
                 return true
             case "'":
                 toggleOverlayMaximized()
@@ -694,7 +703,7 @@ extension MainWindowController {
         }
     }
 
-    private func focusActiveDiffReviewPane() {
+    func focusActiveDiffReviewPane() {
         guard overlayMode == .changes else {
             return
         }
@@ -723,6 +732,24 @@ extension MainWindowController {
             scroll.contentView.scroll(to: NSPoint(x: origin.x, y: max(0, origin.y + CGFloat(delta) * visible * 0.9)))
             scroll.reflectScrolledClipView(scroll.contentView)
         }
+    }
+
+    private func codeFontShortcutDelta(event: NSEvent, key: String, typedKey: String, lowerKey: String, shift: Bool) -> Int? {
+        let typed = typedKey.lowercased()
+        if typed == "+"
+            || key == "+"
+            || event.keyCode == 69
+            || lowerKey == "="
+            || event.keyCode == 24 {
+            return 1
+        }
+        if typed == "-"
+            || lowerKey == "-"
+            || event.keyCode == 27
+            || event.keyCode == 78 {
+            return -1
+        }
+        return nil
     }
 
 

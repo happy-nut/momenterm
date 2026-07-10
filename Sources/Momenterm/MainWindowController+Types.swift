@@ -439,6 +439,12 @@ extension MainWindowController {
         let body: String
         let notes: [ReviewNote]
         let emptyMessage: String
+        let noteRanges: [MergedPromptNoteRange]
+    }
+
+    struct MergedPromptNoteRange {
+        let noteIndex: Int
+        let range: NSRange
     }
 
 }

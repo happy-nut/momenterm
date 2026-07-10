@@ -55,12 +55,12 @@ html,body,#editor{height:100%;background:var(--mtm-darcula-editor);overflow:hidd
 .monaco-diff-editor .margin-view-overlays .line-numbers{
   visibility:hidden!important;color:transparent!important;
 }
-.monaco-editor .current-line{border:0!important;background:rgba(50,66,82,0.34)!important;}
+.monaco-editor .current-line{border:0!important;background:rgba(50,66,82,0.14)!important;}
 .monaco-editor .cursors-layer .cursor{background-color:#A9B7C6!important;border-color:#A9B7C6!important;}
 /* IntelliJ-style VCS tints stay visible but never read as selected text. */
-.mtm-added-line{background-color:var(--mtm-add-line,rgba(41,68,54,0.34))!important;}
-.mtm-deleted-line{background-color:var(--mtm-del-line,rgba(74,45,45,0.34))!important;}
-.mtm-modified-line{background-color:var(--mtm-mod-line,rgba(43,58,82,0.28))!important;}
+.mtm-added-line{background-color:var(--mtm-add-line,rgba(41,68,54,0.16))!important;}
+.mtm-deleted-line{background-color:var(--mtm-del-line,rgba(74,45,45,0.16))!important;}
+.mtm-modified-line{background-color:var(--mtm-mod-line,rgba(43,58,82,0.20))!important;}
 .monaco-editor .margin-view-overlays .mtm-added-edge{
   background:linear-gradient(to right,var(--mtm-add-edge,#629755) 0 2px,transparent 2px)!important;
 }
@@ -70,14 +70,14 @@ html,body,#editor{height:100%;background:var(--mtm-darcula-editor);overflow:hidd
 .monaco-editor .margin-view-overlays .mtm-modified-edge{
   background:linear-gradient(to right,var(--mtm-mod-edge,#6897BB) 0 2px,transparent 2px)!important;
 }
-.monaco-editor .margin-view-overlays .mtm-added-margin{background-color:var(--mtm-add-line,rgba(41,68,54,0.34))!important;}
-.monaco-editor .margin-view-overlays .mtm-deleted-margin{background-color:var(--mtm-del-line,rgba(74,45,45,0.34))!important;}
-.monaco-editor .margin-view-overlays .mtm-modified-margin{background-color:var(--mtm-mod-line,rgba(43,58,82,0.28))!important;}
-.mtm-modified-token{background-color:var(--mtm-mod-token,rgba(104,151,187,0.36))!important;border-radius:0;}
+.monaco-editor .margin-view-overlays .mtm-added-margin{background-color:var(--mtm-add-line,rgba(41,68,54,0.16))!important;}
+.monaco-editor .margin-view-overlays .mtm-deleted-margin{background-color:var(--mtm-del-line,rgba(74,45,45,0.16))!important;}
+.monaco-editor .margin-view-overlays .mtm-modified-margin{background-color:var(--mtm-mod-line,rgba(43,58,82,0.20))!important;}
+.mtm-modified-token{background-color:var(--mtm-mod-token,rgba(104,151,187,0.20))!important;border-radius:0;}
 .mtm-active-hunk-line{
-  background-color:var(--mtm-active-hunk-line,rgba(44,64,75,0.34))!important;
+  background-color:var(--mtm-active-hunk-line,rgba(44,64,75,0.18))!important;
 }
-.monaco-editor .margin-view-overlays .mtm-active-hunk-margin{background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.34))!important;}
+.monaco-editor .margin-view-overlays .mtm-active-hunk-margin{background-color:var(--mtm-active-hunk-margin,rgba(44,64,75,0.18))!important;}
 .monaco-editor .margin-view-overlays .mtm-active-hunk-gutter{
   background-color:transparent!important;
 }
@@ -105,7 +105,7 @@ var _diffEditor=null,_loaded=false,_pending=null,_fontSize=13,_lineHeight=18;
 var _centerGutterNode=null,_centerGutterSvg=null,_centerGutterRaf=0,_centerGutterWired=false;
 var _bottomSpacerZoneIds={original:null,modified:null},_bottomSpacerSignature='';
 var _authoritativeLineDiffs={original:[],modified:[]};
-var _modifiedLineFill='rgba(43,58,82,0.28)',_activeLineFill='rgba(44,64,75,0.34)',_activeHunkEdge='#6897BB';
+var _modifiedLineFill='rgba(43,58,82,0.20)',_activeLineFill='rgba(44,64,75,0.18)',_activeHunkEdge='#6897BB';
 
 // Surface any hard failure on-screen instead of silently sitting on "Loading diff…".
 window.onerror=function(message,source,lineno,colno){
@@ -137,15 +137,17 @@ window.addEventListener('message',function(e){
   else if(msg.type==='focusReview')focusReview();
   else if(msg.type==='showLastHunkHint')showLastHunkHint(msg.text);
   else if(msg.type==='setComments')renderComments(msg.comments||[],msg.theme);
+  else if(msg.type==='showCommentDraft')showCommentDraft(msg.kind||'question',msg.line||_reviewLine,msg.text||'',msg.id);
 });
 
 // The comment view zone reproduces the native NativeInlineReviewCommentBox: 6px radius, panelBackground
 // fill, a 1px panelBorder that thickens to a 2px accent when the caret selects it, and a kind-colored
 // "Question" / "Change request" title above the body. Colors arrive from the native theme (setComments),
 // cached so plain re-renders (selection changes) keep them without another palette round-trip.
-var _commentZoneIds=[],_commentTheme=null,_commentDraftZoneId=null,_commentDraftNode=null,_commentDraftLine=1,_commentDraftKind='question';
+var _commentZoneIds=[],_commentTheme=null,_commentItems=[],_commentDraftZoneId=null,_commentDraftNode=null,_commentDraftLine=1,_commentDraftKind='question',_commentDraftEditId=null;
 function renderComments(comments,theme){
   if(theme)_commentTheme=theme;
+  _commentItems=(comments||[]).slice();
   var t=_commentTheme||{};
   var bg=t.boxBackground||'#262628',border=t.boxBorder||'#3a3a3a',selBorder=t.selectedBorder||'#4a9d5b';
   var qAccent=t.questionAccent||'#c8a24a',cAccent=t.changeAccent||'#4a9d5b',bodyColor=t.bodyText||'#e6e6e6';
@@ -154,10 +156,11 @@ function renderComments(comments,theme){
     _commentZoneIds.forEach(function(id){accessor.removeZone(id);});
     _commentZoneIds=[];
     comments.forEach(function(c){
+      if(_commentDraftEditId!==null&&String(c.id)===String(_commentDraftEditId))return;
       var isQ=c.kind==='question';
       var accent=isQ?qAccent:cAccent;
       var box=document.createElement('div');
-      box.style.cssText='margin:3px 10px 8px 44px;border-radius:6px;overflow:hidden;'+
+      box.style.cssText='margin:3px 10px 8px 0;border-radius:6px;overflow:hidden;pointer-events:auto;'+
         'background:'+bg+';border:'+(c.selected?('2px solid '+selBorder):('1px solid '+border))+';'+
         'box-shadow:0 2px 8px rgba(0,0,0,0.28);font:13px -apple-system,sans-serif;';
       var head=document.createElement('div');
@@ -185,6 +188,8 @@ function removeCommentDraft(refocus){
   }
   _commentDraftZoneId=null;
   _commentDraftNode=null;
+  _commentDraftEditId=null;
+  if(_commentItems.length)renderComments(_commentItems);
   if(refocus)focusReview();
 }
 
@@ -200,19 +205,33 @@ function commentThemeColors(){
   };
 }
 
-function showCommentDraft(kind,line){
+function stopCommentUiEvent(e){
+  if(!e)return;
+  e.stopPropagation();
+  if(e.stopImmediatePropagation)e.stopImmediatePropagation();
+}
+
+function showCommentDraft(kind,line,text,editId){
   var ed=modifiedEditor();if(!ed)return;
   removeCommentDraft(false);
   _commentDraftKind=kind||'question';
   _commentDraftLine=Math.max(1,+line||_reviewLine||1);
+  _commentDraftEditId=(editId===undefined||editId===null)?null:editId;
+  if(_commentItems.length)renderComments(_commentItems);
   var colors=commentThemeColors();
   var isQ=_commentDraftKind==='question';
   var accent=isQ?colors.question:colors.change;
   var box=document.createElement('div');
   box.className='mtm-comment-draft';
-  box.style.cssText='margin:3px 10px 8px 44px;border-radius:6px;overflow:hidden;'+
+  box.style.cssText='margin:3px 10px 8px 0;border-radius:6px;overflow:hidden;pointer-events:auto;'+
     'background:'+colors.bg+';border:2px solid '+accent+';'+
     'box-shadow:0 4px 14px rgba(0,0,0,0.32);font:13px -apple-system,sans-serif;';
+  ['keydown','keyup','keypress','mousedown','mouseup','click','pointerdown','pointerup'].forEach(function(name){
+    box.addEventListener(name,function(e){
+      if(name==='keydown'&&handleCommentDraftKeydown(e))return;
+      stopCommentUiEvent(e);
+    },false);
+  });
   var head=document.createElement('div');
   head.style.cssText='display:flex;align-items:center;gap:10px;padding:7px 10px 0;';
   var title=document.createElement('div');
@@ -224,23 +243,28 @@ function showCommentDraft(kind,line){
   var close=document.createElement('button');
   close.type='button';close.textContent='×';
   close.style.cssText='width:20px;height:20px;border:0;background:transparent;color:#aaa;font:16px -apple-system,sans-serif;cursor:pointer;';
-  close.onclick=function(){removeCommentDraft(true);};
+  close.onclick=function(e){stopCommentUiEvent(e);removeCommentDraft(true);};
   head.appendChild(title);head.appendChild(hint);head.appendChild(close);
   var textarea=document.createElement('textarea');
   textarea.placeholder=isQ?'무엇이 궁금한가요?':'무엇을 바꿔야 하나요?';
+  textarea.value=text||'';
   textarea.style.cssText='display:block;width:calc(100% - 16px);height:58px;margin:6px 8px 0;resize:none;'+
     'border:0;outline:none;border-radius:4px;padding:7px 8px;background:#1e1e1e;color:'+colors.body+';'+
     'font:13px/1.42 -apple-system,sans-serif;';
+  textarea.addEventListener('keydown',function(e){
+    if(handleCommentDraftKeydown(e))return;
+    stopCommentUiEvent(e);
+  },true);
   var actions=document.createElement('div');
   actions.style.cssText='display:flex;justify-content:flex-end;gap:8px;padding:7px 8px 8px;';
   var cancel=document.createElement('button');
   cancel.type='button';cancel.textContent='Cancel';
   cancel.style.cssText='border:1px solid '+colors.border+';background:transparent;color:'+colors.body+';border-radius:5px;padding:4px 10px;font:600 12px -apple-system,sans-serif;cursor:pointer;';
-  cancel.onclick=function(){removeCommentDraft(true);};
+  cancel.onclick=function(e){stopCommentUiEvent(e);removeCommentDraft(true);};
   var save=document.createElement('button');
   save.type='button';save.textContent='Add';
   save.style.cssText='border:1px solid '+accent+';background:'+accent+';color:#111;border-radius:5px;padding:4px 12px;font:700 12px -apple-system,sans-serif;cursor:pointer;';
-  save.onclick=function(){submitCommentDraft();};
+  save.onclick=function(e){stopCommentUiEvent(e);submitCommentDraft();};
   actions.appendChild(cancel);actions.appendChild(save);
   box.appendChild(head);box.appendChild(textarea);box.appendChild(actions);
   _commentDraftNode=box;
@@ -253,13 +277,14 @@ function showCommentDraft(kind,line){
   });
   ed.revealLineInCenterIfOutside(_commentDraftLine);
   setTimeout(function(){textarea.focus();textarea.select();},0);
+  setTimeout(function(){textarea.focus();},50);
 }
 
 function submitCommentDraft(){
   if(!_commentDraftNode)return;
   var field=_commentDraftNode.querySelector('textarea');
   var text=(field&&field.value||'').trim();
-  postToNative('reviewComment',{kind:_commentDraftKind,line:_commentDraftLine,text:text});
+  postToNative('reviewComment',{kind:_commentDraftKind,line:_commentDraftLine,text:text,id:_commentDraftEditId});
   removeCommentDraft(true);
 }
 
@@ -445,12 +470,12 @@ function hexToRgba(hex,a){
 // the native diff pane. Applied as CSS variables the decoration classes read.
 function applyModifiedDiffColors(msg){
   var root=document.documentElement.style;
-  _modifiedLineFill=hexToRgba(msg.modifiedLineBackground||'#2B3A52',0.28);
+  _modifiedLineFill=hexToRgba(msg.modifiedLineBackground||'#2B3A52',0.20);
   root.setProperty('--mtm-mod-line',_modifiedLineFill);
-  root.setProperty('--mtm-mod-token',hexToRgba(msg.modifiedTokenBackground||'#6897BB',0.36));
+  root.setProperty('--mtm-mod-token',hexToRgba(msg.modifiedTokenBackground||'#6897BB',0.20));
   root.setProperty('--mtm-mod-edge',msg.modifiedTokenBackground||'#6897BB');
-  root.setProperty('--mtm-add-line',hexToRgba(msg.addedLineBackground||'#294436',0.34));
-  root.setProperty('--mtm-del-line',hexToRgba(msg.deletedLineBackground||'#4A2D2D',0.34));
+  root.setProperty('--mtm-add-line',hexToRgba(msg.addedLineBackground||'#294436',0.16));
+  root.setProperty('--mtm-del-line',hexToRgba(msg.deletedLineBackground||'#4A2D2D',0.16));
 }
 function normalizeLineDiffs(raw){
   if(!Array.isArray(raw))return [];
@@ -703,8 +728,8 @@ function cssVarColor(name,fallback){
 }
 
 function resolvedLineDiffFill(kind){
-  if(kind==='added')return cssVarColor('--mtm-add-line','rgba(41,68,54,0.34)');
-  if(kind==='deleted')return cssVarColor('--mtm-del-line','rgba(74,45,45,0.34)');
+  if(kind==='added')return cssVarColor('--mtm-add-line','rgba(41,68,54,0.16)');
+  if(kind==='deleted')return cssVarColor('--mtm-del-line','rgba(74,45,45,0.16)');
   return cssVarColor('--mtm-mod-line','rgba(43,58,82,0.28)');
 }
 
@@ -739,7 +764,7 @@ function drawCenterChangeBlocks(geometry,origEd,modEd,hostRect){
       newSpan=anchor?{top:anchor.top,bottom:anchor.top+oldSpan.height,height:oldSpan.height}:{top:oldSpan.top,bottom:oldSpan.bottom,height:oldSpan.height};
     }
     if(!oldSpan||!newSpan)return;
-    var fill=changeIntersectsActive(ch)?'rgba(44,64,75,0.58)':(hasOld&&hasNew?'rgba(43,58,82,0.34)':(hasNew?'rgba(41,68,54,0.34)':'rgba(74,45,45,0.34)'));
+    var fill=changeIntersectsActive(ch)?'rgba(44,64,75,0.22)':(hasOld&&hasNew?'rgba(43,58,82,0.20)':(hasNew?'rgba(41,68,54,0.16)':'rgba(74,45,45,0.16)'));
     drawPlaceholderGap(geometry,oldSpan,newSpan);
     appendSvgConnector(geometry.bandLeft,geometry.bandRight,oldSpan,newSpan,fill);
   });
@@ -765,7 +790,7 @@ function drawActiveCenterBlock(geometry,origEd,modEd,hostRect){
   var newSpan=activeSideSpan(modEd,_activeHunk.modifiedStartLine,_activeHunk.modifiedEndLine,hostRect,oldSpan);
   if(!oldSpan&&newSpan)oldSpan={top:newSpan.top,bottom:newSpan.bottom,height:newSpan.height};
   if(!oldSpan||!newSpan)return;
-  var fill='rgba(44,64,75,0.58)';
+  var fill='rgba(44,64,75,0.22)';
   drawPlaceholderGap(geometry,oldSpan,newSpan);
   appendSvgConnector(geometry.bandLeft,geometry.bandRight,oldSpan,newSpan,fill);
 }
@@ -835,6 +860,7 @@ function applyModifiedLineDecorations(){
     });
   }
   changes.forEach(function(ch){
+    if(!(ch.originalEndLineNumber>0&&ch.modifiedEndLineNumber>0))return;
     (ch.charChanges||[]).forEach(function(cc){
       if(cc.originalEndColumn>cc.originalStartColumn)
         origDecos.push({range:new monaco.Range(cc.originalStartLineNumber,cc.originalStartColumn,cc.originalEndLineNumber,cc.originalEndColumn),
@@ -884,7 +910,7 @@ function setActiveHunk(msg){
     var root=document.documentElement.style;
     var bg=msg.activeHunkBackground||'#2c404b';
     var edge=msg.activeHunkEdge||'#6897BB';
-    _activeLineFill=hexToRgba(bg,0.34);
+    _activeLineFill=hexToRgba(bg,0.18);
     _activeHunkEdge=edge;
     root.setProperty('--mtm-active-hunk-line',_activeLineFill);
     root.setProperty('--mtm-active-hunk-margin',_activeLineFill);
@@ -1034,6 +1060,7 @@ document.addEventListener('keydown',function(e){
   if(!_diffEditor)return;
   if(_commentDraftNode&&_commentDraftNode.contains(e.target)){
     handleCommentDraftKeydown(e);
+    stopCommentUiEvent(e);
     return;
   }
   if(e.metaKey&&(e.key==='b'||e.key==='B')){         // Cmd+B → find usages of the symbol under the cursor
@@ -1061,6 +1088,10 @@ document.addEventListener('keydown',function(e){
   }
   if(e.shiftKey&&(e.key==='>'||e.key==='.')){         // Shift+> → change/fix comment
     showCommentDraft('change',_reviewLine);
+    e.preventDefault();e.stopPropagation();return;
+  }
+  if(!e.metaKey&&!e.ctrlKey&&!e.altKey&&!e.shiftKey&&(e.key==='e'||e.key==='E')){
+    postToNative('reviewEditComment',{line:_reviewLine});
     e.preventDefault();e.stopPropagation();return;
   }
   if(e.key==='Backspace'){                            // delete the comment selected at the cursor

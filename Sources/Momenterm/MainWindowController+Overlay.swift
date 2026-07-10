@@ -84,10 +84,20 @@ extension MainWindowController {
             return false
         }
         let restoreRoot = URL(fileURLWithPath: restoreRootPath).standardizedFileURL
-        root = restoreRoot
-        if fileListingRoot == nil {
-            fileListingRoot = restoreRoot
+        let restoreRootNormalized = normalizedWorkspacePath(restoreRoot.path)
+        let hasRestorableDocument =
+            (fileListingDocument != nil && normalizedWorkspacePath(fileListingRoot?.path) == restoreRootNormalized)
+            || (currentDocument?.isGitRepository == true && normalizedWorkspacePath(currentDocument?.root) == restoreRootNormalized)
+        let hasRestorableLoad =
+            isLoadingFileListing && normalizedWorkspacePath(fileListingRoot?.path) == restoreRootNormalized
+        guard hasRestorableDocument || hasRestorableLoad else {
+            hiddenFilesOverlayRootPath = nil
+            hiddenFilesOverlayWorkspaceId = nil
+            hiddenFilesOverlayWorkspacePath = nil
+            return false
         }
+        root = restoreRoot
+        fileListingRoot = fileListingRoot ?? restoreRoot
         hiddenFilesOverlayRootPath = nil
         hiddenFilesOverlayWorkspaceId = nil
         hiddenFilesOverlayWorkspacePath = nil
@@ -100,6 +110,9 @@ extension MainWindowController {
         overlayView.isHidden = false
         overlayBackdrop.isHidden = true
         applyOverlayMaximizedState()
+        if hasRestorableLoad || overlaySubtitleLabel.stringValue == "Loading" || overlaySubtitleLabel.stringValue == "Indexing" {
+            populateOverlay()
+        }
         window?.contentView?.layoutSubtreeIfNeeded()
         focusFileSidebar()
         return true

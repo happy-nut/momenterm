@@ -16,6 +16,7 @@ extension MainWindowController {
         if statsBarEnabled {
             systemStatsBar.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(systemStatsBar)
+            configurePromptPanelToolbar(in: contentView)
             applySystemStatsBarTheme()
         }
 
@@ -44,9 +45,25 @@ extension MainWindowController {
                 systemStatsBar.leadingAnchor.constraint(equalTo: railView.trailingAnchor),
                 systemStatsBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
                 systemStatsBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-                systemStatsBar.heightAnchor.constraint(equalToConstant: 24)
+                systemStatsBar.heightAnchor.constraint(equalToConstant: 24),
+
+                promptPanelToolbarStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
+                promptPanelToolbarStack.centerYAnchor.constraint(equalTo: systemStatsBar.centerYAnchor)
             ])
         }
+    }
+
+    private func configurePromptPanelToolbar(in contentView: NSView) {
+        promptPanelToolbarStack.translatesAutoresizingMaskIntoConstraints = false
+        promptPanelToolbarStack.orientation = .horizontal
+        promptPanelToolbarStack.alignment = .centerY
+        promptPanelToolbarStack.spacing = 4
+        promptPanelToolbarStack.setViews([
+            smallIconButton(symbol: "square.and.pencil", fallback: "M", action: #selector(showMemoAction), label: "Prompt Memo", shortcut: "Cmd+Shift+<"),
+            smallIconButton(symbol: "questionmark.bubble", fallback: "Q", action: #selector(showQuestionsAction), label: "Questions", shortcut: "Cmd+Shift+?"),
+            smallIconButton(symbol: "text.bubble", fallback: "C", action: #selector(showChangeRequestsAction), label: "Change Requests", shortcut: "Cmd+Shift+>")
+        ], in: .leading)
+        contentView.addSubview(promptPanelToolbarStack)
     }
 
     private func applySystemStatsBarTheme() {
@@ -85,15 +102,27 @@ extension MainWindowController {
         }
         for label in railActionTitleLabels { label.textColor = theme.primaryText }
         for label in railActionShortcutLabels { label.textColor = theme.secondaryText }
+        for button in collectButtons(in: promptPanelToolbarStack) {
+            button.contentTintColor = theme.primaryText
+        }
         rebuildWorkspaceButtons()
         terminalView.layer?.backgroundColor = theme.terminalBackground.cgColor
+        terminalTabStack.layer?.backgroundColor = theme.inactiveHeaderBackground.cgColor
         terminalStatusLabel.textColor = theme.secondaryText
         terminalPaneSplitView.layer?.backgroundColor = theme.terminalBackground.cgColor
         overlayView.layer?.backgroundColor = theme.panelBackground.cgColor
         overlayView.layer?.borderColor = theme.panelBorder.cgColor
         overlayTitleLabel.textColor = theme.primaryText
         overlaySubtitleLabel.textColor = theme.tertiaryText
-        for button in [sourceViewModeRawButton, sourceViewModeSideButton, sourceViewModeRenderedButton] {
+        for button in [
+            sourceViewModeRawButton,
+            sourceViewModeSideButton,
+            sourceViewModeRenderedButton,
+            fileCodeFontDecreaseButton,
+            fileCodeFontIncreaseButton,
+            diffCodeFontDecreaseButton,
+            diffCodeFontIncreaseButton
+        ] {
             button.contentTintColor = theme.secondaryText
         }
         overlayContentView.layer?.backgroundColor = theme.panelBackground.cgColor
@@ -101,6 +130,7 @@ extension MainWindowController {
         diffEditorPathLabel.textColor = theme.primaryText
         diffEditorStatusLabel.textColor = theme.secondaryText
         diffEditorCurrentVersionCheckbox.contentTintColor = theme.secondaryText
+        updateCodeFontControls()
         sourcePreviewDocumentView.layer?.backgroundColor = theme.panelBackground.cgColor
         sourcePreviewImageView.layer?.backgroundColor = theme.terminalBackground.cgColor
         overlaySettingsScrollView.documentView?.layer?.backgroundColor = theme.panelBackground.cgColor
@@ -127,6 +157,7 @@ extension MainWindowController {
         }
 
         // (b) Transient views — rebuild against the new theme.
+        rebuildTerminalTabs()
         rebuildTerminalPanes()
         if overlayMode != .hidden {
             populateOverlay()
@@ -231,6 +262,62 @@ extension MainWindowController {
                 button.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.iconButtonSize)
             ])
         }
+        func configureCodeFontButton(
+            _ button: MomentermCompactButton,
+            symbol: String,
+            fallback: String,
+            label: String,
+            shortcut: String,
+            action: Selector,
+            size: CGFloat = MomentermDesign.Metrics.iconButtonSize
+        ) {
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.compactSize = NSSize(width: size, height: size)
+            button.bezelStyle = .regularSquare
+            button.isBordered = false
+            button.imageScaling = .scaleProportionallyDown
+            button.controlSize = .small
+            button.wantsLayer = true
+            button.layer?.cornerRadius = 4
+            button.target = self
+            button.action = action
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            button.imagePosition = .imageOnly
+            if button.image == nil {
+                button.title = fallback
+                button.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            }
+            button.toolTip = tooltipText(label: label, shortcut: shortcut)
+            button.contentTintColor = theme.secondaryText
+            button.setContentHuggingPriority(.required, for: .horizontal)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: size),
+                button.heightAnchor.constraint(equalToConstant: size)
+            ])
+        }
+        configureCodeFontButton(
+            fileCodeFontDecreaseButton,
+            symbol: "textformat.size.smaller",
+            fallback: "A-",
+            label: "Decrease code font size",
+            shortcut: "Cmd+-",
+            action: #selector(decreaseCodeFontSizeAction)
+        )
+        configureCodeFontButton(
+            fileCodeFontIncreaseButton,
+            symbol: "textformat.size.larger",
+            fallback: "A+",
+            label: "Increase code font size",
+            shortcut: "Cmd++",
+            action: #selector(increaseCodeFontSizeAction)
+        )
+        fileCodeFontControlStack.translatesAutoresizingMaskIntoConstraints = false
+        fileCodeFontControlStack.orientation = .horizontal
+        fileCodeFontControlStack.spacing = 2
+        fileCodeFontControlStack.setViews([fileCodeFontDecreaseButton, fileCodeFontIncreaseButton], in: .leading)
+        fileCodeFontControlStack.setContentHuggingPriority(.required, for: .horizontal)
+        fileCodeFontControlStack.setContentCompressionResistancePriority(.required, for: .horizontal)
         let sourceModeShortcut = "⌃Tab / ⌃⇧Tab"
         configureSourceViewModeButton(sourceViewModeRawButton, symbol: "chevron.left.slash.chevron.right", fallback: "Raw", label: "Raw source", shortcut: sourceModeShortcut, mode: .raw)
         configureSourceViewModeButton(sourceViewModeSideButton, symbol: "rectangle.split.2x1", fallback: "Side", label: "Side by side", shortcut: sourceModeShortcut, mode: .side)
@@ -242,7 +329,15 @@ extension MainWindowController {
         sourceViewModeButtonStack.isHidden = true
         sourceViewModeButtonStack.setContentHuggingPriority(.required, for: .horizontal)
         sourceViewModeButtonStack.setContentCompressionResistancePriority(.required, for: .horizontal)
-        header.addSubview(sourceViewModeButtonStack)
+        fileHeaderControlStack.translatesAutoresizingMaskIntoConstraints = false
+        fileHeaderControlStack.orientation = .horizontal
+        fileHeaderControlStack.alignment = .centerY
+        fileHeaderControlStack.spacing = 8
+        fileHeaderControlStack.setViews([fileCodeFontControlStack, sourceViewModeButtonStack], in: .leading)
+        fileHeaderControlStack.isHidden = true
+        fileHeaderControlStack.setContentHuggingPriority(.required, for: .horizontal)
+        fileHeaderControlStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        header.addSubview(fileHeaderControlStack)
 
         // Hairline under the overlay header: one consistent divider so every overlay
         // (diff / files / history / settings) has the same chrome rhythm separating
@@ -315,6 +410,31 @@ extension MainWindowController {
         diffEditorToolbarStack.addArrangedSubview(diffToolbarActionIcon(symbol: "chevron.down", action: #selector(diffToolbarNextHunkAction), tooltip: "Next change (F7)"))
         diffEditorToolbarStack.addArrangedSubview(diffToolbarActionIcon(symbol: "arrow.up.to.line", action: #selector(diffToolbarPrevFileAction), tooltip: "Previous file"))
         diffEditorToolbarStack.addArrangedSubview(diffToolbarActionIcon(symbol: "arrow.down.to.line", action: #selector(diffToolbarNextFileAction), tooltip: "Next file"))
+        configureCodeFontButton(
+            diffCodeFontDecreaseButton,
+            symbol: "textformat.size.smaller",
+            fallback: "A-",
+            label: "Decrease code font size",
+            shortcut: "Cmd+-",
+            action: #selector(decreaseCodeFontSizeAction),
+            size: 18
+        )
+        configureCodeFontButton(
+            diffCodeFontIncreaseButton,
+            symbol: "textformat.size.larger",
+            fallback: "A+",
+            label: "Increase code font size",
+            shortcut: "Cmd++",
+            action: #selector(increaseCodeFontSizeAction),
+            size: 18
+        )
+        diffCodeFontControlStack.translatesAutoresizingMaskIntoConstraints = false
+        diffCodeFontControlStack.orientation = .horizontal
+        diffCodeFontControlStack.spacing = 2
+        diffCodeFontControlStack.setViews([diffCodeFontDecreaseButton, diffCodeFontIncreaseButton], in: .leading)
+        diffCodeFontControlStack.setContentHuggingPriority(.required, for: .horizontal)
+        diffCodeFontControlStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        diffEditorToolbarStack.addArrangedSubview(diffCodeFontControlStack)
         diffEditorChromeView.addSubview(diffEditorToolbarStack)
 
         diffEditorPathLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -442,12 +562,18 @@ extension MainWindowController {
             let kind = (dict["kind"] as? String) ?? "question"
             let line = (dict["line"] as? Int) ?? Int((dict["line"] as? Double) ?? 1)
             let text = (dict["text"] as? String) ?? ""
-            self.addHybridReviewComment(kind: kind, monacoLine: max(1, line), text: text)
+            let rawId = (dict["id"] as? Int) ?? Int((dict["id"] as? Double) ?? -1)
+            self.addHybridReviewComment(kind: kind, monacoLine: max(1, line), text: text, replacing: rawId >= 0 ? rawId : nil)
         }
         diffHybridView.registerMessageHandler(name: "reviewDeleteComment") { [weak self] body in
             guard let self = self, let dict = body as? [String: Any] else { return }
             let line = (dict["line"] as? Int) ?? Int((dict["line"] as? Double) ?? 1)
             self.deleteHybridReviewCommentAtCursor(monacoLine: max(1, line))
+        }
+        diffHybridView.registerMessageHandler(name: "reviewEditComment") { [weak self] body in
+            guard let self = self, let dict = body as? [String: Any] else { return }
+            let line = (dict["line"] as? Int) ?? Int((dict["line"] as? Double) ?? 1)
+            self.editHybridReviewCommentAtCursor(monacoLine: max(1, line))
         }
         // Cmd+B / Cmd+↓ over the Monaco diff bridge the symbol under the cursor to find-usages /
         // go-to-declaration (Monaco owns focus, so these never reach the Swift key monitor).
@@ -582,10 +708,10 @@ extension MainWindowController {
             fileTabBarView.leadingAnchor.constraint(equalTo: overlayContentView.leadingAnchor),
             fileTabBarView.trailingAnchor.constraint(equalTo: overlayContentView.trailingAnchor),
             fileTabBarHeightConstraint!,
-            fileTabScrollView.topAnchor.constraint(equalTo: fileTabBarView.topAnchor, constant: 3),
+            fileTabScrollView.topAnchor.constraint(equalTo: fileTabBarView.topAnchor, constant: 2),
             fileTabScrollView.leadingAnchor.constraint(equalTo: fileTabBarView.leadingAnchor, constant: 7),
             fileTabScrollView.trailingAnchor.constraint(equalTo: fileTabBarView.trailingAnchor, constant: -7),
-            fileTabScrollView.bottomAnchor.constraint(equalTo: fileTabBarView.bottomAnchor, constant: -3),
+            fileTabScrollView.bottomAnchor.constraint(equalTo: fileTabBarView.bottomAnchor, constant: -2),
             fileTabDocumentView.heightAnchor.constraint(equalTo: fileTabScrollView.contentView.heightAnchor),
             fileTabDocumentView.widthAnchor.constraint(greaterThanOrEqualTo: fileTabScrollView.contentView.widthAnchor),
             fileTabStack.topAnchor.constraint(equalTo: fileTabDocumentView.topAnchor),
@@ -650,11 +776,11 @@ extension MainWindowController {
             overlayTitleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
             overlaySubtitleLabel.leadingAnchor.constraint(equalTo: overlayTitleLabel.trailingAnchor, constant: 12),
-            overlaySubtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: sourceViewModeButtonStack.leadingAnchor, constant: -10),
+            overlaySubtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: fileHeaderControlStack.leadingAnchor, constant: -10),
             overlaySubtitleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
-            sourceViewModeButtonStack.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -10),
-            sourceViewModeButtonStack.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
+            fileHeaderControlStack.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -10),
+            fileHeaderControlStack.centerYAnchor.constraint(equalTo: header.centerYAnchor, constant: -6),
 
             close.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -MomentermDesign.Metrics.panelOuterPadding),
             close.centerYAnchor.constraint(equalTo: header.centerYAnchor),

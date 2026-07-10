@@ -2,7 +2,7 @@ import AppKit
 
 // Open-file tab strip for the Files overlay.
 extension MainWindowController {
-    private var fileTabBarHeight: CGFloat { 30 }
+    private var fileTabBarHeight: CGFloat { MomentermDesign.Metrics.fileTabBarHeight }
 
     func setFileTabsVisible(_ visible: Bool) {
         fileTabBarView.isHidden = !visible
@@ -186,7 +186,7 @@ extension MainWindowController {
         let tabWidth = min(max(112, titleWidth + 58), 230)
         NSLayoutConstraint.activate([
             tab.widthAnchor.constraint(equalToConstant: tabWidth),
-            tab.heightAnchor.constraint(equalToConstant: 24),
+            tab.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.fileTabHeight),
             select.topAnchor.constraint(equalTo: tab.topAnchor),
             select.leadingAnchor.constraint(equalTo: tab.leadingAnchor),
             select.trailingAnchor.constraint(equalTo: tab.trailingAnchor),

@@ -9,8 +9,16 @@ struct LinkedWorktree {
 final class NativeReviewCore {
     private static let diffContextLines = 80
     private static let maxInlineUntrackedDiffBytes = 500_000
+    private static let fileListingCacheLimit = 6
 
     private let gitClient: GitClient
+    private let fileListingCacheLock = NSLock()
+    private var fileListingCache: [String: CachedFileListing] = [:]
+
+    private struct CachedFileListing {
+        let stateSignature: String
+        let document: ReviewDocument
+    }
 
     init(gitClient: GitClient = SystemGitClient()) {
         self.gitClient = gitClient
@@ -59,9 +67,7 @@ final class NativeReviewCore {
         let fileStates = sourceCollector.fileStates(files: files, sourceFiles: sourceFiles)
         let httpEnvironments = NativeHttpEnvironmentReader.collect(root: root)
         let generatedAt = isoNow()
-        let branch = isGitRepository
-            ? (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
-            : "Not a Git repository"
+        let branch = isGitRepository ? currentBranchName(root: root) : "Not a Git repository"
         let signaturePayload = [
             diffText,
             sourceCollector.signaturePayload(sourceFiles),
@@ -138,13 +144,23 @@ final class NativeReviewCore {
         let root = repoRoot ?? requestedRoot.standardizedFileURL
         let isGitRepository = repoRoot != nil
         let sourceCollector = NativeSourceCollector(gitClient: gitClient)
-        let sourceFiles = isGitRepository
-            ? try sourceCollector.list(root: root)
-            : try sourceCollector.shallowList(root: root)
-        let branch = isGitRepository
-            ? (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
-            : "Not a Git repository"
-        return ReviewDocument(
+        let branch: String
+        let sourceFiles: [SourceFile]
+        let stateSignature: String?
+        if isGitRepository {
+            branch = currentBranchName(root: root)
+            let statusText = gitStatusText(root: root)
+            stateSignature = fileListingStateSignature(root: root, branch: branch, statusText: statusText)
+            if let cached = cachedFileListing(root: root, stateSignature: stateSignature ?? "") {
+                return cached
+            }
+            sourceFiles = try sourceCollector.list(root: root, vcsByPath: NativeGitPorcelain.parse(statusText))
+        } else {
+            branch = "Not a Git repository"
+            stateSignature = nil
+            sourceFiles = try sourceCollector.shallowList(root: root)
+        }
+        let document = ReviewDocument(
             root: root.path,
             branch: branch,
             isGitRepository: isGitRepository,
@@ -157,6 +173,10 @@ final class NativeReviewCore {
             signature: sha1((["files", root.path] + sourceFiles.map { "\($0.path)\0\($0.size)" }).joined(separator: "\n")),
             generatedAt: isoNow()
         )
+        if let stateSignature {
+            storeCachedFileListing(root: root, stateSignature: stateSignature, document: document)
+        }
+        return document
     }
 
     func shallowFileListing(root requestedRoot: URL) throws -> ReviewDocument {
@@ -181,6 +201,52 @@ final class NativeReviewCore {
             signature: sha1((["files-shallow", root.path] + sourceFiles.map { "\($0.path)\0\($0.size)" }).joined(separator: "\n")),
             generatedAt: isoNow()
         )
+    }
+
+    private func currentBranchName(root: URL) -> String {
+        (try? gitClient.run(root: root, arguments: ["branch", "--show-current"]).trimmingCharacters(in: .whitespacesAndNewlines))
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "detached HEAD"
+    }
+
+    private func gitStatusText(root: URL) -> String {
+        (try? gitClient.run(root: root, arguments: ["status", "--porcelain"])) ?? ""
+    }
+
+    private func fileListingStateSignature(root: URL, branch: String, statusText: String) -> String {
+        let head = (try? gitClient.run(root: root, arguments: ["rev-parse", "--verify", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)) ?? "no-head"
+        return sha1([root.path, branch, head, statusText, planFileState(root: root)].joined(separator: "\0"))
+    }
+
+    private func planFileState(root: URL) -> String {
+        let url = root.appendingPathComponent(".momenterm/plan.md")
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return "plan:absent"
+        }
+        let size = attributes[.size] as? Int ?? 0
+        let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        return "plan:\(size):\(modified)"
+    }
+
+    private func cachedFileListing(root: URL, stateSignature: String) -> ReviewDocument? {
+        let key = root.standardizedFileURL.path
+        fileListingCacheLock.lock()
+        defer { fileListingCacheLock.unlock() }
+        guard let cached = fileListingCache[key],
+              cached.stateSignature == stateSignature else {
+            return nil
+        }
+        return cached.document
+    }
+
+    private func storeCachedFileListing(root: URL, stateSignature: String, document: ReviewDocument) {
+        let key = root.standardizedFileURL.path
+        fileListingCacheLock.lock()
+        defer { fileListingCacheLock.unlock() }
+        fileListingCache[key] = CachedFileListing(stateSignature: stateSignature, document: document)
+        if fileListingCache.count > Self.fileListingCacheLimit,
+           let evictedKey = fileListingCache.keys.first(where: { $0 != key }) {
+            fileListingCache.removeValue(forKey: evictedKey)
+        }
     }
 
     func fileListingChildren(root requestedRoot: URL, folderPath: String) throws -> [SourceFile] {

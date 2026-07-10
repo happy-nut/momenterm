@@ -10,6 +10,10 @@ extension MainWindowController {
         openMergedView(kind: "q")
     }
 
+    @objc func showChangeRequestsAction() {
+        openMergedView(kind: "c")
+    }
+
 
 
 

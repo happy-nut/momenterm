@@ -148,6 +148,15 @@ extension MainWindowController {
             || isMergedPromptSidePanelActive()
             || isMergedPromptFloatingCollapsedActive()
     }
+    func isPromptMemoSidePanelActive() -> Bool {
+        !memoSidePanel.isHidden
+    }
+    func isPromptTextPanelActive() -> Bool {
+        isPromptMemoSidePanelActive() || isMergedPromptPanelActive()
+    }
+    func promptPanelsConsumeOptionWorkspaceShortcuts() -> Bool {
+        isPromptTextPanelActive() || mergedPromptPaneSelectionActive
+    }
     // The on-terminal selection UI (accent ring + "Enter" hint) belongs to the post-Option+Enter
     // pane-selection phase ONLY. While the panel is merely open (phase 1), focus stays in the prompt
     // and the terminals show nothing — otherwise the "Enter" hint pops onto a terminal the instant the
@@ -159,11 +168,14 @@ extension MainWindowController {
     // terminal, and enter pane-selection mode with the panes highlighted.
     @discardableResult
     func beginMergedPromptPaneSelection() -> Bool {
-        guard isMergedPromptPanelActive() else {
+        guard isPromptTextPanelActive() else {
             return false
         }
+        let usesMemoBody = isPromptMemoSidePanelActive()
         let usesSidePanelBody = isMergedPromptSidePanelActive() || isMergedPromptFloatingCollapsedActive()
-        let rawText = usesSidePanelBody ? mergedPromptTextView.string : codePane.oldPaneString
+        let rawText = usesMemoBody
+            ? (memoTextView?.string ?? "")
+            : (usesSidePanelBody ? mergedPromptTextView.string : codePane.oldPaneString)
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text != "No matches." else {
             setMergedPromptPanelStatus("No merged prompt text to send")
@@ -172,7 +184,11 @@ extension MainWindowController {
         mergedPromptPendingSendText = text
         ensureMergedPromptTerminalTarget()
         mergedPromptPaneSelectionActive = true
-        hideMergedPromptSidePanel(focusTerminalAfterClose: false)
+        if usesMemoBody {
+            hideMemoPanel(focusTerminalAfterClose: false)
+        } else {
+            hideMergedPromptSidePanel(focusTerminalAfterClose: false)
+        }
         refreshMergedPromptTerminalSelectionOverlays()
         showWorkspaceToast("Pick a terminal with the arrow keys, then Enter")
         return true
@@ -210,16 +226,18 @@ extension MainWindowController {
     }
     func mergedPromptContent(title: String) -> MergedPromptContent {
         let noteKind = title == "Questions" ? "question" : "change"
-        let notes = reviewNotes.filter { $0.kind == noteKind }
+        let noteEntries = reviewNotes.enumerated().filter { $0.element.kind == noteKind }
+        let notes = noteEntries.map(\.element)
         let noteLabel = noteKind == "question" ? "question comment" : "change request comment"
         let subtitle = "\(notes.count) \(noteLabel)\(notes.count == 1 ? "" : "s")"
-        let noteBody: [String] = notes.map { note -> String in
+        let noteBlocks: [(index: Int, block: String)] = noteEntries.map { index, note in
             let title = note.kind == "question" ? "Question" : "Change request"
-            return """
+            let block = """
             \(title)
             \((note.path)):\(note.line ?? 1)
             \(note.text)
             """
+            return (index, block)
         }
         let promptKind = noteKind == "question" ? "q" : "c"
         var bodyLines: [String] = []
@@ -232,8 +250,21 @@ extension MainWindowController {
         bodyLines.append("# \(title) (\(notes.count))")
         bodyLines.append("")
         let emptyMessage = "No \(noteLabel)s yet."
-        let body = (bodyLines + (noteBody.isEmpty ? [emptyMessage] : noteBody)).joined(separator: "\n")
-        return MergedPromptContent(title: title, subtitle: subtitle, body: body, notes: notes, emptyMessage: emptyMessage)
+        let noteSections = noteBlocks.isEmpty ? [emptyMessage] : noteBlocks.map(\.block)
+        let body = (bodyLines + noteSections).joined(separator: "\n")
+        let nsBody = body as NSString
+        var searchStart = 0
+        var noteRanges: [MergedPromptNoteRange] = []
+        for noteBlock in noteBlocks {
+            let searchRange = NSRange(location: searchStart, length: max(0, nsBody.length - searchStart))
+            let range = nsBody.range(of: noteBlock.block, options: [], range: searchRange)
+            guard range.location != NSNotFound else {
+                continue
+            }
+            noteRanges.append(MergedPromptNoteRange(noteIndex: noteBlock.index, range: range))
+            searchStart = min(nsBody.length, range.location + range.length)
+        }
+        return MergedPromptContent(title: title, subtitle: subtitle, body: body, notes: notes, emptyMessage: emptyMessage, noteRanges: noteRanges)
     }
     func mergedPromptTerminalCandidates() -> [(session: TerminalSession, index: Int)] {
         guard let tab = activeTab() else {
@@ -405,6 +436,7 @@ extension MainWindowController {
     func hideMergedPromptSidePanel(focusTerminalAfterClose: Bool, animated: Bool = true) {
         guard !mergedPromptSidePanel.isHidden || mergedPromptCollapsedToFloating else {
             mergedPromptSidePanelKind = nil
+            mergedPromptNoteRanges.removeAll()
             clearMergedPromptTerminalSelectionOverlays()
             if focusTerminalAfterClose {
                 focusTerminal()
@@ -419,6 +451,7 @@ extension MainWindowController {
         mergedPromptPanelVisibleTrailingConstraint?.isActive = false
         mergedPromptPanelHiddenLeadingConstraint?.isActive = true
         mergedPromptSidePanelKind = nil
+        mergedPromptNoteRanges.removeAll()
         let finishClose = { [weak self] in
             guard let self = self else { return }
             guard self.mergedPromptPanelHiddenLeadingConstraint?.isActive == true else { return }
@@ -502,11 +535,13 @@ extension MainWindowController {
         guard currentDocument != nil else {
             mergedPromptSubtitleLabel.stringValue = "No workspace selected"
             mergedPromptTextView.textStorage?.setAttributedString(styledText("Open a workspace first.", color: theme.primaryText))
+            mergedPromptNoteRanges.removeAll()
             return
         }
 
         let content = mergedPromptContent(title: title)
         mergedPromptSubtitleLabel.stringValue = content.subtitle
+        mergedPromptNoteRanges = content.noteRanges
         mergedPromptTextView.textStorage?.setAttributedString(styledText(content.body, color: theme.primaryText))
         mergedPromptTextView.setSelectedRange(NSRange(location: 0, length: 0))
         mergedPromptTextView.scrollToBeginningOfDocument(nil)
@@ -546,6 +581,132 @@ extension MainWindowController {
             overlaySubtitleLabel.stringValue = message
         }
     }
+    @discardableResult
+    func handlePromptPanelOptionEnter() -> Bool {
+        guard isPromptTextPanelActive() else {
+            return false
+        }
+        guard let textView = activePromptPanelTextView() else {
+            return beginMergedPromptPaneSelection()
+        }
+        if promptPanelHasFullSelection(textView) {
+            showPromptPanelWholeSelectionMenu(from: textView)
+            return true
+        }
+        if textView === mergedPromptTextView,
+           let noteIndex = mergedPromptNoteIndexAtCursor() {
+            showMergedPromptCommentActionMenu(noteIndex: noteIndex, from: textView)
+            return true
+        }
+        return beginMergedPromptPaneSelection()
+    }
+    private func activePromptPanelTextView() -> NSTextView? {
+        if isPromptMemoSidePanelActive() {
+            return memoTextView
+        }
+        if isMergedPromptSidePanelActive() {
+            return mergedPromptTextView
+        }
+        return nil
+    }
+    private func promptPanelHasFullSelection(_ textView: NSTextView) -> Bool {
+        let length = (textView.string as NSString).length
+        let selected = textView.selectedRange()
+        return length > 0 && selected.location == 0 && selected.length >= length
+    }
+    private func mergedPromptNoteIndexAtCursor() -> Int? {
+        let location = mergedPromptTextView.selectedRange().location
+        return mergedPromptNoteRanges.first { item in
+            location >= item.range.location && location <= NSMaxRange(item.range)
+        }?.noteIndex
+    }
+    private func showPromptPanelWholeSelectionMenu(from textView: NSTextView) {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "터미널로 보내기", action: #selector(sendPromptPanelToTerminalAction), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "전체 삭제", action: #selector(clearSelectedPromptPanelTextAction), keyEquivalent: ""))
+        for item in menu.items {
+            item.target = self
+        }
+        menu.popUp(positioning: nil, at: promptMenuPoint(in: textView), in: textView)
+    }
+    private func showMergedPromptCommentActionMenu(noteIndex: Int, from textView: NSTextView) {
+        pendingMergedPromptMenuNoteIndex = noteIndex
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Go to comment", action: #selector(goToMergedPromptCommentAction), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Delete", action: #selector(deleteMergedPromptCommentAction), keyEquivalent: ""))
+        for item in menu.items {
+            item.target = self
+        }
+        menu.popUp(positioning: nil, at: promptMenuPoint(in: textView), in: textView)
+    }
+    private func promptMenuPoint(in textView: NSTextView) -> NSPoint {
+        let length = (textView.string as NSString).length
+        let location = min(max(textView.selectedRange().location, 0), length)
+        let screenRect = textView.firstRect(forCharacterRange: NSRange(location: location, length: 0), actualRange: nil)
+        if screenRect != .zero, let window = textView.window {
+            let windowPoint = window.convertPoint(fromScreen: NSPoint(x: screenRect.minX, y: screenRect.minY))
+            let point = textView.convert(windowPoint, from: nil)
+            return NSPoint(x: point.x, y: point.y + 4)
+        }
+        return NSPoint(x: textView.textContainerInset.width + 10, y: textView.textContainerInset.height + 22)
+    }
+    @objc private func sendPromptPanelToTerminalAction() {
+        _ = beginMergedPromptPaneSelection()
+    }
+    @objc private func clearSelectedPromptPanelTextAction() {
+        if isPromptMemoSidePanelActive(), let memoTextView = memoTextView {
+            memoTextView.replaceTextWithoutSaving("")
+            savePromptMemoText("")
+            return
+        }
+        if isMergedPromptSidePanelActive() {
+            mergedPromptTextView.textStorage?.setAttributedString(styledText("", color: theme.primaryText))
+            mergedPromptNoteRanges.removeAll()
+        }
+    }
+    @objc private func goToMergedPromptCommentAction() {
+        guard let index = pendingMergedPromptMenuNoteIndex else { return }
+        pendingMergedPromptMenuNoteIndex = nil
+        goToReviewNote(at: index)
+    }
+    @objc private func deleteMergedPromptCommentAction() {
+        guard let index = pendingMergedPromptMenuNoteIndex,
+              reviewNotes.indices.contains(index)
+        else { return }
+        pendingMergedPromptMenuNoteIndex = nil
+        reviewNotes.remove(at: index)
+        selectedReviewNoteIndex = nil
+        populateMergedPromptSidePanelIfVisible()
+        if overlayMode == .changes {
+            populateChangesOverlay()
+        } else if overlayMode == .files,
+                  let document = activeFilesDocument(),
+                  document.sourceFiles.indices.contains(selectedSourceIndex) {
+            renderSourceFile(document.sourceFiles[selectedSourceIndex])
+        }
+    }
+    private func goToReviewNote(at index: Int) {
+        guard reviewNotes.indices.contains(index) else { return }
+        let note = reviewNotes[index]
+        selectedReviewNoteIndex = index
+        hideMergedPromptSidePanel(focusTerminalAfterClose: false, animated: false)
+        if let document = currentDocument,
+           let diffIndex = document.diffFiles.firstIndex(where: { $0.displayPath == note.path }) {
+            selectedDiffIndex = diffIndex
+            selectedDiffHunkIndex = 0
+            awaitingNextFileAfterLastHunk = false
+            showOverlay(.changes)
+            renderDiffFile(document.diffFiles[diffIndex])
+            focusActiveDiffReviewPane()
+            return
+        }
+        if openFilePathInFilesView(note.path, preferredLine: note.line ?? 1) {
+            selectedReviewNoteIndex = index
+            refreshInlineReviewCommentBoxes()
+            return
+        }
+        showShortcutStatus("Comment target is not available: \(note.path)", title: "Review comment")
+    }
     @objc private func closeMergedPromptPanelAction() {
         hideMergedPromptSidePanel(focusTerminalAfterClose: true)
     }
@@ -556,3 +717,41 @@ extension MainWindowController {
         expandMergedPromptFromFloating()
     }
 }
+
+#if DEBUG
+extension MainWindowController {
+    func promptPanelsConsumeOptionWorkspaceShortcutsForSmokeTest() -> Bool {
+        promptPanelsConsumeOptionWorkspaceShortcuts()
+    }
+
+    func setMergedPromptCursorInsideFirstCommentForSmokeTest() -> Bool {
+        guard let first = mergedPromptNoteRanges.first,
+              NSMaxRange(first.range) <= (mergedPromptTextView.string as NSString).length else {
+            return false
+        }
+        mergedPromptTextView.setSelectedRange(NSRange(location: first.range.location + 1, length: 0))
+        return mergedPromptNoteIndexAtCursor() == first.noteIndex
+    }
+
+    func goToFirstMergedPromptCommentForSmokeTest() -> Bool {
+        guard let first = mergedPromptNoteRanges.first else {
+            return false
+        }
+        goToReviewNote(at: first.noteIndex)
+        return selectedReviewNoteIndex == first.noteIndex
+            && (overlayMode == .changes || overlayMode == .files)
+    }
+
+    func deleteFirstMergedPromptCommentForSmokeTest() -> Bool {
+        guard let first = mergedPromptNoteRanges.first,
+              reviewNotes.indices.contains(first.noteIndex) else {
+            return false
+        }
+        let text = reviewNotes[first.noteIndex].text
+        pendingMergedPromptMenuNoteIndex = first.noteIndex
+        deleteMergedPromptCommentAction()
+        return !reviewNotes.contains { $0.text == text }
+            && !mergedPromptTextView.string.contains(text)
+    }
+}
+#endif

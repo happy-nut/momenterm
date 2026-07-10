@@ -482,6 +482,8 @@ enum MomentermDesign {
         static let railButtonSize: CGFloat = 26
         static let iconButtonSize: CGFloat = 22
         static let terminalTabHeight: CGFloat = 22
+        static let fileTabBarHeight: CGFloat = 26
+        static let fileTabHeight: CGFloat = 22
         static let terminalTextInset = NSSize(width: 12, height: 8)
         static let codeTextInset = NSSize(width: 8, height: 8)
         static let minimumBalancedPaneWidth: CGFloat = 180

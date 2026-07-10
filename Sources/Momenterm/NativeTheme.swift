@@ -83,7 +83,8 @@ struct NativeTheme {
     /// Build a theme from an independent (uiPalette, syntax) pair.
     init(
         uiPalette: MomentermDesign.Colors.Palette,
-        syntax: MomentermDesign.Colors.SyntaxColors
+        syntax: MomentermDesign.Colors.SyntaxColors,
+        terminalBackgroundOverride: NSColor? = nil
     ) {
         let ui = MomentermDesign.Colors.derive(uiPalette: uiPalette)
         primaryBackground = ui.primaryBackground
@@ -112,7 +113,7 @@ struct NativeTheme {
         statePositive = ui.statePositive
         stateAttention = ui.stateAttention
         stateDanger = ui.stateDanger
-        terminalBackground = ui.terminalBackground
+        terminalBackground = terminalBackgroundOverride ?? ui.terminalBackground
         terminalForeground = ui.terminalForeground
         codeBackground = syntax.background
         codeHeaderBackground = ui.codeHeaderBackground
@@ -161,10 +162,11 @@ struct NativeTheme {
     }
 
     /// Build a theme from persisted preset ids (falls back to defaults on nil/unknown).
-    init(uiPresetId: String?, syntaxPresetId: String?) {
+    init(uiPresetId: String?, syntaxPresetId: String?, terminalBackgroundOverride: NSColor? = nil) {
         self.init(
             uiPalette: MomentermDesign.Colors.uiThemePreset(id: uiPresetId).palette,
-            syntax: MomentermDesign.Colors.syntaxThemePreset(id: syntaxPresetId).colors
+            syntax: MomentermDesign.Colors.syntaxThemePreset(id: syntaxPresetId).colors,
+            terminalBackgroundOverride: terminalBackgroundOverride
         )
     }
 }

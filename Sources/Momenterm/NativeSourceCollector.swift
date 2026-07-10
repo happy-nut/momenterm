@@ -24,11 +24,11 @@ struct NativeSourceCollector {
             guard isSourceCandidate(path) else {
                 continue
             }
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
             if values?.isDirectory == true {
                 result.append(folderSummary(path: path))
             } else if values?.isRegularFile == true {
-                result.append(sourceSummary(path: path, root: root, changed: false, changedLines: [], vcs: nil))
+                result.append(sourceSummary(path: path, changed: false, changedLines: [], vcs: nil, size: values?.fileSize))
             }
             if result.count >= limit {
                 break
@@ -37,22 +37,11 @@ struct NativeSourceCollector {
         return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
-    func list(root: URL) throws -> [SourceFile] {
+    func list(root: URL, vcsByPath providedVcsByPath: [String: String]? = nil) throws -> [SourceFile] {
         let root = root.standardizedFileURL
-        let vcsByPath = gitStatusMap(root: root)
-        var paths = Set<String>()
-        let listedPaths = gitListedSourcePaths(root: root) ?? filesystemSourcePaths(root: root)
-        for path in listedPaths where isSourceCandidate(path) {
-            paths.insert(path)
-        }
-        let planPath = ".momenterm/plan.md"
-        if FileManager.default.fileExists(atPath: root.appendingPathComponent(planPath).path) {
-            paths.insert(planPath)
-        }
-        return paths
-            .sorted(by: { $0.localizedCompare($1) == .orderedAscending })
-            .prefix(Self.sourceMaxFiles)
-            .map { sourceSummary(path: $0, root: root, changed: false, changedLines: [], vcs: vcsByPath[$0]) }
+        let vcsByPath = providedVcsByPath ?? gitStatusMap(root: root)
+        return indexedSourcePaths(root: root)
+            .map { sourceSummary(path: $0, changed: false, changedLines: [], vcs: vcsByPath[$0]) }
     }
 
     func preview(path: String, root: URL, changed: Bool = false, changedLines: [Int] = [], vcs: String? = nil) -> SourceFile {
@@ -68,27 +57,16 @@ struct NativeSourceCollector {
     }
 
     func collect(files: [DiffFile], root: URL) throws -> [SourceFile] {
+        let root = root.standardizedFileURL
         let changed = Set(files.map { $0.displayPath }.filter { !$0.isEmpty && $0 != "/dev/null" })
         let changedLinesByPath = changedLines(files)
         let vcsByPath = gitStatusMap(root: root)
-        var paths = Set<String>()
-        let listedPaths = gitListedSourcePaths(root: root) ?? filesystemSourcePaths(root: root)
-        for path in listedPaths where isSourceCandidate(path) {
-            paths.insert(path)
-        }
-        for path in changed where isSourceCandidate(path) {
-            paths.insert(path)
-        }
-        let planPath = ".momenterm/plan.md"
-        if FileManager.default.fileExists(atPath: root.appendingPathComponent(planPath).path) {
-            paths.insert(planPath)
-        }
+        let paths = indexedSourcePaths(root: root, including: changed)
 
         var result: [SourceFile] = []
-        for path in paths.sorted(by: { $0.localizedCompare($1) == .orderedAscending }) {
+        for path in paths {
             let file = sourceSummary(
                 path: path,
-                root: root,
                 changed: changed.contains(path),
                 changedLines: changedLinesByPath[path] ?? [],
                 vcs: vcsByPath[path]
@@ -98,9 +76,37 @@ struct NativeSourceCollector {
         return result
     }
 
-    private func sourceSummary(path: String, root: URL, changed: Bool, changedLines: [Int], vcs: String?) -> SourceFile {
-        let url = root.appendingPathComponent(path)
-        let size = fileSize(url)
+    private func indexedSourcePaths(root: URL, including extraPaths: Set<String> = []) -> [String] {
+        var paths = Set<String>()
+        let listedPaths = gitListedSourcePaths(root: root) ?? filesystemSourcePaths(root: root)
+        for path in listedPaths where isSourceCandidate(path) {
+            paths.insert(path)
+        }
+        for path in extraPaths where isSourceCandidate(path) {
+            paths.insert(path)
+        }
+        let planPath = ".momenterm/plan.md"
+        if FileManager.default.fileExists(atPath: root.appendingPathComponent(planPath).path) {
+            paths.insert(planPath)
+        }
+        let sortedPaths = paths.sorted(by: { $0.localizedCompare($1) == .orderedAscending })
+        if extraPaths.isEmpty || sortedPaths.count <= Self.sourceMaxFiles {
+            return Array(sortedPaths.prefix(Self.sourceMaxFiles))
+        }
+
+        let sortedExtraPaths = extraPaths
+            .filter { isSourceCandidate($0) }
+            .sorted(by: { $0.localizedCompare($1) == .orderedAscending })
+        var retained = Set(sortedExtraPaths.prefix(Self.sourceMaxFiles))
+        for path in sortedPaths where retained.count < Self.sourceMaxFiles {
+            retained.insert(path)
+        }
+        return retained.sorted(by: { $0.localizedCompare($1) == .orderedAscending })
+    }
+
+    private func sourceSummary(path: String, changed: Bool, changedLines: [Int], vcs: String?, size knownSize: Int? = nil) -> SourceFile {
+        let size = knownSize ?? 0
+        let signatureKind = knownSize == nil ? "summary-unknown-size" : "summary"
         return SourceFile(
             path: path,
             size: size,
@@ -110,7 +116,7 @@ struct NativeSourceCollector {
             language: languageForPath(path),
             changed: changed,
             changedLines: changedLines,
-            signature: sha1("\(path)\0summary\0\(size)"),
+            signature: sha1("\(path)\0\(signatureKind)\0\(size)"),
             image: "",
             vcs: vcs
         )

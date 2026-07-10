@@ -1075,6 +1075,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
         if renderMarkdown {
             applyMarkdownRendering()
         }
+        setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
         needsDisplay = true
         onTextChange?(string)
     }

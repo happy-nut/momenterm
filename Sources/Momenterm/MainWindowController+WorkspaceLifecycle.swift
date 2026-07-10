@@ -184,54 +184,25 @@ extension MainWindowController {
                 return nil
             }
         }
-        // Headless smokes set the current-directory override; showing an NSAlert there would hang.
+        // Headless smokes set the current-directory override; showing a modal creation dialog there would hang.
         if currentTerminalDirectoryOverrideForSmokeTest != nil {
             return WorkspaceCreationRequest(name: defaultName, createLinkedWorktree: false)
         }
 
-        let alert = NSAlert()
-        alert.messageText = "새 워크스페이스"
-        if let duplicateGitRoot {
-            alert.informativeText = "\(directory.path)\n\n이미 이 git 저장소를 사용하는 워크스페이스가 있습니다.\n체크하면 linked git worktree를 만들고 그 경로를 새 워크스페이스로 엽니다.\n\nGit: \(duplicateGitRoot.path)"
-        } else {
-            alert.informativeText = directory.path
-        }
-        alert.addButton(withTitle: "생성")
-        alert.addButton(withTitle: "취소")
-
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        let nameField = NSTextField(string: defaultName)
-        nameField.placeholderString = "워크스페이스 이름"
-        nameField.lineBreakMode = .byTruncatingMiddle
-        nameField.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(nameField)
-
-        var worktreeCheckbox: NSButton?
-        if duplicateGitRoot != nil {
-            let checkbox = NSButton(checkboxWithTitle: "git worktree를 만들어 그 경로로 열기", target: nil, action: nil)
-            checkbox.state = .off
-            checkbox.translatesAutoresizingMaskIntoConstraints = false
-            stack.addArrangedSubview(checkbox)
-            worktreeCheckbox = checkbox
-        }
-
-        NSLayoutConstraint.activate([
-            nameField.widthAnchor.constraint(equalToConstant: 360)
-        ])
-        alert.accessoryView = stack
-
-        guard alert.runModal() == .alertFirstButtonReturn else {
+        let dialog = WorkspaceCreationDialogController(
+            parentWindow: window,
+            theme: theme,
+            directory: directory,
+            duplicateGitRoot: duplicateGitRoot,
+            defaultName: defaultName
+        )
+        guard let result = dialog.run() else {
             return nil
         }
-        let name = normalizedWorkspaceDisplayName(nameField.stringValue, fallback: defaultName)
+        let name = normalizedWorkspaceDisplayName(result.name, fallback: defaultName)
         return WorkspaceCreationRequest(
             name: name,
-            createLinkedWorktree: worktreeCheckbox?.state == .on
+            createLinkedWorktree: result.createLinkedWorktree
         )
     }
     // A fresh workspace instance at an already-registered path (US-15 sibling). Shares the filesystem

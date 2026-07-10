@@ -53,7 +53,6 @@ extension MainWindowController {
         fileListingRequestID += 1
         fileListingLoadCount += 1
         let requestID = fileListingRequestID
-        let requestWorkspaceId = activeWorkspaceId
 
         isLoadingFileListing = true
         showOverlay(.files)
@@ -63,7 +62,6 @@ extension MainWindowController {
             if let shallowDocument = try? self.service.shallowFileListing(root: listingRoot) {
                 DispatchQueue.main.async {
                     guard self.fileListingRequestID == requestID,
-                          self.activeWorkspaceId == requestWorkspaceId,
                           self.fileListingDocument == nil else {
                         return
                     }
@@ -86,8 +84,7 @@ extension MainWindowController {
             }
 
             DispatchQueue.main.async {
-                guard self.fileListingRequestID == requestID,
-                      self.activeWorkspaceId == requestWorkspaceId else {
+                guard self.fileListingRequestID == requestID else {
                     return
                 }
                 let selectedPathBeforeRefresh: String?

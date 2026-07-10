@@ -185,7 +185,7 @@ extension MainWindowController {
                             identifier: "settings-terminal-dim",
                             action: #selector(selectTerminalDimSetting(_:))
                         ),
-                        settingsInfoRow(title: "배경색", value: "테마를 따름", detail: "터미널 배경/전경은 '테마' 탭의 UI 팔레트를 따릅니다. 재실행 후 적용됩니다.")
+                        settingsTerminalBackgroundColorRow()
                     ]
                 )
             ]
@@ -415,6 +415,57 @@ extension MainWindowController {
         toggle.widthAnchor.constraint(equalToConstant: NativeSettingsToggle.controlSize.width).isActive = true
         toggle.heightAnchor.constraint(equalToConstant: NativeSettingsToggle.controlSize.height).isActive = true
         row.addArrangedSubview(toggle)
+        return row
+    }
+
+    private func settingsTerminalBackgroundColorRow() -> NSView {
+        let row = settingsRowBase(
+            title: "배경색",
+            detail: "테마 팔레트와 별개로 터미널 배경만 고정합니다. 새 터미널과 재실행 후 Ghostty 렌더러에 적용됩니다."
+        )
+        let override = ThemeManager.shared.terminalBackgroundOverride
+        let color = override ?? theme.terminalBackground
+
+        let valueLabel = NativeSettingsLabel(text: override == nil ? "테마" : color.hexString(fallback: "#000000"))
+        valueLabel.font = NSFont(name: "Monaco", size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+        valueLabel.textColor = settingsValueTextColor()
+        valueLabel.alignment = .right
+        valueLabel.translatesAutoresizingMaskIntoConstraints = false
+        valueLabel.widthAnchor.constraint(equalToConstant: 78).isActive = true
+        row.addArrangedSubview(valueLabel)
+
+        let swatch = NSColorWell()
+        swatch.identifier = NSUserInterfaceItemIdentifier("settings-terminal-background-color")
+        swatch.color = color
+        swatch.target = self
+        swatch.action = #selector(selectTerminalBackgroundColorSetting(_:))
+        swatch.toolTip = "터미널 배경색 선택"
+        swatch.translatesAutoresizingMaskIntoConstraints = false
+        swatch.widthAnchor.constraint(equalToConstant: 42).isActive = true
+        swatch.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        row.addArrangedSubview(swatch)
+
+        let reset = NativeSettingsButton(title: "테마", target: self, action: #selector(resetTerminalBackgroundColorSetting(_:)))
+        reset.identifier = NSUserInterfaceItemIdentifier("settings-terminal-background-reset")
+        reset.isBordered = false
+        reset.bezelStyle = .regularSquare
+        reset.font = MomentermDesign.Fonts.UI.labelStrong.font
+        reset.wantsLayer = true
+        reset.layer?.cornerRadius = 6
+        reset.layer?.backgroundColor = theme.surfaceHover.cgColor
+        reset.layer?.borderColor = theme.separator.withAlphaComponent(0.55).cgColor
+        reset.layer?.borderWidth = 1
+        reset.attributedTitle = NSAttributedString(
+            string: "테마",
+            attributes: MomentermDesign.Fonts.UI.labelStrong.attributes(color: override == nil ? theme.tertiaryText : theme.secondaryText)
+        )
+        reset.isEnabled = override != nil
+        reset.toolTip = "터미널 배경색을 테마 팔레트로 되돌리기"
+        reset.translatesAutoresizingMaskIntoConstraints = false
+        reset.widthAnchor.constraint(equalToConstant: 54).isActive = true
+        reset.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        row.addArrangedSubview(reset)
+
         return row
     }
     private func settingsPromptTextRow(kind: String, title: String, detail: String, rows: Int) -> NSView {
@@ -737,6 +788,51 @@ extension MainWindowController {
         applyCodeFontSize()
         populateSettingsOverlay()
     }
+    @objc func decreaseCodeFontSizeAction() {
+        adjustCodeFontSize(delta: -1)
+    }
+    @objc func increaseCodeFontSizeAction() {
+        adjustCodeFontSize(delta: 1)
+    }
+    @discardableResult
+    func adjustCodeFontSize(delta: Int) -> Bool {
+        let options = MomentermDesign.Fonts.codeFontSizeOptions
+        guard !options.isEmpty, delta != 0 else {
+            return false
+        }
+        let current = MomentermDesign.Fonts.codeFontSize
+        let currentIndex = options.indices.min { lhs, rhs in
+            abs(options[lhs] - current) < abs(options[rhs] - current)
+        } ?? 0
+        let nextIndex = min(max(currentIndex + delta, options.startIndex), options.index(before: options.endIndex))
+        guard nextIndex != currentIndex else {
+            NSSound.beep()
+            updateCodeFontControls()
+            return false
+        }
+        UserDefaults.standard.set(Double(options[nextIndex]), forKey: MomentermDesign.Fonts.codeFontSizeKey)
+        applyCodeFontSize()
+        return true
+    }
+    func updateCodeFontControls() {
+        let options = MomentermDesign.Fonts.codeFontSizeOptions
+        guard let minSize = options.first, let maxSize = options.last else {
+            return
+        }
+        let size = MomentermDesign.Fonts.codeFontSize
+        let canDecrease = size > minSize
+        let canIncrease = size < maxSize
+        for button in [fileCodeFontDecreaseButton, diffCodeFontDecreaseButton] {
+            button.isEnabled = canDecrease
+            button.contentTintColor = canDecrease ? theme.secondaryText : theme.tertiaryText
+        }
+        for button in [fileCodeFontIncreaseButton, diffCodeFontIncreaseButton] {
+            button.isEnabled = canIncrease
+            button.contentTintColor = canIncrease ? theme.secondaryText : theme.tertiaryText
+        }
+        fileHeaderControlStack.isHidden = overlayMode != .files
+        diffCodeFontControlStack.isHidden = overlayMode != .changes
+    }
     // Push the current code font size to every code surface: the Monaco web views live (setFontSize
     // keeps scroll position) and the native code panes (reset the base font + re-render the on-screen
     // diff/file so content-baked fonts update). Files and Changes then share the one size.
@@ -766,6 +862,7 @@ extension MainWindowController {
         default:
             break
         }
+        updateCodeFontControls()
     }
     @objc private func toggleTerminalDensitySetting(_ sender: NativeSettingsToggle) {
         terminalComfortableDensity = sender.isOn
@@ -811,6 +908,12 @@ extension MainWindowController {
         applyUnfocusedDimToPanes()
         applyTerminalPaneSelectionStyles()
         populateSettingsOverlay()
+    }
+    @objc private func selectTerminalBackgroundColorSetting(_ sender: NSColorWell) {
+        ThemeManager.shared.setTerminalBackgroundOverride(sender.color)
+    }
+    @objc private func resetTerminalBackgroundColorSetting(_ sender: Any) {
+        ThemeManager.shared.setTerminalBackgroundOverride(nil)
     }
     @objc func resetMergePromptSettings(_ sender: Any?) {
         saveWorkspaceScopedObject(rootKey: Self.mergePromptsSettingsKey, value: [:])

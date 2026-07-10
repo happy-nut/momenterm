@@ -10,9 +10,14 @@ extension MainWindowController {
 
         terminalTabStack.translatesAutoresizingMaskIntoConstraints = false
         terminalTabStack.orientation = .horizontal
-        terminalTabStack.alignment = .centerY
-        terminalTabStack.spacing = 4
+        terminalTabStack.alignment = .height
+        terminalTabStack.distribution = .fillEqually
+        terminalTabStack.spacing = 1
+        terminalTabStack.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        terminalTabStack.wantsLayer = true
+        terminalTabStack.layer?.backgroundColor = theme.inactiveHeaderBackground.cgColor
         terminalTabStack.isHidden = true
+        terminalView.addSubview(terminalTabStack)
 
         terminalStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         terminalStatusLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -25,6 +30,7 @@ extension MainWindowController {
         terminalPaneSplitView.dividerStyle = .thin
         terminalPaneSplitView.balancesVisibleSubviews = true
         terminalView.addSubview(terminalPaneSplitView)
+        terminalTabBarHeightConstraint = terminalTabStack.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
             terminalView.topAnchor.constraint(equalTo: rootView.safeAreaLayoutGuide.topAnchor),
@@ -35,7 +41,12 @@ extension MainWindowController {
             // (statsBarEnabled is constant true) even though its own constraints are set just below.
             terminalView.bottomAnchor.constraint(equalTo: systemStatsBar.topAnchor),
 
-            terminalPaneSplitView.topAnchor.constraint(equalTo: terminalView.topAnchor),
+            terminalTabStack.topAnchor.constraint(equalTo: terminalView.topAnchor),
+            terminalTabStack.leadingAnchor.constraint(equalTo: terminalView.leadingAnchor),
+            terminalTabStack.trailingAnchor.constraint(equalTo: terminalView.trailingAnchor),
+            terminalTabBarHeightConstraint!,
+
+            terminalPaneSplitView.topAnchor.constraint(equalTo: terminalTabStack.bottomAnchor),
             terminalPaneSplitView.leadingAnchor.constraint(equalTo: terminalView.leadingAnchor),
             terminalPaneSplitView.trailingAnchor.constraint(equalTo: terminalView.trailingAnchor),
             terminalPaneSplitView.bottomAnchor.constraint(equalTo: terminalView.bottomAnchor)

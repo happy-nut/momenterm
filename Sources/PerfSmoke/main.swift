@@ -51,6 +51,18 @@ do {
         fputs("perf smoke failed: file listing took \(listingElapsedMs)ms\n", stderr)
         exit(1)
     }
+    let cachedListingStart = Date()
+    let cachedListing = try core.fileListing(root: repo)
+    let cachedListingElapsedMs = Int(Date().timeIntervalSince(cachedListingStart) * 1000)
+    guard cachedListing.signature == listing.signature,
+          cachedListing.sourceFiles.count == listing.sourceFiles.count else {
+        fputs("perf smoke failed: cached file listing returned a different document\n", stderr)
+        exit(1)
+    }
+    guard cachedListingElapsedMs < 500 else {
+        fputs("perf smoke failed: cached file listing took \(cachedListingElapsedMs)ms\n", stderr)
+        exit(1)
+    }
     let nonGit = FileManager.default.temporaryDirectory
         .appendingPathComponent("momenterm-nongit-\(UUID().uuidString)", isDirectory: true)
     let nested = nonGit.appendingPathComponent("top", isDirectory: true)
@@ -106,7 +118,7 @@ do {
         exit(1)
     }
 
-    print("perf smoke ok: \(diffLineCount) native diff rows, \(review.sourceFiles.count) source files, build \(elapsedMs)ms, listing \(listingElapsedMs)ms")
+    print("perf smoke ok: \(diffLineCount) native diff rows, \(review.sourceFiles.count) source files, build \(elapsedMs)ms, listing \(listingElapsedMs)ms, cached listing \(cachedListingElapsedMs)ms")
 } catch {
     fputs("perf smoke failed: \(error)\n", stderr)
     exit(1)

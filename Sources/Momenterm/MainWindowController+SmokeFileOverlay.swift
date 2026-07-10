@@ -3,6 +3,31 @@ import AppKit
 // File overlay, file-tree, source-preview, and HTTP smoke probes.
 #if DEBUG
 extension MainWindowController {
+    func staleHiddenFilesOverlayStartsFreshLoadForSmokeTest(from directory: URL) -> Bool {
+        let rootURL = directory.standardizedFileURL
+        root = rootURL
+        fileListingRoot = rootURL
+        fileListingDocument = nil
+        currentDocument = nil
+        isLoadingFileListing = false
+        fileTreeModel.selectedIdentifier = nil
+        clearOpenFileTabs()
+        hiddenFilesOverlayRootPath = normalizedWorkspacePath(rootURL.path)
+        hiddenFilesOverlayWorkspaceId = activeWorkspaceId
+        hiddenFilesOverlayWorkspacePath = activeWorkspacePath
+        overlayTitleLabel.stringValue = "Files"
+        overlaySubtitleLabel.stringValue = "Loading"
+        overlayMode = .hidden
+        overlayView.isHidden = true
+
+        let loadCountBefore = fileListingLoadCount
+        openFilesView(from: rootURL)
+        return overlayMode == .files
+            && !overlayView.isHidden
+            && fileListingLoadCount == loadCountBefore + 1
+            && overlaySubtitleLabel.stringValue != "Loading"
+    }
+
     func fileOverlayUsesSingleCodePaneForSmokeTest() -> Bool {
         if overlayMode != .files {
             showOverlay(.files)

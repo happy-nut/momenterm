@@ -3,8 +3,9 @@ import AppKit
 // Collapsed workspace-rail Option-number hints and direct workspace switching.
 extension MainWindowController {
     func setWorkspaceShortcutHintsVisible(_ visible: Bool) {
-        workspaceShortcutHintsRequested = visible
-        if visible {
+        let effectiveVisible = visible && !promptPanelsConsumeOptionWorkspaceShortcuts()
+        workspaceShortcutHintsRequested = effectiveVisible
+        if effectiveVisible {
             rebuildWorkspaceShortcutHintBadges()
         } else {
             removeWorkspaceShortcutHintBadges()
@@ -12,7 +13,7 @@ extension MainWindowController {
     }
 
     func syncWorkspaceShortcutHintsAfterRailRebuild() {
-        if workspaceShortcutHintsRequested {
+        if workspaceShortcutHintsRequested && !promptPanelsConsumeOptionWorkspaceShortcuts() {
             rebuildWorkspaceShortcutHintBadges()
         } else {
             removeWorkspaceShortcutHintBadges()

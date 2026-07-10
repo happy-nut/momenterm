@@ -569,14 +569,14 @@ extension MainWindowController {
             return frame.width <= MomentermDesign.Metrics.iconButtonSize + 1
                 && frame.height <= MomentermDesign.Metrics.iconButtonSize + 1
         }
-        let terminalTabsCompact = terminalTabStack.isHidden && terminalTabStack.arrangedSubviews.isEmpty
+        let terminalTabsVisible = terminalTabUiIsVisibleForSmokeTest()
 
         let ok = bodyHasPadding
             && contentHasPadding
             && railCompact
             && iconButtonsCompact
-            && terminalTabsCompact
-        return "ok=\(ok) body=\(bodyHasPadding) content=\(contentHasPadding) rail=\(railCompact) icons=\(iconButtonsCompact) tabs=\(terminalTabsCompact) bodyFrame=\(overlayBodySplitView.frame) contentFrame=\(overlayDiffSplitView.frame) overlayContent=\(overlayContentView.bounds) railFrames=\(railStack.arrangedSubviews.map { $0.frame }) iconFrames=\(terminalButtons.map { $0.superview?.frame ?? $0.frame }) tabFrames=\(terminalTabStack.arrangedSubviews.map { $0.frame })"
+            && terminalTabsVisible
+        return "ok=\(ok) body=\(bodyHasPadding) content=\(contentHasPadding) rail=\(railCompact) icons=\(iconButtonsCompact) tabs=\(terminalTabsVisible) bodyFrame=\(overlayBodySplitView.frame) contentFrame=\(overlayDiffSplitView.frame) overlayContent=\(overlayContentView.bounds) railFrames=\(railStack.arrangedSubviews.map { $0.frame }) iconFrames=\(terminalButtons.map { $0.superview?.frame ?? $0.frame }) tabFrames=\(terminalTabStack.arrangedSubviews.map { $0.frame })"
     }
 }
 #endif

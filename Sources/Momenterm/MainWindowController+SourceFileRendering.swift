@@ -8,18 +8,52 @@ extension MainWindowController {
         if file.language == "folder" {
             return
         }
+        sourcePreviewRenderRequestID += 1
+        let requestID = sourcePreviewRenderRequestID
         sourcePreviewCursorLine = max(1, preferredLine ?? file.changedLines.first ?? 1)
         trackOpenFileTab(path: file.path)
         httpRunner.clearRunButtons()
-        let renderedFile: SourceFile
-        if !file.embedded,
-           file.skippedReason == "Select a file to preview.",
-           let root = root,
-           let preview = service.filePreview(root: root, path: file.path, changed: file.changed, changedLines: file.changedLines, vcs: file.vcs) {
-            renderedFile = preview
-        } else {
-            renderedFile = file
+        if shouldLoadSourcePreview(file), let root = root?.standardizedFileURL {
+            renderSourceFileLoadingPlaceholder(file, preferredLine: preferredLine)
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let preview = self?.service.filePreview(root: root, path: file.path, changed: file.changed, changedLines: file.changedLines, vcs: file.vcs)
+                DispatchQueue.main.async {
+                    guard let self = self,
+                          self.sourcePreviewRenderRequestID == requestID,
+                          self.root?.standardizedFileURL == root else {
+                        return
+                    }
+                    self.renderLoadedSourceFile(preview ?? file, preferredLine: preferredLine, focus: focus)
+                }
+            }
+            return
         }
+        renderLoadedSourceFile(file, preferredLine: preferredLine, focus: focus)
+    }
+
+    private func shouldLoadSourcePreview(_ file: SourceFile) -> Bool {
+        !file.embedded && file.skippedReason == "Select a file to preview."
+    }
+
+    private func renderSourceFileLoadingPlaceholder(_ file: SourceFile, preferredLine: Int?) {
+        showNativeSplitPane()
+        setSingleCodePaneVisible(true)
+        resetDiffLineGutters()
+        setSourceLineRulerVisible(false)
+        codePane.clearReviewCursors()
+        codePane.setReviewCursorHidden(false)
+        updateSourceViewModeButtons(canToggle: false)
+        overlaySubtitleLabel.stringValue = "\(file.path)  |  Loading"
+        codePane.setOldContent(styledText("Loading preview...", color: theme.secondaryText))
+        codePane.setNewContent(styledText("", color: theme.primaryText))
+        let contentCursorLine = preferredLine ?? file.changedLines.first ?? 1
+        sourcePreviewCursorLine = max(1, contentCursorLine)
+        codePane.scrollOldToTop()
+        codePane.scrollNewToTop()
+        refreshInlineReviewCommentBoxes()
+    }
+
+    private func renderLoadedSourceFile(_ renderedFile: SourceFile, preferredLine: Int?, focus: Bool) {
         showNativeSplitPane()
         setSingleCodePaneVisible(true)
         resetDiffLineGutters()
@@ -71,6 +105,26 @@ extension MainWindowController {
     private func renderToggleableSourceFile(_ file: SourceFile, mode: SourceViewMode, preferredLine: Int?, focus: Bool) {
         if hybridWebViewsAvailable {
             showHybridFilePane()
+            let cursorLine = max(1, preferredLine ?? file.changedLines.first ?? 1)
+            let signature = [
+                file.path,
+                file.signature,
+                file.language,
+                rawPreviewLanguage(for: file.language),
+                mode.rawValue,
+                String(file.size),
+                String(file.image.count),
+                String(format: "%.2f", Double(MomentermDesign.Fonts.codeFontSize))
+            ].joined(separator: "\u{0}")
+            if lastHybridFileSignature == signature {
+                fileHybridView.postJSON([
+                    "type": "setCursor",
+                    "cursorLine": cursorLine,
+                    "focus": focus
+                ])
+                return
+            }
+            lastHybridFileSignature = signature
             var payload: [String: Any] = [
                 "type": "loadFile",
                 "content": file.content,
@@ -83,13 +137,12 @@ extension MainWindowController {
             if !file.image.isEmpty {
                 payload["rendered"] = file.image
             }
-            if let preferredLine {
-                payload["cursorLine"] = preferredLine
-            }
+            payload["cursorLine"] = cursorLine
             payload["focus"] = focus
             fileHybridView.postJSON(payload)
             return
         }
+        lastHybridFileSignature = nil
         renderToggleableSourceFileNatively(file, mode: mode, preferredLine: preferredLine, focus: focus)
     }
 
@@ -147,6 +200,7 @@ extension MainWindowController {
 
     func updateSourceViewModeButtons(canToggle: Bool) {
         sourceViewModeButtonStack.isHidden = !canToggle
+        updateCodeFontControls()
         guard canToggle else {
             return
         }

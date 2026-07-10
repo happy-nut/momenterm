@@ -116,6 +116,10 @@ extension KeyInputSmokeApp {
             fail("file view did not focus sidebar after non-git Cmd+1/open; text=\(controller.reviewOverlayTextForSmokeTest())")
             return
         }
+        guard controller.staleHiddenFilesOverlayStartsFreshLoadForSmokeTest(from: nonGit) else {
+            fail("stale hidden Files overlay restored a dead Loading panel instead of starting a fresh file listing; subtitle=\(controller.overlaySubtitleForSmokeTest()) text=\(controller.reviewOverlayTextForSmokeTest())")
+            return
+        }
         guard waitUntil("non-git file view top-level", condition: {
             controller.reviewOverlayTextForSmokeTest().contains("docs")
                 && !controller.sourcePathIsLoadedForSmokeTest("docs/note.md")
@@ -709,6 +713,13 @@ extension KeyInputSmokeApp {
             fail("mouse-clicking first workspace did not restore first workspace prompt state; memo=\(controller.memoTextForSmokeTest()) merge=\(controller.mergePromptForSmokeTest(kind: "plan"))")
             return
         }
+        controller.closeMemoAndFocusTerminalForSmokeTest()
+        guard waitUntil("prompt panels release Option workspace shortcuts", timeout: 1, condition: {
+            !controller.promptPanelsConsumeOptionWorkspaceShortcutsForSmokeTest()
+        }) else {
+            fail("workspace Option-number smoke started while a prompt panel still owned Option shortcuts")
+            return
+        }
         guard let firstWorkspaceShortcutIndex = controller.workspacePickerIndexForSmokeTest(id: firstWorkspaceId),
               let secondWorkspaceShortcutIndex = controller.workspacePickerIndexForSmokeTest(id: secondWorkspaceId),
               firstWorkspaceShortcutIndex < 9,
@@ -736,6 +747,13 @@ extension KeyInputSmokeApp {
               controller.activeTerminalWorkspacePathForSmokeTest() == secondWorkspacePath,
               !controller.terminalOutputForSmokeTest().contains(firstWorkspaceTerminalMarker) else {
             fail("Option+\(secondWorkspaceShortcutIndex + 1) did not switch to the second workspace from the collapsed rail; active=\(controller.activeWorkspacePathForSmokeTest() ?? "nil") expected=\(secondWorkspacePath)")
+            return
+        }
+        controller.closeMemoAndFocusTerminalForSmokeTest()
+        guard waitUntil("second workspace prompt panels release Option workspace shortcuts", timeout: 1, condition: {
+            !controller.promptPanelsConsumeOptionWorkspaceShortcutsForSmokeTest()
+        }) else {
+            fail("Option-number switch restored a prompt panel that still owned Option shortcuts before the return switch")
             return
         }
         sendShortcut("\(firstWorkspaceShortcutIndex + 1)", keyCode: optionNumberKeyCodes[firstWorkspaceShortcutIndex], modifiers: [.option])
@@ -1823,6 +1841,23 @@ extension KeyInputSmokeApp {
             fail("Cmd+Shift+> did not reopen the right-side merged change-request panel; title=\(controller.mergedPromptSidePanelTitleForSmokeTest()) subtitle=\(controller.mergedPromptSidePanelSubtitleForSmokeTest()) text=\(controller.mergedPromptSidePanelTextForSmokeTest().prefix(300))")
             return
         }
+        guard controller.setMergedPromptCursorInsideFirstCommentForSmokeTest() else {
+            fail("merged prompt could not resolve the review comment under the text cursor")
+            return
+        }
+        guard controller.goToFirstMergedPromptCommentForSmokeTest(),
+              !controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
+              controller.selectedInlineReviewCommentTextForSmokeTest().isEmpty == false else {
+            fail("Go to comment from the merged prompt did not navigate to a selected inline review comment; title=\(controller.overlayTitleForSmokeTest()) selected=\(controller.selectedInlineReviewCommentTextForSmokeTest())")
+            return
+        }
+        sendShortcut(">", keyCode: 47, modifiers: [.command, .shift], charactersIgnoringModifiers: ".")
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.25))
+        guard controller.mergedPromptSidePanelIsVisibleForSmokeTest(),
+              controller.mergedPromptSidePanelTextForSmokeTest().contains(diffChangeText) else {
+            fail("merged prompt did not reopen after Go to comment navigation; title=\(controller.mergedPromptSidePanelTitleForSmokeTest()) text=\(controller.mergedPromptSidePanelTextForSmokeTest().prefix(300))")
+            return
+        }
         let mergedPromptTargetIds = controller.mergedPromptTerminalIdsForSmokeTest()
         guard mergedPromptTargetIds.count >= 2 else {
             fail("merged prompt needs >= 2 terminal panes to exercise pane selection; ids=\(mergedPromptTargetIds)")
@@ -1965,11 +2000,11 @@ extension KeyInputSmokeApp {
             return
         }
 
-        sendShortcut("N", keyCode: 45, modifiers: [.command, .shift])
+        sendShortcut("<", keyCode: 43, modifiers: [.command, .shift], charactersIgnoringModifiers: ",")
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
         guard controller.memoSidePanelIsVisibleForSmokeTest(),
               controller.memoSidePanelOccupiesRightSideForSmokeTest() else {
-            fail("Cmd+Shift+N did not open prompt memo side panel")
+            fail("Cmd+Shift+< did not open prompt memo side panel")
             return
         }
         controller.closeMemoAndFocusTerminalForSmokeTest()

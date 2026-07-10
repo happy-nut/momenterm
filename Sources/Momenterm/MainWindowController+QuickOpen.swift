@@ -366,7 +366,7 @@ extension MainWindowController {
             ("folder", "Files", "⌘1", "files"),
             ("terminal", "Terminal", "⌥F12", "terminal"),
             ("clock.arrow.circlepath", "History", "⌘9", "history"),
-            ("square.and.pencil", "Prompt Memo", "⇧⌘N", "memo"),
+            ("square.and.pencil", "Prompt Memo", "⇧⌘<", "memo"),
             ("gearshape", "Settings", "⌘,", "settings")
         ]
     }

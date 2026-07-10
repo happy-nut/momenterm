@@ -192,6 +192,9 @@ extension MainWindowController {
         let tooltips = collectButtons(in: railView)
             .compactMap(\.toolTip)
             .joined(separator: "\n")
+        let promptToolbarTooltips = collectButtons(in: promptPanelToolbarStack)
+            .compactMap(\.toolTip)
+            .joined(separator: "\n")
         let rowsExpanded = !railStack.arrangedSubviews.isEmpty
             && railStack.arrangedSubviews.allSatisfy { view in
                 view.frame.width >= MomentermDesign.Metrics.railExpandedWidth - 18
@@ -199,13 +202,16 @@ extension MainWindowController {
         return rowsExpanded
             && titleText.contains("Terminal")
             && titleText.contains("Files")
-            && titleText.contains("Prompt Memo")
+            && !titleText.contains("Prompt Memo")
             && shortcutText.contains("Opt+F12")
             && shortcutText.contains("Cmd+1")
-            && shortcutText.contains("Cmd+Shift+N")
+            && !shortcutText.contains("Cmd+Shift+N")
             && tooltips.contains("Terminal\nShortcut: Opt+F12")
             && tooltips.contains("Files\nShortcut: Cmd+1")
             && tooltips.contains("Settings\nShortcut: Cmd+,")
+            && promptToolbarTooltips.contains("Prompt Memo\nShortcut: Cmd+Shift+<")
+            && promptToolbarTooltips.contains("Questions\nShortcut: Cmd+Shift+?")
+            && promptToolbarTooltips.contains("Change Requests\nShortcut: Cmd+Shift+>")
             && tooltips.contains("Select workspace:")
             && tooltips.contains("Shortcut: Cmd+P")
     }
@@ -676,7 +682,7 @@ extension MainWindowController {
     func iconRailActionButtonsAllClickableForSmokeTest() -> Bool {
         let diagnostics = iconRailActionButtonsClickForSmokeTest()
         let lines = diagnostics.components(separatedBy: " | ")
-        guard lines.count >= 8 else {
+        guard lines.count >= 5 else {
             return false
         }
         return lines.allSatisfy {

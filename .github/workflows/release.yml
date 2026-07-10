@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          node --version
+          gh --version
+
+      - name: Build DMG
+        id: package
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          dmg_path="$(./scripts/package-dmg.sh)"
+          release_dmg=".build/Momenterm-${version}.dmg"
+          cp "$dmg_path" "$release_dmg"
+          shasum -a 256 "$release_dmg" > "$release_dmg.sha256"
+          echo "dmg=$release_dmg" >> "$GITHUB_OUTPUT"
+          echo "checksum=$release_dmg.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version="${tag#v}"
+          title="Momenterm ${version}"
+          notes="Download Momenterm-${version}.dmg and drag Momenterm.app to Applications."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" \
+              "${{ steps.package.outputs.dmg }}" \
+              "${{ steps.package.outputs.checksum }}" \
+              --clobber
+          else
+            gh release create "$tag" \
+              "${{ steps.package.outputs.dmg }}" \
+              "${{ steps.package.outputs.checksum }}" \
+              --title "$title" \
+              --notes "$notes"
+          fi

@@ -490,12 +490,73 @@ extension MainWindowController {
             terminalTabStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
-        terminalTabStack.isHidden = true
         for tab in terminalTabs {
             tab.tabButton = nil
         }
+        let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
+        let shouldShowTabs = !scopedTabs.isEmpty
+        terminalTabStack.isHidden = !shouldShowTabs
+        terminalTabBarHeightConstraint?.constant = shouldShowTabs ? MomentermDesign.Metrics.terminalTabHeight : 0
+        terminalTabStack.distribution = .fillEqually
+        terminalTabStack.layer?.backgroundColor = theme.inactiveHeaderBackground.cgColor
+        for (index, tab) in scopedTabs.enumerated() {
+            let button = terminalTabButton(for: tab, index: index)
+            tab.tabButton = button
+            terminalTabStack.addArrangedSubview(button)
+        }
+        applyTerminalTabButtonStyles()
         updateTerminalStatus()
     }
+
+    private func terminalTabButton(for tab: TerminalTab, index: Int) -> NSButton {
+        let title = "\(index + 1)  \(tab.name.isEmpty ? "Terminal" : tab.name)"
+        let button = MomentermCompactButton(title: title, target: self, action: #selector(selectTerminalTabAction(_:)))
+        button.identifier = NSUserInterfaceItemIdentifier(String(tab.id))
+        button.compactHeight = MomentermDesign.Metrics.terminalTabHeight
+        button.bezelStyle = .regularSquare
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 0
+        button.layer?.masksToBounds = true
+        button.cell?.lineBreakMode = .byTruncatingMiddle
+        button.toolTip = tooltipText(label: "Terminal tab \(index + 1): \(tab.name)", shortcut: "Cmd+Shift+[ / ]")
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return button
+    }
+
+    private func applyTerminalTabButtonStyles() {
+        let activeTabId = activeTerminalTabId ?? activeTab()?.id
+        for tab in terminalTabs {
+            guard let button = tab.tabButton else {
+                continue
+            }
+            let active = tab.id == activeTabId
+            button.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.terminalBackground).cgColor
+            button.layer?.borderWidth = 0
+            button.layer?.borderColor = NSColor.clear.cgColor
+            let style = NSMutableParagraphStyle()
+            style.lineBreakMode = .byTruncatingMiddle
+            style.alignment = .center
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: (active ? MomentermDesign.Fonts.UI.labelStrong : MomentermDesign.Fonts.UI.label).font,
+                .foregroundColor: active ? theme.primaryText : theme.secondaryText,
+                .paragraphStyle: style
+            ]
+            button.attributedTitle = NSAttributedString(string: button.title, attributes: attributes)
+        }
+    }
+
+    @objc func selectTerminalTabAction(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue,
+              let tabId = Int(raw),
+              let tab = terminalTabs.first(where: { $0.id == tabId }) else {
+            return
+        }
+        activeTerminalTabId = tab.id
+        setActiveTerminal(id: tab.activePaneId ?? tab.panes.first?.id, focus: true)
+    }
+
     func rebuildTerminalPanes() {
         terminalPaneSplitView.arrangedSubviews.forEach { view in
             terminalPaneSplitView.removeArrangedSubview(view)
@@ -567,6 +628,7 @@ extension MainWindowController {
         terminalPaneSplitView.needsLayout = true
     }
     func applyTerminalPaneSelectionStyles() {
+        applyTerminalTabButtonStyles()
         guard let tab = activeTab() else {
             return
         }

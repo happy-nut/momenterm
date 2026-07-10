@@ -380,8 +380,38 @@ extension MainWindowController {
         terminalPaneSplitView.arrangedSubviews.count
     }
 
-    func terminalTabUiIsRemovedForSmokeTest() -> Bool {
-        terminalTabStack.isHidden && terminalTabStack.arrangedSubviews.isEmpty
+    func terminalTabUiIsVisibleForSmokeTest() -> Bool {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        terminalView.layoutSubtreeIfNeeded()
+        terminalTabStack.layoutSubtreeIfNeeded()
+        let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
+        return !scopedTabs.isEmpty
+            && !terminalTabStack.isHidden
+            && terminalTabBarHeightConstraint?.constant ?? 0 >= 24
+            && terminalTabStack.arrangedSubviews.count == scopedTabs.count
+            && scopedTabs.allSatisfy { $0.tabButton != nil }
+    }
+
+    func activeTerminalTabIndexForSmokeTest() -> Int {
+        let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
+        return scopedTabs.firstIndex { $0.id == activeTerminalTabId } ?? -1
+    }
+
+    func terminalTabButtonsUseFullWidthForSmokeTest() -> Bool {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        terminalView.layoutSubtreeIfNeeded()
+        terminalTabStack.layoutSubtreeIfNeeded()
+        let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
+        guard scopedTabs.count > 1,
+              terminalTabStack.distribution == .fillEqually,
+              terminalTabStack.frame.width > 10,
+              terminalTabStack.arrangedSubviews.count == scopedTabs.count else {
+            return false
+        }
+        let expected = terminalTabStack.frame.width / CGFloat(scopedTabs.count)
+        return terminalTabStack.arrangedSubviews.allSatisfy { view in
+            abs(view.frame.width - expected) <= 2
+        }
     }
 
     func terminalPaneHeadersAreVisibleForSmokeTest() -> Bool {
@@ -407,10 +437,10 @@ extension MainWindowController {
         window?.contentView?.layoutSubtreeIfNeeded()
         terminalView.layoutSubtreeIfNeeded()
         terminalPaneSplitView.layoutSubtreeIfNeeded()
-        let splitTouchesTop = abs(terminalPaneSplitView.frame.maxY - terminalView.bounds.maxY) <= 1
+        let splitTouchesTabStrip = abs(terminalPaneSplitView.frame.maxY - terminalTabStack.frame.minY) <= 1
         return terminalStatusLabel.superview == nil
             && terminalStatusLabel.stringValue.isEmpty
-            && splitTouchesTop
+            && splitTouchesTabStrip
     }
 
     func terminalPaneHeaderControlsHaveShortcutTooltipsForSmokeTest() -> Bool {

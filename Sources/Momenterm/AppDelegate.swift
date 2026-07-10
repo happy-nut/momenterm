@@ -211,6 +211,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         focusedController()?.newTerminalTab()
     }
 
+    @objc private func focusPreviousTerminalTab() {
+        focusedController()?.focusTerminalTab(delta: -1)
+    }
+
+    @objc private func focusNextTerminalTab() {
+        focusedController()?.focusTerminalTab(delta: 1)
+    }
+
     @objc private func splitTerminal() {
         focusedController()?.splitTerminalPane()
     }
@@ -311,7 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         reviewMenu.addItem(NSMenuItem.separator())
         reviewMenu.addItem(targetedItem("All questions", #selector(showAllQuestions), "/", [.command, .shift]))
         reviewMenu.addItem(targetedItem("All change requests", #selector(showAllChangeRequests), ".", [.command, .shift]))
-        reviewMenu.addItem(targetedItem("Prompt memo", #selector(showPromptMemo), "N", [.command, .shift]))
+        reviewMenu.addItem(targetedItem("Prompt memo", #selector(showPromptMemo), ",", [.command, .shift]))
         reviewMenu.addItem(targetedItem("Maximize Panel", #selector(toggleOverlayMaximized), "'", [.command, .shift]))
         reviewMenu.addItem(targetedItem("Select Workspace", #selector(openWorkspacePickerShortcut), "p", [.command]))
         reviewMenu.addItem(targetedItem("New Workspace", #selector(openWorkspaceShortcut), "n", [.command]))
@@ -341,6 +349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let cmdTabItem = targetedItem("New Terminal Tab (Cmd+Tab compatibility)", #selector(newTerminalTab), "\t", [.command])
         cmdTabItem.isHidden = true
         terminalMenu.addItem(cmdTabItem)
+        terminalMenu.addItem(targetedItem("Previous Terminal Tab", #selector(focusPreviousTerminalTab), "[", [.command, .shift]))
+        terminalMenu.addItem(targetedItem("Next Terminal Tab", #selector(focusNextTerminalTab), "]", [.command, .shift]))
         terminalMenu.addItem(targetedItem("Split Terminal Pane", #selector(splitTerminal), "d", [.command]))
         terminalMenu.addItem(targetedItem("Split Terminal Pane Below", #selector(splitTerminalBelow), "D", [.command, .shift]))
         terminalMenu.addItem(NSMenuItem.separator())

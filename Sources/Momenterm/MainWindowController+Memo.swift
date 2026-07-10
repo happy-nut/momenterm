@@ -113,7 +113,7 @@ extension MainWindowController {
         return legacyPrefills.contains(trimmed) ? "" : text
     }
 
-    private func savePromptMemoText(_ text: String) {
+    func savePromptMemoText(_ text: String) {
         saveWorkspaceScopedString(rootKey: Self.promptMemoSettingsKey, value: text)
     }
 

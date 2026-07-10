@@ -37,8 +37,6 @@ extension MainWindowController {
         railStack.addArrangedSubview(railButton(symbol: "plus.rectangle.on.folder", fallback: "W", action: #selector(openWorkspaceAction), label: "New Workspace", shortcut: "Cmd+N"))
         railStack.addArrangedSubview(railButton(symbol: "doc.text.magnifyingglass", fallback: "D", action: #selector(showChangesAction), label: "Changes", shortcut: "Cmd+0"))
         railStack.addArrangedSubview(railButton(symbol: "folder", fallback: "F", action: #selector(showFilesAction), label: "Files", shortcut: "Cmd+1"))
-        railStack.addArrangedSubview(railButton(symbol: "questionmark.bubble", fallback: "Q", action: #selector(showQuestionsAction), label: "Questions", shortcut: "Cmd+Shift+?"))
-        railStack.addArrangedSubview(railButton(symbol: "square.and.pencil", fallback: "M", action: #selector(showMemoAction), label: "Prompt Memo", shortcut: "Cmd+Shift+N"))
 
         // Settings lives at the very bottom of the rail, pinned to the rail bottom edge
         // (below the workspace picker), not in the top action stack.

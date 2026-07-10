@@ -3,7 +3,7 @@ import AppKit
 // Inline and hybrid review note editing, selection, deletion, and persistence.
 extension MainWindowController {
     func reviewNoteShortcutContextIsActive() -> Bool {
-        guard !isMergedPromptPanelActive() else {
+        guard !isPromptTextPanelActive() else {
             return false
         }
         switch overlayMode {
@@ -19,7 +19,7 @@ extension MainWindowController {
         }
     }
     func viewedShortcutContextIsActive() -> Bool {
-        guard !isMergedPromptPanelActive() else {
+        guard !isPromptTextPanelActive() else {
             return false
         }
         switch overlayMode {
@@ -480,15 +480,21 @@ extension MainWindowController {
     }
     // Shift+? / Shift+> in the Monaco diff opens an inline Monaco view-zone draft. Saving the draft
     // posts the text here, so the diff context is never interrupted by an NSAlert.
-    func addHybridReviewComment(kind: String, monacoLine: Int, text: String) {
+    func addHybridReviewComment(kind: String, monacoLine: Int, text: String, replacing editIndex: Int? = nil) {
         guard let path = hybridReviewFilePath, !path.isEmpty,
               let fileLine = hybridFileLine(forMonacoLine: monacoLine) else {
             return
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = kind == "question" ? "Question comment" : "Change request comment"
-        reviewNotes.append(ReviewNote(kind: kind, path: path, line: fileLine, text: trimmed.isEmpty ? fallback : trimmed))
-        selectedReviewNoteIndex = reviewNotes.count - 1
+        let note = ReviewNote(kind: kind, path: path, line: fileLine, text: trimmed.isEmpty ? fallback : trimmed)
+        if let editIndex, reviewNotes.indices.contains(editIndex), reviewNotes[editIndex].path == path {
+            reviewNotes[editIndex] = note
+            selectedReviewNoteIndex = editIndex
+        } else {
+            reviewNotes.append(note)
+            selectedReviewNoteIndex = reviewNotes.count - 1
+        }
         sendHybridReviewComments()
         populateMergedPromptSidePanelIfVisible()
         diffHybridView.postJSON(["type": "focusReview"])
@@ -505,6 +511,24 @@ extension MainWindowController {
         }
         selectedReviewNoteIndex = match
         sendHybridReviewComments()
+    }
+    // 'e' on a caret-selected Monaco comment re-opens that comment as an inline webview draft.
+    func editHybridReviewCommentAtCursor(monacoLine: Int) {
+        guard let path = hybridReviewFilePath, let fileLine = hybridFileLine(forMonacoLine: monacoLine),
+              let index = reviewNotes.firstIndex(where: { $0.path == path && ($0.line ?? 1) == fileLine }) else {
+            diffHybridView.postJSON(["type": "focusReview"])
+            return
+        }
+        let note = reviewNotes[index]
+        selectedReviewNoteIndex = index
+        sendHybridReviewComments()
+        diffHybridView.postJSON([
+            "type": "showCommentDraft",
+            "id": index,
+            "kind": note.kind,
+            "line": monacoLine,
+            "text": note.text
+        ])
     }
     // Backspace on a caret-selected comment → confirm once, then remove.
     func deleteHybridReviewCommentAtCursor(monacoLine: Int) {

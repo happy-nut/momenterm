@@ -1,5 +1,14 @@
 import AppKit
 
+private enum QuickOpenSearchSkipList {
+    static let binaryAndMediaExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif",
+        "ico", "icns", "pdf", "avif", "apng", "zip", "gz", "tgz", "bz2", "xz",
+        "7z", "rar", "tar", "dmg", "pkg", "app", "jar", "war", "class", "o", "a",
+        "so", "dylib", "bin", "exe", "wasm", "sqlite", "db"
+    ]
+}
+
 // Query construction and file-content indexing for Quick Open.
 // MainWindowController+QuickOpen owns the overlay UI; this file owns item lists
 // and the asynchronous search path behind Find-in-Files / Find Usages.
@@ -132,7 +141,7 @@ extension MainWindowController {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let candidates = files
             .lazy
-            .filter { $0.language != "folder" }
+            .filter { quickOpenSearchCanRead($0) }
             .prefix(Self.quickOpenSearchMaxFiles)
 
         var results: [QuickOpenItem] = []
@@ -146,11 +155,13 @@ extension MainWindowController {
             let shouldPreviewEmptyQuery = normalizedQuery.isEmpty && results.count < 24
             let shouldRead = normalizedQuery.isEmpty ? shouldPreviewEmptyQuery : true
             var content: String?
+            var previewSize = file.size
             var matchLine = 1
 
             if shouldRead,
                let loaded = quickOpenSearchContent(root: root, file: file, budgetRemaining: Self.quickOpenSearchMaxTotalBytes - scannedBytes) {
                 scannedBytes += loaded.bytes
+                previewSize = loaded.bytes
                 if normalizedQuery.isEmpty {
                     content = loaded.content
                 } else if let range = loaded.content.lowercased().range(of: normalizedQuery) {
@@ -169,7 +180,7 @@ extension MainWindowController {
             let preview = excerpt.map { value in
                 SourceFile(
                     path: file.path,
-                    size: file.size,
+                    size: previewSize,
                     embedded: true,
                     content: value.text,
                     skippedReason: "",
@@ -194,12 +205,13 @@ extension MainWindowController {
     }
 
     private static func quickOpenSearchContent(root: URL, file: SourceFile, budgetRemaining: Int) -> (content: String, bytes: Int)? {
-        guard file.size > 0,
-              file.size <= Self.quickOpenSearchMaxFileBytes,
-              file.size <= budgetRemaining else {
+        let url = root.appendingPathComponent(file.path)
+        let size = file.size > 0 ? file.size : fileSizeForQuickOpenSearch(url)
+        guard size > 0,
+              size <= Self.quickOpenSearchMaxFileBytes,
+              size <= budgetRemaining else {
             return nil
         }
-        let url = root.appendingPathComponent(file.path)
         guard let data = try? Data(contentsOf: url),
               data.count <= Self.quickOpenSearchMaxFileBytes,
               data.count <= budgetRemaining,
@@ -208,5 +220,21 @@ extension MainWindowController {
             return nil
         }
         return (content, data.count)
+    }
+
+    private static func quickOpenSearchCanRead(_ file: SourceFile) -> Bool {
+        guard file.language != "folder" else {
+            return false
+        }
+        let ext = URL(fileURLWithPath: file.path).pathExtension.lowercased()
+        return ext.isEmpty || !QuickOpenSearchSkipList.binaryAndMediaExtensions.contains(ext)
+    }
+
+    private static func fileSizeForQuickOpenSearch(_ url: URL) -> Int {
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        guard values?.isRegularFile == true else {
+            return 0
+        }
+        return values?.fileSize ?? 0
     }
 }

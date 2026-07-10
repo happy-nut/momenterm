@@ -88,6 +88,7 @@ extension MainWindowController {
         overlayDiffTrailingConstraint?.constant = -padding
         overlayDiffBottomConstraint?.constant = -padding
         overlayContentView.layer?.backgroundColor = (visible ? theme.codeBackground : theme.panelBackground).cgColor
+        updateCodeFontControls()
     }
     func balanceOverlayDiffSplit() {
         guard overlayMode == .changes || overlayMode == .quickOpen else {
@@ -135,7 +136,7 @@ extension MainWindowController {
             } else {
                 overlaySubtitleLabel.stringValue = "No workspace selected"
                 addSidebarMessage("Open a workspace to review changes.")
-                codePane.setOldContent(styledText("Terminal starts in ~ by default.\nUse Cmd+Shift+N to create a workspace from the current terminal path.", color: theme.primaryText))
+                codePane.setOldContent(styledText("Terminal starts in ~ by default.\nUse Cmd+N to create a workspace from the current terminal path.", color: theme.primaryText))
             }
             codePane.setNewString("")
             return

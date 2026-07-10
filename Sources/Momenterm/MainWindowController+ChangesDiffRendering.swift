@@ -54,13 +54,13 @@ private struct DiffSyntaxState {
     }
 }
 
-private enum HybridLineDiffKind: String {
+enum HybridLineDiffKind: String {
     case added
     case deleted
     case modified
 }
 
-private struct HybridLineDiffEntry {
+struct HybridLineDiffEntry {
     let line: Int
     let kind: HybridLineDiffKind
 
@@ -72,7 +72,7 @@ private struct HybridLineDiffEntry {
     }
 }
 
-private struct HybridDiffContent {
+struct HybridDiffContent {
     let oldLines: [String]
     let newLines: [String]
     let modifiedFileLines: [Int]
@@ -196,6 +196,14 @@ extension MainWindowController {
         diffCenterGutterBlocks.removeAll(keepingCapacity: true)
 
         selectedDiffHunkIndex = min(max(selectedDiffHunkIndex, 0), max(reviewTargetCount(for: file) - 1, 0))
+        // In the shipped app Monaco is the visible diff renderer. Avoid building the hidden native
+        // NSTextView attributed diff first; large files were paying both render paths on every file
+        // switch. Smoke binaries without bundled webviews still use the native fallback below.
+        if hybridWebViewsAvailable {
+            renderHybridDiffFile(file, language: language)
+            return
+        }
+
         var renderedTargetIndex = 0
         var oldSyntaxState = DiffSyntaxState()
         var newSyntaxState = DiffSyntaxState()
@@ -338,30 +346,38 @@ extension MainWindowController {
         balanceOverlayDiffSplit()
         layoutDiffLineGutters(oldNumbers: diffOldGutterNumbers, newNumbers: diffNewGutterNumbers)
 
-        // The native split pane above is already fully populated with the diff. The Monaco
-        // hybrid pane is layered on top only when its webviews bundle shipped; smoke builds
-        // (no Resources/webviews/) keep the native NSTextView split pane so the diff stays
-        // navigable and focusable — mirroring how the file view falls back for plain source.
-        guard hybridWebViewsAvailable else {
-            showNativeSplitPane()
-            refreshInlineReviewCommentBoxes()
-            return
-        }
+        showNativeSplitPane()
+        refreshInlineReviewCommentBoxes()
+    }
+
+    private func renderHybridDiffFile(_ file: DiffFile, language diffLanguage: String) {
         // US-H7: send reconstructed old/new content to Monaco diff editor. The line decoration map is
         // derived from the same Git hunks as the sidebar +N/-N counts, instead of asking Monaco to
         // rediscover the diff and risking invisible/misclassified large inserts.
-        let diffLanguage = languageForPath(file.newPath.isEmpty ? file.oldPath : file.newPath)
-        let hybridContent = hybridDiffContent(for: file)
+        let contentSignature = hybridDiffContentSignature(for: file)
+        let hybridContent: HybridDiffContent
+        if lastHybridDiffContentSignature == contentSignature, let cachedContent = lastHybridDiffContent {
+            hybridContent = cachedContent
+        } else {
+            let content = hybridDiffContent(for: file)
+            lastHybridDiffContentSignature = contentSignature
+            lastHybridDiffContent = content
+            hybridContent = content
+        }
         hybridModifiedFileLines = hybridContent.modifiedFileLines
         hybridReviewFilePath = selectedFilePath()
         // Reload Monaco only when the file's content actually changed (a different file, or a live
         // reload). Plain hunk navigation keeps the same content, so we skip the model recreation and
         // just move the cursor — otherwise every F7 would flash the whole diff and reset the caret.
-        let originalContent = hybridContent.oldLines.joined(separator: "\n")
-        let modifiedContent = hybridContent.newLines.joined(separator: "\n")
-        let signature = "\(file.oldPath)|\(file.newPath)|\(originalContent.hashValue)|\(modifiedContent.hashValue)"
+        let signature = [
+            contentSignature,
+            diffLanguage,
+            String(format: "%.2f", Double(MomentermDesign.Fonts.codeFontSize))
+        ].joined(separator: "\u{0}")
         if lastHybridDiffSignature != signature {
             lastHybridDiffSignature = signature
+            let originalContent = hybridContent.oldLines.joined(separator: "\n")
+            let modifiedContent = hybridContent.newLines.joined(separator: "\n")
             diffHybridView.postJSON([
                 "type": "loadDiff",
                 "original": originalContent,
@@ -406,6 +422,26 @@ extension MainWindowController {
         }
         sendHybridReviewComments()
         refreshInlineReviewCommentBoxes()
+    }
+
+    private func hybridDiffContentSignature(for file: DiffFile) -> String {
+        var hasher = Hasher()
+        hasher.combine(file.oldPath)
+        hasher.combine(file.newPath)
+        hasher.combine(file.status)
+        hasher.combine(file.binary)
+        hasher.combine(file.added)
+        hasher.combine(file.removed)
+        for hunk in file.hunks {
+            hasher.combine(hunk.header)
+            for line in hunk.lines {
+                hasher.combine(line.kind)
+                hasher.combine(line.oldNumber)
+                hasher.combine(line.newNumber)
+                hasher.combine(line.text)
+            }
+        }
+        return String(hasher.finalize())
     }
 
     private func hybridDiffContent(for file: DiffFile) -> HybridDiffContent {

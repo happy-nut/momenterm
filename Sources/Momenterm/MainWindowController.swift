@@ -78,7 +78,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // When set, currentTerminalDirectory() returns this instead of the live pane cwd, so the headless
     // smoke can drive create/split from a chosen "focused terminal" pwd (US-1/2/6/7).
     var currentTerminalDirectoryOverrideForSmokeTest: URL?
-    // Set by smokes to bypass the modal worktree-confirm NSAlert (which would hang a headless run) and
+    // Set by smokes to bypass the modal worktree-confirm dialog (which would hang a headless run) and
     // drive either branch of US-7 (worktree/sibling/cancel) deterministically.
     var duplicateWorkspaceChoiceOverrideForSmokeTest: DuplicateWorkspaceChoice?
     // Set by smokes to bypass the "really delete this workspace?" confirmation NSAlert. nil in the app
@@ -114,6 +114,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // Content signature of the diff last pushed to Monaco, so plain hunk navigation (same content)
     // skips the model reload and only moves the caret.
     var lastHybridDiffSignature: String?
+    var lastHybridDiffContentSignature: String?
+    var lastHybridDiffContent: HybridDiffContent?
+    // Content signature of the source file last pushed to Monaco. Sidebar rebuilds and repeated
+    // Files opens should move the caret, not resend the whole file and recreate Monaco's model.
+    var lastHybridFileSignature: String?
     // Map from Monaco modified-editor line (1-based index) to the real file line number, and the file
     // path the current Monaco diff belongs to — so review comments (stored by file line) round-trip.
     var hybridModifiedFileLines: [Int] = []
@@ -188,6 +193,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     }
     var isRestoringReviewNotes = false
     var selectedReviewNoteIndex: Int?
+    var mergedPromptNoteRanges: [MergedPromptNoteRange] = []
+    var pendingMergedPromptMenuNoteIndex: Int?
     var inlineReviewCommentViews: [NSView] = []
     weak var reviewLineHighlightView: NSView?
     // Paragraph-spacing gaps opened under commented lines so a box pushes code down (GitHub
@@ -237,6 +244,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let rootView = NSView()
     // Window-wide bottom bar (CPU/Memory/Network), independent of how many panes are split.
     let systemStatsBar = SystemStatsBarView()
+    let promptPanelToolbarStack = NSStackView()
     let railView = NSView()
     let railStack = NSStackView()
     // Bottom-pinned rail actions (Settings) that sit at the very bottom of the
@@ -250,6 +258,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var lastTerminalSpawnError: String?
     let terminalView = NSView()
     let terminalTabStack = NSStackView()
+    var terminalTabBarHeightConstraint: NSLayoutConstraint?
     let terminalStatusLabel = NSTextField(labelWithString: "")
     let terminalPaneSplitView = MomentermBalancedSplitView()
     let overlayView = NSView()
@@ -285,6 +294,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let sourceViewModeSideButton = NSButton(title: "", target: nil, action: nil)
     let sourceViewModeRenderedButton = NSButton(title: "", target: nil, action: nil)
     let sourceViewModeButtonStack = NSStackView()
+    let fileHeaderControlStack = NSStackView()
+    let fileCodeFontControlStack = NSStackView()
+    let fileCodeFontDecreaseButton = MomentermCompactButton(title: "", target: nil, action: nil)
+    let fileCodeFontIncreaseButton = MomentermCompactButton(title: "", target: nil, action: nil)
     let overlaySidebarStack = NSStackView()
     weak var overlaySidebarScrollView: NSScrollView?
     let overlayBodySplitView = NSSplitView()
@@ -292,6 +305,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     let overlayDiffSplitView = MomentermBalancedSplitView()
     let diffEditorChromeView = NSView()
     let diffEditorToolbarStack = NSStackView()
+    let diffCodeFontControlStack = NSStackView()
+    let diffCodeFontDecreaseButton = MomentermCompactButton(title: "", target: nil, action: nil)
+    let diffCodeFontIncreaseButton = MomentermCompactButton(title: "", target: nil, action: nil)
     let diffEditorPathLabel = NSTextField(labelWithString: "")
     let diffEditorStatusLabel = NSTextField(labelWithString: "")
     let diffEditorCurrentVersionCheckbox = NSButton(checkboxWithTitle: "Current version", target: nil, action: nil)

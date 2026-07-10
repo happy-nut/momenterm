@@ -15,35 +15,19 @@ It keeps the fast terminal, repository navigation, Git diff review, file tree, h
 - **Agent-aware.** Terminal OSC sequences for "agent waiting / done" surface as pane rings and workspace alerts, with `Cmd+Shift+U` to jump to the next unread pane.
 - **Useful outside Git too.** Non-Git folders still open as terminal-first workspaces; Files browses the folder and Changes shows guidance instead of failing silently.
 
-## Quick Install
+## Install
 
-### Option 1: Download the DMG
+Momenterm is distributed as a DMG from GitHub Releases.
 
-Prebuilt binaries are published on the [Releases](https://github.com/happy-nut/momenterm/releases) page.
-
-1. Download `Momenterm.dmg` from the latest release.
+1. Download `Momenterm.dmg` from the latest [Release](https://github.com/happy-nut/momenterm/releases).
 2. Open the DMG and drag `Momenterm.app` to Applications.
-3. First launch: **right-click (Control-click) Momenterm → Open**, then confirm **Open**. macOS remembers this afterward.
+3. First launch: **right-click (Control-click) Momenterm -> Open**, then confirm **Open**. macOS remembers this afterward.
 
 Momenterm is not yet code-signed or notarized, so macOS may show an "unidentified developer" warning. If the app still refuses to open:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Momenterm.app
 ```
-
-### Option 2: Build and install locally
-
-Requires macOS 11 or later and the Xcode Command Line Tools:
-
-```bash
-xcode-select --install
-git clone https://github.com/happy-nut/momenterm.git
-cd momenterm
-./scripts/install-app.sh
-open /Applications/Momenterm.app --args --repo /path/to/repo
-```
-
-On first build, `scripts/build.sh` downloads a pinned, checksum-verified libghostty binary into `.build/vendor`; no other setup is needed.
 
 ## Run
 
@@ -60,6 +44,18 @@ On machines where SwiftPM cannot find `xctest` from Command Line Tools, use the 
 ```
 
 Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder from the app.
+
+To build and install a local development copy:
+
+```bash
+xcode-select --install
+git clone https://github.com/happy-nut/momenterm.git
+cd momenterm
+./scripts/install-app.sh
+open /Applications/Momenterm.app --args --repo /path/to/repo
+```
+
+On first build, `scripts/build.sh` downloads a pinned, checksum-verified libghostty binary into `.build/vendor`; no other setup is needed.
 
 ## What You Get
 
@@ -82,7 +78,7 @@ Without `--repo`, Momenterm opens in a welcome state and lets you pick a folder 
 ./scripts/launch-smoke.sh /path/to/repo
 ```
 
-## Package
+## Release
 
 ```bash
 ./scripts/package-app.sh
@@ -95,6 +91,13 @@ open .build/Momenterm.dmg
 ```
 
 The package scripts build a self-contained app bundle and a drag-to-Applications DMG. They do not bundle Node, Electron, or any JS app runtime.
+
+Tagged pushes create GitHub Releases automatically:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## Documentation
 

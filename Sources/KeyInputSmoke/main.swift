@@ -907,8 +907,8 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
     private func verifyTerminalTabAndPaneShortcuts(_ controller: MainWindowController) {
         let initialTabs = controller.terminalTabCountForSmokeTest()
         let initialPanes = controller.terminalPaneCountForSmokeTest()
-        guard controller.terminalTabUiIsRemovedForSmokeTest() else {
-            fail("terminal tab UI is still visible instead of pane-only terminal headers")
+        guard controller.terminalTabUiIsVisibleForSmokeTest() else {
+            fail("terminal tab UI is not visible, so terminal tabs cannot be distinguished")
             return
         }
         guard controller.terminalTopPathBarIsRemovedForSmokeTest(),
@@ -924,10 +924,10 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         guard controller.terminalTabCountForSmokeTest() == initialTabs + 1,
               controller.terminalPaneCountForSmokeTest() == 1,
               controller.terminalPaneHeadersAreVisibleForSmokeTest(),
-              controller.terminalTabUiIsRemovedForSmokeTest(),
+              controller.terminalTabUiIsVisibleForSmokeTest(),
               controller.terminalTopPathBarIsRemovedForSmokeTest(),
               controller.terminalPaneHeaderControlsHaveShortcutTooltipsForSmokeTest() else {
-            fail("Cmd+T split a pane instead of creating a new terminal tab: tabs \(initialTabs)->\(controller.terminalTabCountForSmokeTest()) activeTabPanes \(controller.terminalPaneCountForSmokeTest())")
+            fail("Cmd+T did not create a visible, active terminal tab: tabs \(initialTabs)->\(controller.terminalTabCountForSmokeTest()) activeTabPanes \(controller.terminalPaneCountForSmokeTest())")
             return
         }
         controller.closeActiveTerminalTabForSmokeTest()
@@ -943,13 +943,43 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         guard controller.terminalTabCountForSmokeTest() == tabsBeforeCmdTab + 1,
               controller.terminalPaneCountForSmokeTest() == 1,
               controller.terminalPaneHeadersAreVisibleForSmokeTest(),
-              controller.terminalTabUiIsRemovedForSmokeTest() else {
-            fail("Cmd+Tab event split a pane instead of creating a new terminal tab: tabs \(tabsBeforeCmdTab)->\(controller.terminalTabCountForSmokeTest()) activeTabPanes \(controller.terminalPaneCountForSmokeTest())")
+              controller.terminalTabUiIsVisibleForSmokeTest() else {
+            fail("Cmd+Tab event did not create a visible terminal tab: tabs \(tabsBeforeCmdTab)->\(controller.terminalTabCountForSmokeTest()) activeTabPanes \(controller.terminalPaneCountForSmokeTest())")
             return
         }
         controller.closeActiveTerminalTabForSmokeTest()
         guard controller.terminalTabCountForSmokeTest() == tabsBeforeCmdTab else {
             fail("closing the Cmd+Tab tab did not restore the original tab count: expected \(tabsBeforeCmdTab) got \(controller.terminalTabCountForSmokeTest())")
+            return
+        }
+
+        let tabsBeforeBracketCycle = controller.terminalTabCountForSmokeTest()
+        controller.newTerminalTab()
+        controller.newTerminalTab()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.15))
+        guard controller.terminalTabCountForSmokeTest() == tabsBeforeBracketCycle + 2,
+              controller.terminalTabButtonsUseFullWidthForSmokeTest() else {
+            fail("terminal tab strip did not render as full-width equal tabs: tabs=\(controller.terminalTabCountForSmokeTest())")
+            return
+        }
+        let tabIndexBeforePrevious = controller.activeTerminalTabIndexForSmokeTest()
+        sendShortcut("{", keyCode: 33, modifiers: [.command, .shift], charactersIgnoringModifiers: "[")
+        guard controller.activeTerminalTabIndexForSmokeTest() != tabIndexBeforePrevious,
+              controller.overlayIsHiddenForSmokeTest() else {
+            fail("Cmd+Shift+[ did not cycle terminal tabs without opening Files: before=\(tabIndexBeforePrevious) after=\(controller.activeTerminalTabIndexForSmokeTest())")
+            return
+        }
+        let tabIndexBeforeNext = controller.activeTerminalTabIndexForSmokeTest()
+        sendShortcut("}", keyCode: 30, modifiers: [.command, .shift], charactersIgnoringModifiers: "]")
+        guard controller.activeTerminalTabIndexForSmokeTest() != tabIndexBeforeNext,
+              controller.overlayIsHiddenForSmokeTest() else {
+            fail("Cmd+Shift+] did not cycle terminal tabs without opening Files: before=\(tabIndexBeforeNext) after=\(controller.activeTerminalTabIndexForSmokeTest())")
+            return
+        }
+        controller.closeActiveTerminalTabForSmokeTest()
+        controller.closeActiveTerminalTabForSmokeTest()
+        guard controller.terminalTabCountForSmokeTest() == tabsBeforeBracketCycle else {
+            fail("closing Cmd+Shift bracket test tabs did not restore original count: expected \(tabsBeforeBracketCycle) got \(controller.terminalTabCountForSmokeTest())")
             return
         }
 
@@ -1035,8 +1065,8 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         guard afterNewTab == tabsBeforeDirectNew + 1,
               panesAfterDirectNew == 1,
               controller.terminalPaneHeadersAreVisibleForSmokeTest(),
-              controller.terminalTabUiIsRemovedForSmokeTest() else {
-            fail("newTerminalTab split a pane instead of creating a new tab: tabs \(tabsBeforeDirectNew)->\(afterNewTab) activeTabPanes \(panesAfterDirectNew)")
+              controller.terminalTabUiIsVisibleForSmokeTest() else {
+            fail("newTerminalTab did not create a visible terminal tab: tabs \(tabsBeforeDirectNew)->\(afterNewTab) activeTabPanes \(panesAfterDirectNew)")
             return
         }
         // Restore the original tab so the direct-split checks below run against it.
@@ -1155,7 +1185,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
     private func verifyPromptMemo(_ controller: MainWindowController) {
         controller.openMemo()
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
-        guard let memoWindow = controller.memoWindowForSmokeTest() else {
+        guard controller.memoWindowForSmokeTest() != nil else {
             fail("prompt memo side panel did not open")
             return
         }
@@ -1183,6 +1213,42 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
         guard controller.memoOpensWithoutLegacyPrefillForSmokeTest() else {
             fail("prompt memo opened with legacy prefilled content: \(controller.memoTextForSmokeTest().debugDescription)")
+            return
+        }
+        controller.setWorkspaceShortcutHintsVisibleForSmokeTest(true)
+        guard controller.workspaceShortcutHintTextForSmokeTest().isEmpty,
+              controller.promptPanelsConsumeOptionWorkspaceShortcutsForSmokeTest() else {
+            fail("prompt memo allowed Option workspace shortcut badges while the prompt editor was active: \(controller.workspaceShortcutHintDiagnosticsForSmokeTest())")
+            return
+        }
+        guard controller.setMemoTextForSmokeTest("memo prompt to send") else {
+            fail("prompt memo could not be reset for Option+Enter terminal picker smoke")
+            return
+        }
+        var memoWrites: [(Int, String)] = []
+        controller.setTerminalWriteObserverForSmokeTest { id, data in
+            memoWrites.append((id, data))
+        }
+        sendShortcut("\r", keyCode: 36, modifiers: [.option], routeThroughShortcutRouter: true)
+        guard waitUntil("prompt memo Option+Enter enters pane selection", timeout: 1, condition: {
+                controller.isMergedPromptPaneSelectionActiveForSmokeTest()
+                    && !controller.memoSidePanelIsVisibleForSmokeTest()
+            }),
+              memoWrites.isEmpty,
+              controller.mergedPromptSelectionRingTerminalIdForSmokeTest() != nil else {
+            fail("prompt memo Option+Enter did not enter terminal pane selection without sending; paneSelect=\(controller.isMergedPromptPaneSelectionActiveForSmokeTest()) memoVisible=\(controller.memoSidePanelIsVisibleForSmokeTest()) writes=\(memoWrites.count) ring=\(controller.mergedPromptSelectionRingTerminalIdForSmokeTest().map(String.init) ?? "nil")")
+            return
+        }
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [], routeThroughShortcutRouter: true)
+        controller.setTerminalWriteObserverForSmokeTest(nil)
+        guard !controller.isMergedPromptPaneSelectionActiveForSmokeTest() else {
+            fail("Esc did not cancel prompt memo terminal pane selection")
+            return
+        }
+        controller.openMemo()
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.memoIsFirstResponderForSmokeTest() else {
+            fail("prompt memo did not regain focus after Option+Enter terminal picker cancellation")
             return
         }
         // US-12: opening Settings (Cmd+,) while the memo is up must NOT close or cover the memo.
@@ -1214,27 +1280,37 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo did not regain focus after the settings coexistence check")
             return
         }
-        sendKey("n", keyCode: 45, window: memoWindow)
-        sendKey("o", keyCode: 31, window: memoWindow)
-        sendKey("t", keyCode: 17, window: memoWindow)
-        sendKey("e", keyCode: 14, window: memoWindow)
-        sendKey("한", keyCode: 0, window: memoWindow)
-        sendKey("글", keyCode: 0, window: memoWindow)
-        sendKey(String(UnicodeScalar(127)!), keyCode: 51, window: memoWindow)
-        sendKey("\r", keyCode: 36, window: memoWindow)
-        sendKey("[", keyCode: 33, window: memoWindow)
-        sendKey("]", keyCode: 30, window: memoWindow)
+        guard controller.setMemoTextForSmokeTest("") else {
+            fail("prompt memo could not be cleared after the Option+Enter terminal picker smoke")
+            return
+        }
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        guard controller.memoIsFirstResponderForSmokeTest(),
+              let activeMemoWindow = controller.memoWindowForSmokeTest() else {
+            fail("prompt memo did not regain focus after being cleared for text input")
+            return
+        }
+        sendKey("n", keyCode: 45, window: activeMemoWindow)
+        sendKey("o", keyCode: 31, window: activeMemoWindow)
+        sendKey("t", keyCode: 17, window: activeMemoWindow)
+        sendKey("e", keyCode: 14, window: activeMemoWindow)
+        sendKey("한", keyCode: 0, window: activeMemoWindow)
+        sendKey("글", keyCode: 0, window: activeMemoWindow)
+        sendKey(String(UnicodeScalar(127)!), keyCode: 51, window: activeMemoWindow)
+        sendKey("\r", keyCode: 36, window: activeMemoWindow)
+        sendKey("[", keyCode: 33, window: activeMemoWindow)
+        sendKey("]", keyCode: 30, window: activeMemoWindow)
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
         let beforeSpaceMemoText = controller.memoTextForSmokeTest()
         guard beforeSpaceMemoText.contains("\n[]") && !beforeSpaceMemoText.contains("\n☐") else {
             fail("prompt memo converted [] before Space: \(beforeSpaceMemoText)")
             return
         }
-        sendKey(" ", keyCode: 49, window: memoWindow)
-        sendKey("t", keyCode: 17, window: memoWindow)
-        sendKey("a", keyCode: 0, window: memoWindow)
-        sendKey("s", keyCode: 1, window: memoWindow)
-        sendKey("k", keyCode: 40, window: memoWindow)
+        sendKey(" ", keyCode: 49, window: activeMemoWindow)
+        sendKey("t", keyCode: 17, window: activeMemoWindow)
+        sendKey("a", keyCode: 0, window: activeMemoWindow)
+        sendKey("s", keyCode: 1, window: activeMemoWindow)
+        sendKey("k", keyCode: 40, window: activeMemoWindow)
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
         let memoText = controller.memoTextForSmokeTest()
         guard memoText.contains("note한"), !memoText.contains("note한글") else {
@@ -1249,7 +1325,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo could not be reset for list continuation smoke")
             return
         }
-        sendKey("\r", keyCode: 36, window: memoWindow)
+        sendKey("\r", keyCode: 36, window: activeMemoWindow)
         let listText = controller.memoTextForSmokeTest()
         guard listText == "• first\n• " else {
             fail("prompt memo did not continue markdown list on Enter: \(listText.debugDescription)")
@@ -1259,7 +1335,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo could not be reset for ordered-list continuation smoke")
             return
         }
-        sendKey("\r", keyCode: 36, window: memoWindow)
+        sendKey("\r", keyCode: 36, window: activeMemoWindow)
         let orderedListText = controller.memoTextForSmokeTest()
         guard orderedListText == "1. first\n2. " else {
             fail("prompt memo did not continue ordered markdown list on Enter: \(orderedListText.debugDescription)")
@@ -1270,14 +1346,14 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo could not be reset for checkbox continuation smoke")
             return
         }
-        sendKey("\r", keyCode: 36, window: memoWindow)
+        sendKey("\r", keyCode: 36, window: activeMemoWindow)
         let checkboxListText = controller.memoTextForSmokeTest()
         guard checkboxListText == "☑ done\n☐ " else {
             fail("prompt memo did not continue a checkbox list on Enter: \(checkboxListText.debugDescription)")
             return
         }
         // Enter on the now-empty item exits the list, clearing the marker on that line.
-        sendKey("\r", keyCode: 36, window: memoWindow)
+        sendKey("\r", keyCode: 36, window: activeMemoWindow)
         let exitListText = controller.memoTextForSmokeTest()
         guard exitListText == "☑ done\n" else {
             fail("prompt memo did not exit the list on Enter at an empty item: \(exitListText.debugDescription)")
@@ -1287,7 +1363,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo did not apply natural Markdown styling attributes")
             return
         }
-        sendKey("\u{1b}", keyCode: 53, window: memoWindow)
+        sendKey("\u{1b}", keyCode: 53, window: activeMemoWindow)
         guard waitUntil("prompt memo Esc close", timeout: 1, condition: {
             !controller.memoSidePanelIsVisibleForSmokeTest()
         }) else {

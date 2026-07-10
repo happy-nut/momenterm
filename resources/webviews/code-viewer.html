@@ -74,6 +74,7 @@ window.addEventListener('message',function(e){
   var msg=e.data;
   if(!msg||!msg.type)return;
   if(msg.type==='loadFile')loadFile(msg);
+  else if(msg.type==='setCursor')setCursor(msg);
   else if(msg.type==='setTheme')applyTheme(msg.theme);
   else if(msg.type==='setFontSize')setFontSize(msg.fontSize);
 });
@@ -149,6 +150,17 @@ function loadFile(msg){
     else { renderPlain(_content); applyLayout(); }
   }
   applyLayout();
+}
+
+function setCursor(msg){
+  _currentLine=Math.max(1,+msg.cursorLine||_currentLine||1);
+  if(_editor&&(_viewMode==='raw'||_viewMode==='side')){
+    setEditorCursor();
+    if(msg.focus)_editor.focus();
+  }
+  if(_viewMode==='rendered'||_viewMode==='side'){
+    highlightCurrentBlock();
+  }
 }
 
 function ensureMonaco(cb){
