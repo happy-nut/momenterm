@@ -1952,28 +1952,23 @@ extension KeyInputSmokeApp {
         }
 
         sendShortcut(String(UnicodeScalar(0xF70F)!), keyCode: 111, modifiers: [.option])
-        guard waitUntil("Option+F12 terminal focus", timeout: 2, condition: {
-            controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
-        }) else {
-            fail("Option+F12 did not toggle the open review panel back to terminal focus; hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
+        guard controller.overlayTitleForSmokeTest() == "Changes",
+              !controller.terminalIsFirstResponderForSmokeTest() else {
+            fail("Option+F12 still focused terminal even though the dedicated terminal shortcut was removed; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
             return
         }
 
-        sendShortcut("0", keyCode: 29, modifiers: [.command])
-        guard controller.overlayTitleForSmokeTest() == "Changes" else {
-            fail("Cmd+0 did not reopen Changes before terminal shortcut regression check; title=\(controller.overlayTitleForSmokeTest())")
-            return
-        }
         sendShortcut("`", keyCode: 50, modifiers: [.control])
         guard controller.overlayTitleForSmokeTest() == "Changes", !controller.terminalIsFirstResponderForSmokeTest() else {
-            fail("Ctrl+` still focused terminal even though terminal shortcut must be Option+F12 only; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
+            fail("Ctrl+` still focused terminal even though the dedicated terminal shortcut was removed; title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
             return
         }
-        sendShortcut(String(UnicodeScalar(0xF70F)!), keyCode: 111, modifiers: [.option])
-        guard waitUntil("Option+F12 remains sole terminal focus shortcut", timeout: 2, condition: {
+
+        sendShortcut("\u{1b}", keyCode: 53, modifiers: [])
+        guard waitUntil("Escape restores terminal focus", timeout: 2, condition: {
             controller.overlayIsHiddenForSmokeTest() && controller.terminalIsFirstResponderForSmokeTest()
         }) else {
-            fail("Option+F12 did not remain the single terminal focus shortcut after Ctrl+` was ignored; hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
+            fail("Escape did not close Changes and restore terminal focus after terminal focus shortcuts were removed; hidden=\(controller.overlayIsHiddenForSmokeTest()) firstResponder=\(controller.terminalIsFirstResponderForSmokeTest())")
             return
         }
 

@@ -138,7 +138,7 @@ extension MainWindowController {
         quickOpenRecentFooterLabel.textColor = theme.secondaryText
         fileTabBarView.layer?.backgroundColor = theme.codeHeaderBackground.cgColor
         fileTabBarView.layer?.borderColor = theme.separator.cgColor
-        memoSidePanel.layer?.backgroundColor = theme.codeBackground.cgColor
+        memoSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
         memoSidePanel.layer?.borderColor = theme.panelBorder.cgColor
         mergedPromptSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
         mergedPromptSidePanel.layer?.borderColor = theme.panelBorder.cgColor
@@ -146,12 +146,13 @@ extension MainWindowController {
         mergedPromptSubtitleLabel.textColor = theme.secondaryText
 
         // Persistent text views that hold their own theme copy.
-        configureCodeTextView(mergedPromptTextView)
+        configureMergedPromptTextView()
+        populateMergedPromptSidePanelIfVisible()
         memoTextView?.configure(theme: theme)
-        memoScrollView?.layer?.backgroundColor = theme.codeBackground.cgColor
-        memoScrollView?.backgroundColor = theme.codeBackground
-        memoScrollView?.contentView.layer?.backgroundColor = theme.codeBackground.cgColor
-        memoScrollView?.contentView.backgroundColor = theme.codeBackground
+        memoScrollView?.layer?.backgroundColor = theme.panelBackground.cgColor
+        memoScrollView?.backgroundColor = theme.panelBackground
+        memoScrollView?.contentView.layer?.backgroundColor = theme.panelBackground.cgColor
+        memoScrollView?.contentView.backgroundColor = theme.panelBackground
         for textView in settingsPromptTextViews.values {
             textView.configure(theme: theme)
         }

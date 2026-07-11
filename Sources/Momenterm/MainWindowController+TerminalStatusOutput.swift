@@ -254,10 +254,15 @@ extension MainWindowController {
         if data.contains(0x07) {
             handleTerminalBell(for: session)
         }
-        if session.ghosttyView == nil {
+        if let ghosttyView = session.ghosttyView, session.isGhosttyReplayReady {
+            if !ghosttyView.receive(data) {
+                session.isGhosttyReplayReady = false
+                appendPendingGhosttyReplayData(data, to: session)
+            }
+        } else {
+            appendPendingGhosttyReplayData(data, to: session)
             syncTerminalSize(for: session)
         }
-        session.ghosttyView?.receive(data)
         let text = session.outputDecoder.decode(data)
         if !text.isEmpty {
             session.renderer.append(text, to: session.output)
@@ -272,6 +277,19 @@ extension MainWindowController {
         if session.ghosttyView == nil {
             refreshTerminalTextView(for: session)
         }
+    }
+
+    private func appendPendingGhosttyReplayData(_ data: Data, to session: TerminalSession) {
+        let replayLimit = Self.terminalFallbackTranscriptLimit
+        if data.count >= replayLimit {
+            session.pendingGhosttyReplayData = Data(data.suffix(replayLimit))
+            return
+        }
+        let overflow = session.pendingGhosttyReplayData.count + data.count - replayLimit
+        if overflow > 0 {
+            session.pendingGhosttyReplayData.removeFirst(overflow)
+        }
+        session.pendingGhosttyReplayData.append(data)
     }
     func trimTerminalOutput(_ output: NSMutableAttributedString, limit maxLength: Int) {
         if output.length > maxLength {
@@ -301,9 +319,6 @@ extension MainWindowController {
             shortcut: shortcut,
             identifier: String(pane.id)
         )
-    }
-    @objc func showTerminalAction() {
-        toggleTerminal()
     }
     func applyUnfocusedDimToPanes() {
         let color = NSColor.black.withAlphaComponent(terminalUnfocusedDim).cgColor

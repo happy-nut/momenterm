@@ -198,15 +198,14 @@ extension MainWindowController {
         let rowsExpanded = !railStack.arrangedSubviews.isEmpty
             && railStack.arrangedSubviews.allSatisfy { view in
                 view.frame.width >= MomentermDesign.Metrics.railExpandedWidth - 18
-            }
+        }
         return rowsExpanded
-            && titleText.contains("Terminal")
+            && !titleText.contains("Terminal")
             && titleText.contains("Files")
             && !titleText.contains("Prompt Memo")
-            && shortcutText.contains("Opt+F12")
             && shortcutText.contains("Cmd+1")
             && !shortcutText.contains("Cmd+Shift+N")
-            && tooltips.contains("Terminal\nShortcut: Opt+F12")
+            && !tooltips.contains("Terminal")
             && tooltips.contains("Files\nShortcut: Cmd+1")
             && tooltips.contains("Settings\nShortcut: Cmd+,")
             && promptToolbarTooltips.contains("Prompt Memo\nShortcut: Cmd+Shift+<")
@@ -305,7 +304,7 @@ extension MainWindowController {
         return !workspaceRailExpanded
             && labelsHidden
             && rowsCompact
-            && tooltips.contains("Terminal\nShortcut: Opt+F12")
+            && !tooltips.contains("Terminal")
             && tooltips.contains("Files\nShortcut: Cmd+1")
     }
 
@@ -442,6 +441,24 @@ extension MainWindowController {
         !collectRenameFields(in: workspaceStack).isEmpty
     }
 
+    func workspaceRenameFieldIsFocusedForSmokeTest() -> Bool {
+        guard let field = collectRenameFields(in: workspaceStack).first,
+              let editor = field.currentEditor()
+        else {
+            return false
+        }
+        return window?.firstResponder === editor
+    }
+
+    func workspaceRenameFieldSelectsAllForSmokeTest() -> Bool {
+        guard let field = collectRenameFields(in: workspaceStack).first,
+              let editor = field.currentEditor()
+        else {
+            return false
+        }
+        return editor.selectedRange == NSRange(location: 0, length: (field.stringValue as NSString).length)
+    }
+
     func beginSelectedWorkspaceRenameFromFocusedRowKeyForSmokeTest() -> Bool {
         guard workspaces.indices.contains(selectedWorkspacePickerIndex) else {
             return false
@@ -486,7 +503,7 @@ extension MainWindowController {
             return false
         }
         field.stringValue = name
-        field.onCommit?(name)
+        field.commitForSmokeTest()
         return true
     }
 
@@ -496,6 +513,42 @@ extension MainWindowController {
     // it tore the field out of the view tree and committed early, snapping the row to a static label.
     func simulateBackgroundRailRepaintForSmokeTest() {
         rebuildWorkspaceButtons()
+    }
+
+    // Regression hook (reported SIGABRT in NSStackView._removeView during a workspace rename): while
+    // rebuildWorkspaceButtons() tore down the focused inline-rename field, a queued workspace/pane
+    // status callback drained on a nested run loop and re-entered rebuildWorkspaceButtons(), emptying
+    // the rail out from under the outer removal loop's stale snapshot; the outer loop then re-removed
+    // an already-detached view and NSStackView asserted. Reproduce that mid-teardown re-entrancy
+    // deterministically and assert the rebuild now survives it and leaves the rail consistent.
+    func rebuildWorkspaceButtonsSurvivesReentrantRepaintForSmokeTest(id: String) -> Bool {
+        guard let originalName = workspace(forId: id)?.name else {
+            return false
+        }
+        beginWorkspaceRename(id: id)
+        guard renamingWorkspaceId == id,
+              let field = collectRenameFields(in: workspaceStack).first else {
+            return false
+        }
+        // Arm the injection that mimics the status callback re-entering rebuild mid-removal, then
+        // commit — the commit's rebuild runs the removal loop and fires the injection exactly once.
+        reentrantRebuildInjectionForSmokeTest = { [weak self] in
+            self?.rebuildWorkspaceButtons()
+        }
+        field.stringValue = "reentrant-survivor"
+        field.commitForSmokeTest()
+        // Reaching here without aborting means the assertion no longer fires. The rebuild must also
+        // stay consistent: injection consumed once, rename applied, edit mode exited, and every rail
+        // row button is unique (no detached/duplicated rows left behind by a torn snapshot).
+        let injectionConsumed = reentrantRebuildInjectionForSmokeTest == nil
+        let renameApplied = workspace(forId: id)?.name == "reentrant-survivor"
+        let exitedEditMode = renamingWorkspaceId == nil
+        let rowIds = workspaceStack.arrangedSubviews
+            .compactMap { ($0 as? NSButton)?.identifier?.rawValue }
+        let railConsistent = Set(rowIds).count == rowIds.count && rowIds.contains(id)
+        // Restore the caller's name so the surrounding verifier's later state stays untouched.
+        _ = renameWorkspace(id: id, to: originalName)
+        return injectionConsumed && renameApplied && exitedEditMode && railConsistent
     }
 
     // MARK: - Workspace-lifecycle smoke hooks (US-1..US-8)

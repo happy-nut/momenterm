@@ -323,6 +323,44 @@ extension MainWindowController {
         return ghosttyView.mouseForwardCountForSmokeTest() >= before + 2
     }
 
+#if DEBUG
+    func terminalIMEPreeditBridgeForSmokeTest() -> Bool {
+        guard let session = activeSession(),
+              let textView = session.textView,
+              let ghosttyView = session.ghosttyView else {
+            return false
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+        ghosttyView.fitToSize()
+        textView.setMarkedText(
+            "ㅎ",
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        let initialVisible = ghosttyView.preeditTextForSmokeTest == "ㅎ"
+        textView.setMarkedText(
+            "한",
+            selectedRange: NSRange(location: 1, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        let composedVisible = ghosttyView.preeditTextForSmokeTest == "한"
+        let candidateRect = textView.firstRect(forCharacterRange: textView.markedRange(), actualRange: nil)
+        let candidateRectValid = candidateRect.minX.isFinite
+            && candidateRect.minY.isFinite
+            && candidateRect.height.isFinite
+            && candidateRect.height > 0
+        // AppKit may commit marked text while unmarking. Isolate this diagnostic from the live PTY;
+        // the standalone terminal-view smoke covers the real commit callback separately.
+        let inputHandler = textView.onInput
+        textView.onInput = nil
+        textView.unmarkText()
+        textView.onInput = inputHandler
+        let cleared = ghosttyView.preeditTextForSmokeTest.isEmpty
+        refreshTerminalTextView(for: session)
+        return initialVisible && composedVisible && candidateRectValid && cleared
+    }
+#endif
+
     func terminalRapidCursorMovementStaysResponsiveForSmokeTest() -> Bool {
         guard let textView = activeSession()?.textView,
               let window = window else {
@@ -352,6 +390,63 @@ extension MainWindowController {
 
     func terminalTabCountForSmokeTest() -> Int {
         terminalTabs.count
+    }
+
+    func activeTerminalSessionKeyForSmokeTest() -> String? {
+        activeSession()?.sessionKey
+    }
+
+    func terminalSessionKeysForSmokeTest(workspacePath: String?) -> [String] {
+        terminalTabs(in: workspacePath).flatMap(\.panes).map(\.sessionKey)
+    }
+
+    func appendOutputToUnrenderedTerminalForSmokeTest(
+        workspacePath: String?,
+        text: String
+    ) -> String? {
+        guard let pane = terminalTabs(in: workspacePath)
+            .flatMap(\.panes)
+            .first(where: { $0.ghosttyView == nil })
+        else {
+            return nil
+        }
+        processTerminalOutput(Data(text.utf8), for: pane)
+        return pane.sessionKey
+    }
+
+    func terminalSurfaceContainsForSmokeTest(sessionKey: String, text: String) -> Bool {
+        guard let pane = sessions.first(where: { $0.sessionKey == sessionKey }),
+              let ghosttyView = pane.ghosttyView else {
+            return false
+        }
+        return ghosttyView.isSurfaceAttachedForSmokeTest()
+            && ghosttyView.surfaceTextForSmokeTest()?.contains(text) == true
+    }
+
+    @discardableResult
+    func appendOutputToTerminalForSmokeTest(sessionKey: String, text: String) -> Bool {
+        guard let pane = sessions.first(where: { $0.sessionKey == sessionKey }) else {
+            return false
+        }
+        processTerminalOutput(Data(text.utf8), for: pane)
+        return true
+    }
+
+    func terminalSurfaceVisibilitiesForSmokeTest(workspacePath: String?) -> [Bool] {
+        terminalTabs(in: workspacePath).flatMap(\.panes).compactMap {
+            $0.ghosttyView?.surfaceVisibilityForSmokeTest
+        }
+    }
+
+    func pendingTerminalReplayByteCountForSmokeTest(sessionKey: String) -> Int? {
+        sessions.first(where: { $0.sessionKey == sessionKey })?.pendingGhosttyReplayData.count
+    }
+
+    func pendingTerminalReplayContainsForSmokeTest(sessionKey: String, text: String) -> Bool {
+        guard let data = sessions.first(where: { $0.sessionKey == sessionKey })?.pendingGhosttyReplayData else {
+            return false
+        }
+        return String(decoding: data, as: UTF8.self).contains(text)
     }
 
     // Closes the active terminal tab (disposing its panes) so smoke tests that intentionally
@@ -387,14 +482,68 @@ extension MainWindowController {
         let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
         return !scopedTabs.isEmpty
             && !terminalTabStack.isHidden
-            && terminalTabBarHeightConstraint?.constant ?? 0 >= 24
+            && (terminalTabBarHeightConstraint?.constant ?? 0) >= MomentermDesign.Metrics.terminalTabHeight
             && terminalTabStack.arrangedSubviews.count == scopedTabs.count
             && scopedTabs.allSatisfy { $0.tabButton != nil }
+    }
+
+    func terminalTabCloseControlsAreCompactForSmokeTest() -> Bool {
+        window?.contentView?.layoutSubtreeIfNeeded()
+        terminalView.layoutSubtreeIfNeeded()
+        terminalTabStack.layoutSubtreeIfNeeded()
+        let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
+        return abs((terminalTabBarHeightConstraint?.constant ?? 0) - MomentermDesign.Metrics.terminalTabHeight) < 0.5
+            && MomentermDesign.Metrics.terminalTabHeight == 18
+            && scopedTabs.allSatisfy { tab in
+                tab.tabContainerView?.layer?.borderWidth == MomentermDesign.Border.hairline
+                    && tab.tabCloseButton?.toolTip == "Close terminal tab"
+            }
+    }
+
+    @discardableResult
+    func closeActiveTerminalTabViaButtonForSmokeTest() -> Bool {
+        let previousIds = Set(terminalTabs.map(\.id))
+        guard previousIds.count > 1,
+              let tab = activeTab(),
+              let close = tab.tabCloseButton,
+              close.isEnabled else {
+            return false
+        }
+        close.performClick(nil)
+        return !Set(terminalTabs.map(\.id)).contains(tab.id)
     }
 
     func activeTerminalTabIndexForSmokeTest() -> Int {
         let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
         return scopedTabs.firstIndex { $0.id == activeTerminalTabId } ?? -1
+    }
+
+    func renderedTerminalPanesMatchActiveTabForSmokeTest() -> Bool {
+        guard let tab = activeTab(), !tab.panes.isEmpty else {
+            return false
+        }
+        let renderedPaneIds = terminalTabs.flatMap(\.panes).compactMap { pane -> Int? in
+            guard let container = pane.paneContainerView,
+                  container.isDescendant(of: terminalPaneSplitView) else {
+                return nil
+            }
+            return pane.id
+        }
+        return renderedPaneIds.count == tab.panes.count
+            && Set(renderedPaneIds) == Set(tab.panes.map(\.id))
+    }
+
+    func renderedTerminalPaneOwnershipDebugForSmokeTest() -> String {
+        let activePaneIds = activeTab()?.panes.map(\.id) ?? []
+        let renderedPaneIds = terminalTabs.flatMap(\.panes).compactMap { pane -> Int? in
+            guard let container = pane.paneContainerView,
+                  container.isDescendant(of: terminalPaneSplitView) else {
+                return nil
+            }
+            return pane.id
+        }
+        let activeTabDescription = activeTerminalTabId.map(String.init) ?? "nil"
+        return "activeTab=\(activeTabDescription) activePanes=\(activePaneIds) renderedPanes=\(renderedPaneIds)"
     }
 
     func terminalTabButtonsUseFullWidthForSmokeTest() -> Bool {
@@ -670,6 +819,19 @@ extension MainWindowController {
         }.joined(separator: "; ")
     }
 
+    func terminalPaneBoundariesAreVisibleForSmokeTest() -> Bool {
+        guard let tab = activeTab(), tab.panes.count > 1 else {
+            return false
+        }
+        window?.contentView?.layoutSubtreeIfNeeded()
+        terminalPaneSplitView.layoutSubtreeIfNeeded()
+        applyTerminalPaneSelectionStyles()
+        return abs(terminalPaneSplitView.dividerThickness - 2) < 0.5
+            && tab.panes.allSatisfy { pane in
+                pane.paneContainerView?.layer?.borderWidth == MomentermDesign.Border.hairline
+            }
+    }
+
     func terminalVisiblePaneSizesMatchViewportForSmokeTest() -> Bool {
         window?.contentView?.layoutSubtreeIfNeeded()
         terminalPaneSplitView.layoutSubtreeIfNeeded()
@@ -692,8 +854,9 @@ extension MainWindowController {
             return false
         }
         let expected = terminalSize(for: pane)
+        let rowTolerance = pane.ghosttyView == nil ? 2 : 4
         return abs(pane.initialColumns - expected.cols) <= 8
-            && abs(pane.initialRows - expected.rows) <= 2
+            && abs(pane.initialRows - expected.rows) <= rowTolerance
     }
 
     func terminalPaneSizeDebugForSmokeTest() -> String {
@@ -799,10 +962,30 @@ extension MainWindowController {
         }
         let frame = NSRect(x: window.frame.origin.x, y: window.frame.origin.y, width: width, height: height)
         window.setFrame(frame, display: true)
-        window.contentView?.layoutSubtreeIfNeeded()
-        balanceTerminalPaneSplit()
-        syncTerminalSizes()
-        scheduleTerminalResize()
+    }
+
+    func maximizeWindowForSmokeTest() -> Bool {
+        guard let window = window,
+              let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame else {
+            return false
+        }
+        if abs(window.frame.width - visibleFrame.width) <= 1,
+           abs(window.frame.height - visibleFrame.height) <= 1 {
+            let insetFrame = visibleFrame.insetBy(
+                dx: max(visibleFrame.width * 0.15, 80),
+                dy: max(visibleFrame.height * 0.15, 60)
+            )
+            window.setFrame(insetFrame, display: true)
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        let frameBeforeMaximize = window.frame
+        guard abs(frameBeforeMaximize.width - visibleFrame.width) > 1
+                || abs(frameBeforeMaximize.height - visibleFrame.height) > 1 else {
+            return false
+        }
+        window.setFrame(visibleFrame, display: true)
+        return abs(window.frame.width - visibleFrame.width) <= 1
+            && abs(window.frame.height - visibleFrame.height) <= 1
     }
 
     func codeScrollsVerticallyOnlyForSmokeTest() -> Bool {

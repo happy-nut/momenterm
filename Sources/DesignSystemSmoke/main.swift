@@ -105,6 +105,18 @@ let microAttrs = MomentermDesign.Fonts.UI.micro.attributes(color: .white)
 check(microAttrs[.kern] != nil, "micro attributes must include kern (tracking)")
 check(microAttrs[.font] != nil, "micro attributes must include font")
 
+// Files and Changes must stay on the same compact review density across native fallbacks.
+let sourceCodeStyle = MomentermDesign.codeParagraphStyle()
+let diffCodeStyle = MomentermDesign.diffCodeParagraphStyle()
+let reviewLineHeight = MomentermDesign.Metrics.reviewCodeLineHeight
+check(reviewLineHeight == 20, "review code line height must stay at the compact 20pt density")
+check(sourceCodeStyle.minimumLineHeight == reviewLineHeight && sourceCodeStyle.maximumLineHeight == reviewLineHeight,
+      "file code paragraph style must use the shared review line height")
+check(diffCodeStyle.minimumLineHeight == reviewLineHeight && diffCodeStyle.maximumLineHeight == reviewLineHeight,
+      "diff code paragraph style must use the shared review line height")
+check(sourceCodeStyle.lineSpacing == 0 && diffCodeStyle.lineSpacing == 0,
+      "file and diff code paragraph styles must not add extra line spacing")
+
 // MARK: - Semantic color contracts.
 
 let ui = MomentermDesign.Colors.appDark
@@ -138,7 +150,7 @@ check(rgbKey(ui.surfacePanel) != rgbKey(ui.surfaceElevated),
 // MARK: - Report.
 
 if failures.isEmpty {
-    print("design-system smoke ok: spacing(\(spacing.count)) + radius(\(radii.count)) + type(\(typeLadder.count)) scales and semantic contracts verified")
+    print("design-system smoke ok: spacing(\(spacing.count)) + radius(\(radii.count)) + type(\(typeLadder.count)) scales, review density, and semantic contracts verified")
 } else {
     for failure in failures {
         fputs("design-system smoke failed: \(failure)\n", stderr)

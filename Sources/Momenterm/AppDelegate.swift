@@ -54,8 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         socketServer.stop()
         // `NSApplication.terminate` (Cmd+Q) may `exit()` before window controllers'
         // `deinit` runs, so detach terminal sessions here — while keeping the
-        // processes alive — so a later launch can reattach via tmux. Never kill on
-        // quit: that would make tmux recovery impossible.
+        // processes alive — so a later launch can reattach through the persistent
+        // backend. Never kill on quit: that would make recovery impossible.
         for window in NSApp.windows {
             (window.windowController as? MainWindowController)?.detachTerminalSessionsForQuit()
         }
@@ -203,10 +203,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         focusedController()?.closeTab()
     }
 
-    @objc private func toggleTerminal() {
-        focusedController()?.toggleTerminal()
-    }
-
     @objc private func newTerminalTab() {
         focusedController()?.newTerminalTab()
     }
@@ -344,7 +340,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let terminalItem = NSMenuItem()
         let terminalMenu = NSMenu(title: "Terminal")
-        terminalMenu.addItem(targetedItem("Focus Terminal", #selector(toggleTerminal), functionKey(0xF70F), [.option]))
         terminalMenu.addItem(targetedItem("New Terminal Tab", #selector(newTerminalTab), "t", [.command]))
         let cmdTabItem = targetedItem("New Terminal Tab (Cmd+Tab compatibility)", #selector(newTerminalTab), "\t", [.command])
         cmdTabItem.isHidden = true

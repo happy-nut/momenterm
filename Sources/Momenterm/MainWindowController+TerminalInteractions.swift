@@ -81,6 +81,11 @@ extension MainWindowController {
         if closeActiveTerminalPane(in: tab) {
             return
         }
+        if terminalTabs(inWorkspaceId: tab.workspaceId).count > 1 {
+            closeTerminalTab(tab)
+            focusTerminalIfAppropriate()
+            return
+        }
 
         if shouldTerminateWhenClosingLastHomeTerminal() {
             terminateApplicationHandler()
@@ -139,19 +144,6 @@ extension MainWindowController {
             && workspaces.isEmpty
             && terminalTabs.count == 1
             && terminalTabs.first?.workspacePath == nil
-    }
-    func toggleTerminal() {
-        setWorkspaceRailPickerVisible(false, animated: true)
-        hideOverlay()
-        if activeTerminalId == nil {
-            activeTerminalId = activeTab()?.activePaneId ?? activeTab()?.panes.first?.id
-        }
-        rebuildTerminalPanes()
-        window?.makeKeyAndOrderFront(nil)
-        focusTerminal()
-        DispatchQueue.main.async { [weak self] in
-            self?.focusTerminal()
-        }
     }
     // Cmd+T (and the Cmd+Tab compatibility path) create a brand-new terminal tab in
     // the active workspace scope. Pane splitting is a separate feature owned by Cmd+D
@@ -248,10 +240,23 @@ extension MainWindowController {
         }
         let currentIndex = scopeTabs.firstIndex(where: { $0.id == activeTerminalTabId }) ?? 0
         let next = (currentIndex + delta + scopeTabs.count) % scopeTabs.count
-        let tab = scopeTabs[next]
+        focusTerminalTab(at: next)
+    }
+
+    @discardableResult
+    func focusTerminalTab(at index: Int) -> Bool {
+        let scopeTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
+        guard scopeTabs.count > 1, scopeTabs.indices.contains(index) else {
+            return false
+        }
+        let tab = scopeTabs[index]
+        activateTerminalTab(tab, focus: true)
+        return true
+    }
+
+    func activateTerminalTab(_ tab: TerminalTab, focus: Bool) {
         let mergedActive = isMergedPromptPanelActive()
-        activeTerminalTabId = tab.id
-        setActiveTerminal(id: tab.activePaneId ?? tab.panes.first?.id, focus: !mergedActive)
+        setActiveTerminal(id: tab.activePaneId ?? tab.panes.first?.id, focus: focus && !mergedActive)
         if mergedActive {
             // Switching tabs invalidates the previously chosen send target; recompute it and
             // refresh the on-pane selection highlight + "Enter" hint against the new tab.
@@ -294,8 +299,8 @@ extension MainWindowController {
             self?.finishTerminalPaneRename(paneId: paneId, field: field, titleLabel: titleLabel, newName: nil)
         }
         renamingTerminalPaneActive = true
-        DispatchQueue.main.async { [weak self] in
-            self?.window?.makeFirstResponder(field)
+        DispatchQueue.main.async { [weak field] in
+            field?.focusAndSelectAll()
         }
     }
     private func finishTerminalPaneRename(paneId: Int, field: NativeInlineRenameField, titleLabel: NSTextField, newName: String?) {

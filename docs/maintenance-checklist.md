@@ -50,12 +50,12 @@ Current classifications:
       per-tab record keeps its legacy top-level `sessionKey`/`name`/`cwd` mirror so
       readers that predate split support (`terminal-tabs.v2` without a `panes` key)
       still restore a single working pane.
-- [ ] Scrollback restore is best-effort via tmux only: each pane spawns with
-      `tmux new-session -A -s <sessionKey>` (`NativePtyManager`), so on relaunch
-      every restored pane reattaches to its own tmux session and tmux retains that
-      session's scrollback. No separate scrollback file is written; when tmux is
-      unavailable (`MOMENTERM_ENABLE_TMUX_PERSISTENCE` unset) scrollback restore is
-      out of scope.
+- [ ] Terminal process and scrollback restore is on by default: new panes use the
+      system `/usr/bin/screen` backend, while a keyed tmux session created by an
+      older build is detected and reattached in place. Installing tmux later must
+      not orphan an existing screen session, and Ctrl+A must pass through to the
+      shell. `MOMENTERM_DISABLE_TMUX_PERSISTENCE=1` is an explicit
+      test/troubleshooting opt-out, not the product default.
 
 ## Performance Gate
 

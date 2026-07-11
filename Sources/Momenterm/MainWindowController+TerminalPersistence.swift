@@ -6,7 +6,7 @@ import AppKit
 // - pane `cwd` is the actual terminal directory and must survive relaunch unchanged.
 extension MainWindowController {
     /// Detaches all terminal sessions without killing their processes so a later
-    /// launch can reattach via tmux. Invoked from `applicationWillTerminate`
+    /// launch can reattach through the persistent backend. Invoked from `applicationWillTerminate`
     /// because `NSApplication.terminate` may `exit()` before `deinit` runs.
     /// Detaching twice is safe: `detachAll()` clears the session map first, so a
     /// subsequent `deinit` call becomes a no-op.
@@ -38,15 +38,31 @@ extension MainWindowController {
     }
 
     func restoreOrCreateInitialTerminal() {
-        var restored = false
         let requestedActiveWorkspacePath = activeWorkspacePath
         let requestedActiveWorkspaceId = activeWorkspaceId
         let savedWorkspacePaths = Set(workspaces.compactMap { normalizedWorkspacePath($0.path) })
         let savedWorkspaceIds = Set(workspaces.map { $0.id })
+        var preferredRestoredTabId: Int?
+        var restoreCanCommit = true
+        let wasRestoring = isRestoringTerminalState
+        if !wasRestoring {
+            terminalRestoreFailed = false
+        }
+        isRestoringTerminalState = true
+        defer {
+            isRestoringTerminalState = wasRestoring
+            if !wasRestoring {
+                terminalRestoreFailed = !restoreCanCommit
+                if restoreCanCommit {
+                    persistTerminalState()
+                }
+            }
+        }
+
         if !Self.statePersistenceDisabled,
            case .object(let state) = terminalCore.restoreState(legacySettings: persistedSettings),
            case .array(let tabValues)? = state["tabs"] {
-            for item in tabValues.prefix(6) {
+            for item in tabValues {
                 guard let layout = PaneLayoutCodec.decode(item),
                       let primary = layout.panes.first
                 else {
@@ -57,35 +73,51 @@ extension MainWindowController {
                     ? FileManager.default.homeDirectoryForCurrentUser
                     : URL(fileURLWithPath: primary.cwd)
                 let name = primary.name.isEmpty ? displayName(for: cwd) : primary.name
-                let workspacePath = normalizedWorkspacePath(item.objectValue?["workspacePath"]?.stringValue)
-                let workspaceId = item.objectValue?["workspaceId"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
-                    ?? workspacePath.flatMap { path in workspaces.first(where: { normalizedWorkspacePath($0.path) == path })?.id }
-                if let workspacePath = workspacePath {
-                    let stillRegistered = workspaceId.map(savedWorkspaceIds.contains) ?? savedWorkspacePaths.contains(workspacePath)
-                    guard requestedActiveWorkspaceId != nil || requestedActiveWorkspacePath != nil,
-                          stillRegistered
-                    else {
+                var workspacePath = normalizedWorkspacePath(item.objectValue?["workspacePath"]?.stringValue)
+                var workspaceId = item.objectValue?["workspaceId"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+                if let storedWorkspacePath = workspacePath {
+                    let registeredWorkspace = workspaceId.flatMap { id in
+                        savedWorkspaceIds.contains(id) ? workspaces.first(where: { $0.id == id }) : nil
+                    } ?? (savedWorkspacePaths.contains(storedWorkspacePath)
+                        ? workspaces.first(where: { normalizedWorkspacePath($0.path) == storedWorkspacePath })
+                        : nil)
+                    guard let registeredWorkspace = registeredWorkspace else {
                         continue
                     }
+                    workspaceId = registeredWorkspace.id
+                    workspacePath = normalizedWorkspacePath(registeredWorkspace.path)
                 }
-                let shouldRestoreActive = item.objectValue?["active"]?.boolValue ?? !restored
-                let canRestoreActiveWithoutWorkspace = requestedActiveWorkspaceId == nil && workspacePath == nil
+                let shouldRestoreActive = item.objectValue?["active"]?.boolValue ?? (preferredRestoredTabId == nil)
+                let tabCountBeforeSpawn = terminalTabs.count
                 spawnTerminal(
                     name: name,
                     cwd: cwd,
                     workspacePath: workspacePath,
                     workspaceId: workspaceId,
                     sessionKey: sessionKey,
-                    makeActive: shouldRestoreActive && canRestoreActiveWithoutWorkspace,
-                    allowImplicitActivation: requestedActiveWorkspaceId == nil && workspacePath == nil
+                    makeActive: false,
+                    allowImplicitActivation: false
                 )
-                if layout.panes.count > 1,
-                   let restoredTab = terminalTabs.last(where: { tab in
-                       tab.panes.contains(where: { $0.sessionKey == sessionKey })
-                   }) {
-                    restorePaneLayout(layout, into: restoredTab)
+                guard terminalTabs.count > tabCountBeforeSpawn,
+                      let restoredTab = terminalTabs.last,
+                      restoredTab.panes.contains(where: { $0.sessionKey == sessionKey }) else {
+                    restoreCanCommit = false
+                    continue
                 }
-                restored = true
+                if layout.panes.count > 1, !restorePaneLayout(layout, into: restoredTab) {
+                    restoreCanCommit = false
+                }
+                let matchesRequestedWorkspace: Bool
+                if let requestedActiveWorkspaceId = requestedActiveWorkspaceId {
+                    matchesRequestedWorkspace = requestedActiveWorkspaceId == workspaceId
+                } else if let requestedActiveWorkspacePath = requestedActiveWorkspacePath {
+                    matchesRequestedWorkspace = requestedActiveWorkspacePath == workspacePath
+                } else {
+                    matchesRequestedWorkspace = workspacePath == nil
+                }
+                if shouldRestoreActive && matchesRequestedWorkspace {
+                    preferredRestoredTabId = restoredTab.id
+                }
             }
         }
         if let requestedActiveWorkspaceId = requestedActiveWorkspaceId {
@@ -97,57 +129,52 @@ extension MainWindowController {
             root = URL(fileURLWithPath: requestedActiveWorkspacePath).standardizedFileURL
             persistActiveWorkspacePath()
         }
-        if !restored {
-            if let workspaceURL = activeWorkspaceURL() {
-                spawnTerminal(
-                    name: displayName(for: workspaceURL),
-                    cwd: workspaceURL,
-                    workspacePath: workspaceURL.path,
-                    workspaceId: activeWorkspaceId,
-                    sessionKey: terminalCore.makeSessionKey(),
-                    makeActive: true
-                )
-            } else {
-                let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
-                let terminalDirectory = initialTerminalDirectory ?? home
-                let terminalName = terminalDirectory.standardizedFileURL.path == home.path
-                    ? "~"
-                    : displayName(for: terminalDirectory)
-                spawnTerminal(
-                    name: terminalName,
-                    cwd: terminalDirectory,
-                    workspacePath: nil,
-                    sessionKey: terminalCore.makeSessionKey(),
-                    makeActive: true
-                )
-            }
-        } else {
-            activateRestoredTerminalAfterLaunch()
+
+        if let preferredRestoredTabId = preferredRestoredTabId,
+           let preferredTab = terminalTabs.first(where: { $0.id == preferredRestoredTabId }) {
+            activeTerminalTabId = preferredTab.id
+            activeTerminalId = preferredTab.activePaneId ?? preferredTab.panes.first?.id
         }
-        persistTerminalState()
+        if !activateRestoredTerminalAfterLaunch() {
+            restoreCanCommit = false
+        }
     }
 
-    private func activateRestoredTerminalAfterLaunch() {
+    @discardableResult
+    private func activateRestoredTerminalAfterLaunch() -> Bool {
         if let workspaceURL = activeWorkspaceURL() {
-            _ = activateOrCreateWorkspaceTerminal(for: workspaceURL, focus: true)
-            return
+            return activateOrCreateWorkspaceTerminal(for: workspaceURL, focus: true)
         }
         if let activeTerminalId = activeTerminalId,
            terminalTabs.contains(where: { tab in tab.panes.contains(where: { $0.id == activeTerminalId }) }) {
             setActiveTerminal(id: activeTerminalId, focus: true)
-            return
+            return true
         }
-        let preferredTab = terminalTabs.first { $0.workspacePath == nil } ?? terminalTabs.first
-        guard let tab = preferredTab,
+        guard let tab = terminalTabs.first(where: { $0.workspacePath == nil }),
               let paneId = tab.activePaneId ?? tab.panes.first?.id else {
-            activateHomeTerminal()
-            return
+            let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+            let terminalDirectory = initialTerminalDirectory ?? home
+            let terminalName = terminalDirectory.standardizedFileURL.path == home.path
+                ? "~"
+                : displayName(for: terminalDirectory)
+            let tabCountBeforeSpawn = terminalTabs.count
+            spawnTerminal(
+                name: terminalName,
+                cwd: terminalDirectory,
+                workspacePath: nil,
+                sessionKey: terminalCore.makeSessionKey(),
+                makeActive: true
+            )
+            return terminalTabs.count > tabCountBeforeSpawn
         }
         setActiveTerminal(id: paneId, focus: true)
+        return true
     }
 
     func persistTerminalState() {
-        guard !Self.statePersistenceDisabled else {
+        guard !Self.statePersistenceDisabled,
+              !isRestoringTerminalState,
+              !terminalRestoreFailed else {
             return
         }
         terminalCore.saveTabs(.array(terminalTabs.compactMap { tab in
@@ -191,9 +218,10 @@ extension MainWindowController {
         )
     }
 
-    private func restorePaneLayout(_ layout: PaneLayoutCodec.Layout, into tab: TerminalTab) {
+    @discardableResult
+    private func restorePaneLayout(_ layout: PaneLayoutCodec.Layout, into tab: TerminalTab) -> Bool {
         guard layout.panes.count > 1, let firstPane = tab.panes.first else {
-            return
+            return layout.panes.count <= 1
         }
         var paneIdByIndex: [Int: Int] = [0: firstPane.id]
         let paneCwd = tab.cwd
@@ -230,5 +258,6 @@ extension MainWindowController {
         if activeTerminalTabId == tab.id {
             rebuildTerminalPanes()
         }
+        return paneIdByIndex.count == layout.panes.count
     }
 }

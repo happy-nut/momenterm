@@ -132,6 +132,7 @@ extension MainWindowController {
                 "rawLanguage": rawPreviewLanguage(for: file.language),
                 "viewMode": mode.rawValue,
                 "fontSize": Double(MomentermDesign.Fonts.codeFontSize),
+                "lineHeight": Double(MomentermDesign.Metrics.reviewCodeLineHeight),
                 "isImage": false
             ]
             if !file.image.isEmpty {
@@ -232,7 +233,8 @@ extension MainWindowController {
             return
         }
         sourceViewMode = mode
-        renderSourceFile(document.sourceFiles[selectedSourceIndex])
+        let file = document.sourceFiles[selectedSourceIndex]
+        renderSourceFile(sourceFilePreview(forPath: file.path) ?? file)
     }
 
     @objc func toggleSourceRawModeAction() {

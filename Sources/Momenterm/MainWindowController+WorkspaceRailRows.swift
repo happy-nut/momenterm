@@ -47,22 +47,52 @@ extension MainWindowController {
         return container
     }
     func rebuildWorkspaceButtons() {
+        // Re-entrancy guard (see isRebuildingWorkspaceButtons). A rebuild triggered while this one is
+        // still tearing down / rebuilding the rail — e.g. a queued workspace-status or pane-status
+        // callback draining while AppKit spins a nested run loop during the removal loop's inline-
+        // rename field-editor teardown — must NOT mutate workspaceStack out from under us. Coalesce
+        // it into one follow-up rebuild that runs after this call completes, so the arranged-subview
+        // snapshot the removal loop iterates stays valid and NSStackView._removeView can't assert.
+        if isRebuildingWorkspaceButtons {
+            workspaceButtonsRebuildCoalesced = true
+            return
+        }
+        isRebuildingWorkspaceButtons = true
+        defer {
+            isRebuildingWorkspaceButtons = false
+            if workspaceButtonsRebuildCoalesced {
+                workspaceButtonsRebuildCoalesced = false
+                rebuildWorkspaceButtons()
+            }
+        }
         // Preserve an in-progress inline rename across this repaint. Removing the field from the
         // view tree fires NativeInlineRenameField.controlTextDidEndEditing, which would otherwise
         // commit-on-focus-loss, clear renamingWorkspaceId, and collapse the row back to a static
         // label mid-edit — the reported "press e, the field appears then snaps back and can't be
         // typed into" bug (triggered by an async workspace-status refresh or agent notification
         // repainting the rail right after edit mode opens). Stash the typed text, suppress that
-        // teardown commit, and re-seed (plus re-focus, if it was focused) the field below so the
+        // teardown commit, and re-seed plus re-focus the field below so the
         // rename survives the rebuild instead of the rail freezing while a rename is open.
         if renamingWorkspaceId != nil, let field = collectRenameFields(in: workspaceStack).first {
             pendingWorkspaceRenameText = field.stringValue
-            pendingWorkspaceRenameWasFocused = field.currentEditor() != nil
             field.suppressEndEditingCommit = true
         }
-        workspaceStack.arrangedSubviews.forEach { view in
+        // Drain by always re-reading the CURRENT arranged subview (never a stale snapshot): if some
+        // re-entrant or cross-thread mutation detaches a view mid-teardown, we simply never touch a
+        // view that has already left the stack, so removeArrangedSubview/removeFromSuperview can't be
+        // handed a detached view and NSStackView._removeView can't assert.
+        while let view = workspaceStack.arrangedSubviews.first {
             workspaceStack.removeArrangedSubview(view)
             view.removeFromSuperview()
+#if DEBUG
+            // Regression injection point (see reentrantRebuildInjectionForSmokeTest): simulate a
+            // queued status callback re-entering rebuildWorkspaceButtons() mid-removal — the exact
+            // interleaving that crashed NSStackView._removeView before the re-entrancy guard.
+            if let injection = reentrantRebuildInjectionForSmokeTest {
+                reentrantRebuildInjectionForSmokeTest = nil
+                injection()
+            }
+#endif
         }
         workspaceStack.alignment = workspaceRailExpanded ? .leading : .centerX
         // Section label above the list — expanded only (no room in the 38pt collapsed rail).
@@ -146,16 +176,12 @@ extension MainWindowController {
             }
             workspaceStack.addArrangedSubview(button)
         }
-        // If this repaint recreated a rename field that was mid-edit, restore focus so typing
-        // continues. The stashed text was consumed as the field's seed in
-        // configureExpandedWorkspaceButton; clear it now that the field exists again.
+        // A genuine user blur commits and clears renamingWorkspaceId before a repaint. Therefore,
+        // if edit mode is still active here, this was a programmatic rebuild and the replacement
+        // field must always regain focus, including when the old field editor was between states.
         if renamingWorkspaceId != nil, pendingWorkspaceRenameText != nil {
-            let shouldRefocus = pendingWorkspaceRenameWasFocused
             pendingWorkspaceRenameText = nil
-            pendingWorkspaceRenameWasFocused = false
-            if shouldRefocus {
-                focusRenamingWorkspaceField()
-            }
+            focusRenamingWorkspaceField()
         }
         syncWorkspaceShortcutHintsAfterRailRebuild()
         refreshWorkspaceStatuses()

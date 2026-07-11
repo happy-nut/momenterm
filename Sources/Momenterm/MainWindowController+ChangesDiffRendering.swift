@@ -386,7 +386,7 @@ extension MainWindowController {
                 "originalLineDiffs": hybridContent.originalLineDiffs.map(\.payload),
                 "modifiedLineDiffs": hybridContent.modifiedLineDiffs.map(\.payload),
                 "fontSize": Double(MomentermDesign.Fonts.codeFontSize),
-                "lineHeight": 18,
+                "lineHeight": Double(MomentermDesign.Metrics.reviewCodeLineHeight),
                 // IntelliJ "modified" (changed on both sides) blue, matching the native diff pane so the
                 // hybrid diff reclassifies Monaco's add-green/delete-red the same way.
                 "modifiedLineBackground": theme.modifiedBackground.hexString(fallback: "#2B3A52"),

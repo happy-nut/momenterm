@@ -210,9 +210,9 @@ final class DiffCenterGutterView: NSView {
             if fragment.isEmpty {
                 fragment = NSRect(
                     x: 0,
-                    y: CGFloat(rects.count) * MomentermDesign.Metrics.diffCodeMinimumLineHeight,
+                    y: CGFloat(rects.count) * MomentermDesign.Metrics.reviewCodeLineHeight,
                     width: 1,
-                    height: MomentermDesign.Metrics.diffCodeMinimumLineHeight
+                    height: MomentermDesign.Metrics.reviewCodeLineHeight
                 )
             }
             let top = textView.convert(NSPoint(x: 0, y: originY + fragment.minY), to: self)

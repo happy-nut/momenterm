@@ -10,7 +10,8 @@ extension MainWindowController {
         setActiveWorkspace(id: resolvedId)
         root = standardized
         let scopedTabs = resolvedId != nil ? terminalTabs(inWorkspaceId: resolvedId) : terminalTabs(in: workspacePath)
-        if let tab = scopedTabs.first,
+        let preferredTab = scopedTabs.first(where: { $0.id == activeTerminalTabId }) ?? scopedTabs.first
+        if let tab = preferredTab,
            let paneId = tab.activePaneId ?? tab.panes.first?.id {
             alignTab(tab, to: standardized, workspaceId: resolvedId)
             setActiveTerminal(id: paneId, focus: focus)

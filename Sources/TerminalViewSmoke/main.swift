@@ -27,9 +27,31 @@ guard terminal.isEditable else {
     fail("terminal text view must be editable for Hangul IME composition")
 }
 
+var preeditUpdates: [String] = []
+var committedText: [String] = []
+terminal.onPreedit = { preeditUpdates.append($0) }
+terminal.onInput = { committedText.append($0) }
+terminal.setMarkedText(
+    "ㅎ",
+    selectedRange: NSRange(location: 1, length: 0),
+    replacementRange: NSRange(location: NSNotFound, length: 0)
+)
+terminal.setMarkedText(
+    "한",
+    selectedRange: NSRange(location: 1, length: 0),
+    replacementRange: NSRange(location: NSNotFound, length: 0)
+)
+guard preeditUpdates == ["ㅎ", "한"], committedText.isEmpty else {
+    fail("Hangul preedit did not update visibly before commit: preedit=\(preeditUpdates) committed=\(committedText)")
+}
+terminal.insertText("한", replacementRange: NSRange(location: NSNotFound, length: 0))
+guard preeditUpdates.last == "", committedText == ["한"], !terminal.hasMarkedText() else {
+    fail("Hangul commit did not clear preedit exactly once: preedit=\(preeditUpdates) committed=\(committedText)")
+}
+
 let inset = terminal.textContainerInset
 guard inset.width >= 10, inset.height >= 6 else {
     fail("terminal inset too small (text hugs the edges): \(inset)")
 }
 
-print("terminal-view smoke ok: selectable, editable (IME), inset \(inset)")
+print("terminal-view smoke ok: selectable, visible IME preedit, committed input, inset \(inset)")

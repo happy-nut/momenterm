@@ -18,20 +18,26 @@ extension MainWindowController {
         focusRenamingWorkspaceField()
     }
     func focusRenamingWorkspaceField() {
+        if renamingWorkspaceId != nil,
+           let field = collectRenameFields(in: workspaceStack).first {
+            window?.makeKeyAndOrderFront(nil)
+            if field.focusAndSelectAll() {
+                return
+            }
+        }
         DispatchQueue.main.async { [weak self] in
             guard let self = self, self.renamingWorkspaceId != nil else {
                 return
             }
             if let field = self.collectRenameFields(in: self.workspaceStack).first {
                 self.window?.makeKeyAndOrderFront(nil)
-                self.window?.makeFirstResponder(field)
+                field.focusAndSelectAll()
             }
         }
     }
     func commitWorkspaceRename(id workspaceId: String, to newName: String) {
         renamingWorkspaceId = nil
         pendingWorkspaceRenameText = nil
-        pendingWorkspaceRenameWasFocused = false
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             _ = renameWorkspace(id: workspaceId, to: trimmed)
@@ -43,7 +49,6 @@ extension MainWindowController {
     func cancelWorkspaceRename() {
         renamingWorkspaceId = nil
         pendingWorkspaceRenameText = nil
-        pendingWorkspaceRenameWasFocused = false
         rebuildWorkspaceButtons()
         focusWorkspaceRailPicker()
     }

@@ -145,7 +145,7 @@ extension MainWindowController {
         }
         selectedSourceIndex = index
         fileTreeModel.selectedIdentifier = "source:\(index)"
-        renderSourceFile(document.sourceFiles[index])
+        renderSourceFile(sourceFilePreview(forPath: path) ?? document.sourceFiles[index])
         return true
     }
 

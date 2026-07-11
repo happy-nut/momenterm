@@ -97,7 +97,6 @@ extension MainWindowController {
 
         settingsPromptTextViews.removeAll()
 
-        overlaySidebarStack.addArrangedSubview(settingsSidebarSearchField())
         overlaySidebarStack.addArrangedSubview(settingsSidebarGroupLabel("설정"))
         for category in SettingsCategory.allCases {
             overlaySidebarStack.addArrangedSubview(settingsSidebarItem(
@@ -108,8 +107,6 @@ extension MainWindowController {
                 category: category
             ))
         }
-        overlaySidebarStack.addArrangedSubview(settingsSidebarDivider())
-
         overlaySettingsStack.addArrangedSubview(settingsIntro(
             title: selectedSettingsCategory.title,
             detail: selectedSettingsCategory.detail
@@ -140,20 +137,6 @@ extension MainWindowController {
     }
     private func settingsSections(for category: SettingsCategory) -> [NSView] {
         switch category {
-        case .general:
-            return [
-                settingsSection(
-                    title: "일반",
-                    rows: [
-                        settingsInfoRow(title: "저장 방식", value: "즉시 저장", detail: "변경 가능한 설정은 수정 즉시 저장됩니다."),
-                        settingsInfoRow(
-                            title: "신택스 하이라이팅",
-                            value: MomentermDesign.Colors.syntaxThemePreset(id: ThemeManager.shared.syntaxPresetId).displayName,
-                            detail: "코드 신택스 색은 '테마' 탭의 신택스 테마에서 선택합니다."
-                        )
-                    ]
-                )
-            ]
         case .appearance:
             return [
                 settingsUIPaletteSection(),
@@ -164,9 +147,6 @@ extension MainWindowController {
                 settingsSection(
                     title: "터미널",
                     rows: [
-                        settingsInfoRow(title: "쉘", value: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", detail: "새 터미널 패널은 native PTY 로그인 쉘로 시작합니다."),
-                        settingsInfoRow(title: "시작 디렉토리", value: activeTerminalCwdForSmokeTest() ?? FileManager.default.homeDirectoryForCurrentUser.path, detail: "워크스페이스가 있으면 해당 경로에서, 없으면 홈에서 시작합니다."),
-                        settingsInfoRow(title: "터미널 패널", value: "\(activeTab()?.panes.count ?? 0) panes", detail: "Cmd+D와 Cmd+Shift+D는 포커스된 터미널 그룹을 분할합니다."),
                         settingsToggleRow(title: "여유로운 간격", detail: "터미널 패널 헤더와 하단 상태 바를 더 크게 (comfortable 밀도).", isOn: terminalComfortableDensity, action: #selector(toggleTerminalDensitySetting(_:))),
                         settingsSegmentedRow(
                             title: "커서 모양",
@@ -204,8 +184,7 @@ extension MainWindowController {
                             identifier: "settings-code-fontsize",
                             action: #selector(selectCodeFontSizeSetting(_:))
                         ),
-                        settingsToggleRow(title: "공백 무시", detail: "Git whitespace 변경을 무시한 diff로 다시 렌더링합니다.", isOn: ignoreWhitespace, action: #selector(toggleIgnoreWhitespaceSetting(_:))),
-                        settingsInfoRow(title: "새로고침", value: "Every 1.5 seconds", detail: "큰 diff 로딩이 겹치지 않도록 refresh를 병합합니다.")
+                        settingsToggleRow(title: "공백 무시", detail: "Git whitespace 변경을 무시한 diff로 다시 렌더링합니다.", isOn: ignoreWhitespace, action: #selector(toggleIgnoreWhitespaceSetting(_:)))
                     ]
                 )
             ]
@@ -385,20 +364,6 @@ extension MainWindowController {
     private func applySettingsSurface(_ view: NSView, selected: Bool = false) {
         view.identifier = NSUserInterfaceItemIdentifier("settings-row-surface")
         view.wantsLayer = false
-    }
-    private func settingsInfoRow(title: String, value: String, detail: String) -> NSView {
-        let row = settingsRowBase(title: title, detail: detail)
-        // Technical values (shell path, cwd) read cleaner in a muted monospace, like macOS
-        // System Settings' secondary value column — not a loud bold white.
-        let valueLabel = NativeSettingsLabel(text: value)
-        valueLabel.font = NSFont(name: "Monaco", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-        valueLabel.textColor = settingsValueTextColor()
-        valueLabel.alignment = .right
-        valueLabel.lineBreakMode = .byTruncatingMiddle
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-        valueLabel.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        row.addArrangedSubview(valueLabel)
-        return row
     }
     private func settingsToggleRow(title: String, detail: String, isOn: Bool, action: Selector) -> NSView {
         let row = settingsRowBase(title: title, detail: detail)
@@ -599,58 +564,6 @@ extension MainWindowController {
         row.addArrangedSubview(spacer)
         return row
     }
-    private func settingsSidebarSearchField() -> NSView {
-        let width = MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2
-        // A themed, inset search bar instead of the stock white-bezel NSSearchField (which read as a
-        // jarring light pill on the dark sidebar). A borderless field sits in a rounded, subtly
-        // darkened container with our own magnifier glyph.
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.backgroundColor = theme.primaryText.withAlphaComponent(0.035).cgColor
-        container.layer?.cornerRadius = 8
-        container.layer?.borderWidth = 0.5
-        container.layer?.borderColor = theme.separator.withAlphaComponent(0.28).cgColor
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        let icon = NSImageView()
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "검색")
-        icon.image?.isTemplate = true
-        icon.contentTintColor = theme.tertiaryText
-        icon.imageScaling = .scaleProportionallyDown
-
-        let search = NSSearchField()
-        search.identifier = NSUserInterfaceItemIdentifier("settings-sidebar-search")
-        search.placeholderString = "검색"
-        search.font = NSFont.systemFont(ofSize: 12.5, weight: .regular)
-        search.textColor = theme.primaryText
-        search.focusRingType = .none
-        search.isBordered = false
-        search.isBezeled = false
-        search.drawsBackground = false
-        search.toolTip = "설정 검색"
-        search.translatesAutoresizingMaskIntoConstraints = false
-        if let cell = search.cell as? NSSearchFieldCell {
-            // We draw our own glyph on the left, so drop the field's built-in search/clear buttons.
-            cell.searchButtonCell = nil
-            cell.cancelButtonCell = nil
-        }
-
-        container.addSubview(icon)
-        container.addSubview(search)
-        NSLayoutConstraint.activate([
-            container.widthAnchor.constraint(equalToConstant: width),
-            container.heightAnchor.constraint(equalToConstant: 32),
-            icon.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            icon.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 14),
-            icon.heightAnchor.constraint(equalToConstant: 14),
-            search.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7),
-            search.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-            search.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-        ])
-        return container
-    }
     private func settingsSidebarGroupLabel(_ title: String) -> NSView {
         let label = NativeSettingsLabel(text: title)
         label.identifier = NSUserInterfaceItemIdentifier("settings-sidebar-group")
@@ -728,15 +641,6 @@ extension MainWindowController {
             shortcutLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 38)
         ])
         return button
-    }
-    private func settingsSidebarDivider() -> NSView {
-        let line = NSView()
-        line.translatesAutoresizingMaskIntoConstraints = false
-        line.wantsLayer = true
-        line.layer?.backgroundColor = theme.separator.withAlphaComponent(0.35).cgColor
-        line.widthAnchor.constraint(equalToConstant: MomentermDesign.Metrics.settingsSidebarWidth - MomentermDesign.Metrics.sidebarGutter * 2).isActive = true
-        line.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        return line
     }
     func workspaceScopedSettings(rootKey: String) -> [String: JSONValue] {
         persistedSettings[rootKey]?.objectValue ?? [:]

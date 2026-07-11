@@ -481,7 +481,7 @@ enum MomentermDesign {
         static let sidebarGutter: CGFloat = Spacing.space3
         static let railButtonSize: CGFloat = 26
         static let iconButtonSize: CGFloat = 22
-        static let terminalTabHeight: CGFloat = 22
+        static let terminalTabHeight: CGFloat = 18
         static let fileTabBarHeight: CGFloat = 26
         static let fileTabHeight: CGFloat = 22
         static let terminalTextInset = NSSize(width: 12, height: 8)
@@ -519,10 +519,9 @@ enum MomentermDesign {
         static let settingsRowHeight: CGFloat = 52
         static let settingsPromptTextWidth: CGFloat = 328
         static let sidebarSelectionScrollMarginRatio: CGFloat = 0.15
-        static let codeMinimumLineHeight: CGFloat = 20
-        static let codeLineSpacing: CGFloat = 3
-        static let diffCodeMinimumLineHeight: CGFloat = 15
-        static let diffCodeLineSpacing: CGFloat = 0
+        // Files and Changes share one compact review density. This sits between the previous
+        // 23pt source rows and 18px Monaco diff rows, leaning toward the denser diff view.
+        static let reviewCodeLineHeight: CGFloat = 20
         static let diffCodeTextInset = NSSize(width: 0, height: 2)
         static let diffEditorChromeHeight: CGFloat = 46
         static let minimalScrollbarWidth: CGFloat = 5
@@ -604,18 +603,14 @@ enum MomentermDesign {
 
     static func codeParagraphStyle() -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = Metrics.codeMinimumLineHeight
-        style.maximumLineHeight = Metrics.codeMinimumLineHeight
-        style.lineSpacing = Metrics.codeLineSpacing
+        style.minimumLineHeight = Metrics.reviewCodeLineHeight
+        style.maximumLineHeight = Metrics.reviewCodeLineHeight
+        style.lineSpacing = 0
         return style
     }
 
     static func diffCodeParagraphStyle() -> NSParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = Metrics.diffCodeMinimumLineHeight
-        style.maximumLineHeight = Metrics.diffCodeMinimumLineHeight
-        style.lineSpacing = Metrics.diffCodeLineSpacing
-        return style
+        codeParagraphStyle()
     }
 
     /// Apply a soft dark-tuned drop shadow to a layer-backed view. Shadows on the
@@ -777,12 +772,22 @@ final class MomentermCompactButton: NSButton {
 final class MomentermBalancedSplitView: NSSplitView {
     var balancesVisibleSubviews = false
     var minimumBalancedSubviewWidth = MomentermDesign.Metrics.minimumBalancedPaneWidth
+    var momentermDividerColor: NSColor?
+    var momentermDividerThickness: CGFloat?
     private var isBalancing = false
     private var balanceScheduled = false
 
+    override var dividerColor: NSColor {
+        momentermDividerColor ?? super.dividerColor
+    }
+
+    override var dividerThickness: CGFloat {
+        momentermDividerThickness ?? super.dividerThickness
+    }
+
     override func layout() {
         super.layout()
-        if balancesVisibleSubviews {
+        if balancesVisibleSubviews && !isBalancing {
             scheduleBalance()
         }
     }
@@ -797,6 +802,12 @@ final class MomentermBalancedSplitView: NSSplitView {
         }
         let totalLength = isVertical ? bounds.width : bounds.height
         guard totalLength > CGFloat(visibleSubviews.count) else {
+            return
+        }
+        let currentLengths = visibleSubviews.map { isVertical ? $0.frame.width : $0.frame.height }
+        if let shortest = currentLengths.min(),
+           let longest = currentLengths.max(),
+           longest - shortest <= 1 {
             return
         }
 

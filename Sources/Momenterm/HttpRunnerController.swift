@@ -74,7 +74,7 @@ final class HttpRunnerController: NSObject {
         clearRunButtons(resetInset: false)
         httpRunButtonGeneration += 1
         let generation = httpRunButtonGeneration
-        let lineHeight = MomentermDesign.Metrics.codeMinimumLineHeight + MomentermDesign.Metrics.codeLineSpacing
+        let lineHeight = MomentermDesign.Metrics.reviewCodeLineHeight
         for request in requests.prefix(80) {
             let button = MomentermCompactButton(title: "▶", target: self, action: #selector(runHttpRequestButton(_:)))
             button.tag = request.index
@@ -101,7 +101,7 @@ final class HttpRunnerController: NSObject {
     }
 
     private func repositionRunButtons(requests: [NativeHttpRequest]) {
-        let lineHeight = MomentermDesign.Metrics.codeMinimumLineHeight + MomentermDesign.Metrics.codeLineSpacing
+        let lineHeight = MomentermDesign.Metrics.reviewCodeLineHeight
         for (button, request) in zip(httpRunButtons, requests) {
             let y = codePane.oldPaneContentOriginY + CGFloat(max(request.startLine - 1, 0)) * lineHeight + 2
             button.frame = NSRect(x: 5, y: y, width: 16, height: 16)

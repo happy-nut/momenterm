@@ -588,6 +588,10 @@ final class NativeTerminalTextView: NSTextView {
     var onFocus: (() -> Void)?
     var onInput: ((String) -> Void)?
     var onPaste: ((String) -> Void)?
+    // AppKit owns IME composition, while ghostty owns the visible terminal grid. These hooks mirror
+    // marked text into ghostty's preedit renderer and anchor the candidate window to its cursor.
+    var onPreedit: ((String) -> Void)?
+    var imeRectProvider: (() -> NSRect?)?
 
     // Mouse-selection forwarding to the ghostty surface beneath this view. Wired only in
     // ghostty-render mode; when set, mouse gestures drive ghostty's selection (it owns the
@@ -645,6 +649,14 @@ final class NativeTerminalTextView: NSTextView {
         // — decomposing "면접" into "ㅁㅕㄴㅈㅓㅂ". This bit only when focus was set
         // programmatically (makeFirstResponder), which workspace/tab switches now do more often.
         return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            onPreedit?("")
+        }
+        return resigned
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -751,15 +763,28 @@ final class NativeTerminalTextView: NSTextView {
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         momentermKeyDebug("TV.setMarkedText \(string) sel=\(selectedRange)")
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
+        onPreedit?(text)
     }
 
     override func unmarkText() {
         momentermKeyDebug("TV.unmarkText")
         super.unmarkText()
+        onPreedit?("")
+    }
+
+    override func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        if let rect = imeRectProvider?() {
+            return rect
+        }
+        return super.firstRect(forCharacterRange: range, actualRange: actualRange)
     }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         momentermKeyDebug("TV.insertText \(insertString)")
+        // Clear the visual preedit before the committed text is sent. The shell/application will
+        // echo the committed text back through the PTY, so it must never be drawn twice.
+        onPreedit?("")
         if let attributed = insertString as? NSAttributedString {
             onInput?(attributed.string)
         } else if let text = insertString as? String {
@@ -971,8 +996,8 @@ final class NativeMarkdownMemoTextView: NSTextView {
         importsGraphics = false
         wantsLayer = true
         drawsBackground = true
-        backgroundColor = theme.codeBackground
-        layer?.backgroundColor = theme.codeBackground.cgColor
+        backgroundColor = theme.panelBackground
+        layer?.backgroundColor = theme.panelBackground.cgColor
         textColor = theme.primaryText
         insertionPointColor = theme.primaryText
         font = NSFont.systemFont(ofSize: 13, weight: .regular)
@@ -988,6 +1013,9 @@ final class NativeMarkdownMemoTextView: NSTextView {
         isAutomaticDashSubstitutionEnabled = false
         isAutomaticTextReplacementEnabled = false
         isContinuousSpellCheckingEnabled = false
+        if renderMarkdown {
+            applyMarkdownRendering()
+        }
         needsDisplay = true
     }
 
@@ -1048,7 +1076,7 @@ final class NativeMarkdownMemoTextView: NSTextView {
     }
 
     override func drawBackground(in rect: NSRect) {
-        theme.codeBackground.setFill()
+        theme.panelBackground.setFill()
         bounds.intersection(rect).fill()
         super.drawBackground(in: rect)
     }
@@ -1481,12 +1509,16 @@ final class NativeInlineRenameField: NSTextField, NSTextFieldDelegate {
         cell?.isScrollable = true
     }
 
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        if accepted {
-            selectText(nil)
+    @discardableResult
+    func focusAndSelectAll() -> Bool {
+        window?.makeFirstResponder(self) ?? false
+    }
+
+    func controlTextDidBeginEditing(_ obj: Notification) {
+        guard let editor = currentEditor() else {
+            return
         }
-        return accepted
+        editor.selectedRange = NSRange(location: 0, length: (stringValue as NSString).length)
     }
 
     private func finish(commit: Bool) {
@@ -1500,6 +1532,12 @@ final class NativeInlineRenameField: NSTextField, NSTextFieldDelegate {
             onCancel?()
         }
     }
+
+#if DEBUG
+    func commitForSmokeTest() {
+        finish(commit: true)
+    }
+#endif
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {

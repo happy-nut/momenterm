@@ -256,8 +256,164 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
     private let smokeOnly = ProcessInfo.processInfo.environment["MOMENTERM_KEY_INPUT_SMOKE_ONLY"]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setenv("MOMENTERM_DISABLE_TMUX_PERSISTENCE", "1", 1)
+        if smokeOnly == "terminal-restore" {
+            unsetenv("MOMENTERM_DISABLE_TMUX_PERSISTENCE")
+        } else {
+            setenv("MOMENTERM_DISABLE_TMUX_PERSISTENCE", "1", 1)
+        }
         clearPersistedState()
+        if smokeOnly == "settings" {
+            let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+            self.controller = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self else { return }
+                self.verifySettingsOverlay(controller)
+                self.smokeControllers.forEach { controller in
+                    controller.disposeForSmokeTest()
+                    controller.close()
+                }
+                self.smokeControllers.removeAll()
+                self.clearPersistedState()
+                print("key input smoke settings ok")
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if smokeOnly == "terminal-tabs" {
+            let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+            self.controller = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self = self else { return }
+                guard let window = controller.window,
+                      let terminalFocusEvent = NSEvent.keyEvent(
+                        with: .keyDown,
+                        location: .zero,
+                        modifierFlags: [.option],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber,
+                        context: nil,
+                        characters: String(UnicodeScalar(0xF70F)!),
+                        charactersIgnoringModifiers: String(UnicodeScalar(0xF70F)!),
+                        isARepeat: false,
+                        keyCode: 111
+                      ),
+                      !controller.handleShortcutForSmokeTest(terminalFocusEvent) else {
+                    self.fail("targeted terminal tab smoke found the removed Option+F12 terminal focus shortcut")
+                    return
+                }
+                let initialTabs = controller.terminalTabCountForSmokeTest()
+                guard controller.terminalTabUiIsVisibleForSmokeTest(),
+                      controller.terminalTabCloseControlsAreCompactForSmokeTest() else {
+                    self.fail("targeted terminal tab smoke did not render compact close controls")
+                    return
+                }
+                controller.newTerminalTab()
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+                let sessionsWithClosableTab = controller.terminalSessionCountForSmokeTest()
+                guard controller.terminalTabCountForSmokeTest() == initialTabs + 1 else {
+                    self.fail("targeted terminal tab smoke did not create a second tab")
+                    return
+                }
+                self.sendShortcut("1", keyCode: 18, modifiers: [.command], routeThroughShortcutRouter: true)
+                self.sendShortcut("w", keyCode: 13, modifiers: [.command], routeThroughShortcutRouter: true)
+                guard controller.terminalTabCountForSmokeTest() == initialTabs,
+                      controller.terminalSessionCountForSmokeTest() == sessionsWithClosableTab - 1 else {
+                    self.fail("Cmd+W did not close a single-pane tab while another terminal tab remained")
+                    return
+                }
+                controller.newTerminalTab()
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+                guard controller.closeActiveTerminalTabViaButtonForSmokeTest(),
+                      controller.terminalTabCountForSmokeTest() == initialTabs else {
+                    self.fail("targeted terminal tab close button did not remove the active tab")
+                    return
+                }
+                controller.splitTerminalPane()
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+                guard controller.terminalPaneBoundariesAreVisibleForSmokeTest() else {
+                    self.fail("targeted terminal pane smoke did not render visible split boundaries")
+                    return
+                }
+                self.smokeControllers.forEach { controller in
+                    controller.disposeForSmokeTest()
+                    controller.close()
+                }
+                self.smokeControllers.removeAll()
+                self.clearPersistedState()
+                print("key input smoke terminal-tabs ok")
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if smokeOnly == "workspace-terminal-return" {
+            let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+            self.controller = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self = self else { return }
+                let workspaceA = self.makeTempDirectory(name: "momenterm-terminal-return-a")
+                let workspaceB = self.makeTempDirectory(name: "momenterm-terminal-return-b")
+                defer {
+                    try? FileManager.default.removeItem(at: workspaceA)
+                    try? FileManager.default.removeItem(at: workspaceB)
+                }
+
+                controller.openWorkspaceForSmokeTest(workspaceA)
+                controller.splitTerminalPane()
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.3))
+                let workspaceAKeys = controller.terminalSessionKeysForSmokeTest(workspacePath: workspaceA.path)
+                guard let workspaceAId = controller.activeWorkspaceIdForSmokeTest(),
+                      controller.terminalPaneCountForSmokeTest() == 2,
+                      workspaceAKeys.count == 2,
+                      controller.terminalSurfaceVisibilitiesForSmokeTest(workspacePath: workspaceA.path) == [true, true] else {
+                    self.fail("workspace terminal return smoke could not create the split source workspace")
+                    return
+                }
+
+                controller.openWorkspaceForSmokeTest(workspaceB)
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+                let hiddenVisibilities = controller.terminalSurfaceVisibilitiesForSmokeTest(workspacePath: workspaceA.path)
+                guard hiddenVisibilities == [false, false] else {
+                    self.fail("workspace switch left detached Ghostty surfaces marked visible: \(hiddenVisibilities)")
+                    return
+                }
+                let hiddenOutputMarker = "momenterm-hidden-workspace-output"
+                guard workspaceAKeys.allSatisfy({
+                    controller.appendOutputToTerminalForSmokeTest(sessionKey: $0, text: hiddenOutputMarker)
+                }) else {
+                    self.fail("workspace terminal return smoke could not deliver output to detached panes")
+                    return
+                }
+                controller.activateWorkspaceForSmokeTest(id: workspaceAId)
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.4))
+
+                let visibleVisibilities = controller.terminalSurfaceVisibilitiesForSmokeTest(workspacePath: workspaceA.path)
+                guard visibleVisibilities == [true, true],
+                      controller.terminalVisiblePaneSizesMatchViewportForSmokeTest(),
+                      controller.renderedTerminalPanesMatchActiveTabForSmokeTest(),
+                      workspaceAKeys.allSatisfy({
+                          controller.terminalSurfaceContainsForSmokeTest(sessionKey: $0, text: hiddenOutputMarker)
+                      }) else {
+                    self.fail("workspace return did not restore visible Ghostty surfaces at the final split layout: visibility=\(visibleVisibilities) sizes=\(controller.terminalPaneSizeDebugForSmokeTest()) ownership=\(controller.renderedTerminalPaneOwnershipDebugForSmokeTest())")
+                    return
+                }
+
+                self.smokeControllers.forEach { controller in
+                    controller.disposeForSmokeTest()
+                    controller.close()
+                }
+                self.smokeControllers.removeAll()
+                self.clearPersistedState()
+                print("key input smoke workspace-terminal-return ok")
+                NSApp.terminate(nil)
+            }
+            return
+        }
         if smokeOnly == "recent-files" {
             let controller = registerSmokeController(MainWindowController(initialRoot: nil))
             self.controller = controller
@@ -282,9 +438,12 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             self.controller = controller
             controller.showWindow(nil)
             NSApp.activate(ignoringOtherApps: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
-                self.verifyPromptMemoEditorSurface(controller)
+                while controller.terminalPaneCountForSmokeTest() < controller.terminalPaneLimitForSmokeTest() {
+                    controller.splitTerminalPane()
+                }
+                self.verifyPromptMemo(controller)
                 self.smokeControllers.forEach { controller in
                     controller.disposeForSmokeTest()
                     controller.close()
@@ -296,6 +455,61 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if smokeOnly == "workspace-rename" {
+            let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+            self.controller = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self else { return }
+                self.verifyWorkspaceRenameFocusOnly(controller) { [weak self] in
+                    guard let self = self else { return }
+                    self.smokeControllers.forEach { controller in
+                        controller.disposeForSmokeTest()
+                        controller.close()
+                    }
+                    self.smokeControllers.removeAll()
+                    self.clearPersistedState()
+                    print("key input smoke workspace-rename ok")
+                    NSApp.terminate(nil)
+                }
+            }
+            return
+        }
+        if smokeOnly == "workspace-home" {
+            let controller = registerSmokeController(MainWindowController(initialRoot: nil))
+            self.controller = controller
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self else { return }
+                while controller.terminalPaneCountForSmokeTest() < controller.terminalPaneLimitForSmokeTest() {
+                    controller.splitTerminalPane()
+                }
+                self.verifyHomeWorkspaceCreationRenameAndIsolation(controller)
+                self.smokeControllers.forEach { controller in
+                    controller.disposeForSmokeTest()
+                    controller.close()
+                }
+                self.smokeControllers.removeAll()
+                self.clearPersistedState()
+                print("key input smoke workspace-home ok")
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if smokeOnly == "terminal-restore" {
+            verifyTerminalRestoreFidelity()
+            smokeControllers.forEach { controller in
+                controller.disposeForSmokeTest()
+                controller.close()
+            }
+            smokeControllers.removeAll()
+            clearPersistedState()
+            print("key input smoke terminal-restore ok")
+            NSApp.terminate(nil)
+            return
+        }
 
         verifyPlainLaunchStaysHomeWithoutWorkspace()
         clearPersistedState()
@@ -305,10 +519,12 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         clearPersistedState()
         verifyWorkspaceRestoreUsesWorkspaceCwd()
         clearPersistedState()
+        verifyTerminalRestoreFidelity()
+        clearPersistedState()
         verifyWorkspaceSwitchReplacesRenderedTerminalPanes()
         clearPersistedState()
 
-        let command = "printf 'momenterm-ready\\n'; IFS= read -r line; printf 'momenterm-key:%s\\n' \"$line\"; exit"
+        let command = "printf 'momenterm-ready\\n'; IFS= read -r line; printf 'momenterm-key:%s\\n' \"$line\"; sleep 2; exit"
         mainTerminalStartedAt = Date()
         let controller = registerSmokeController(MainWindowController(initialRoot: nil, initialTerminalCommand: command))
         self.controller = controller
@@ -325,6 +541,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         UserDefaults.standard.removeObject(forKey: "momenterm.native.terminal-tabs.v2")
         UserDefaults.standard.removeObject(forKey: "momenterm.native.workspaces")
         UserDefaults.standard.removeObject(forKey: "momenterm.native.active-workspace-path")
+        UserDefaults.standard.removeObject(forKey: "momenterm.native.active-workspace-id")
         UserDefaults.standard.removeObject(forKey: "momenterm.settings")
     }
 
@@ -621,6 +838,148 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func verifyTerminalRestoreFidelity() {
+        let workspace = makeTempDirectory(name: "momenterm-restore-fidelity")
+        let workspacePath = workspace.standardizedFileURL.path
+        let workspaceId = "restore-fidelity-\(UUID().uuidString)"
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        let activeHomeKey = "restore-home-active"
+        let workspacePaneKeys = ["restore-workspace-primary", "restore-workspace-secondary"]
+
+        var tabValues: [JSONValue] = (0..<8).map { index in
+            let sessionKey = index == 4 ? activeHomeKey : "restore-home-\(index)"
+            return .object([
+                "name": .string("home \(index + 1)"),
+                "cwd": .string(homePath),
+                "workspacePath": .string(""),
+                "sessionKey": .string(sessionKey),
+                "active": .bool(index == 4)
+            ])
+        }
+        tabValues.insert(
+            .object([
+                "name": .string("restored workspace"),
+                "cwd": .string(workspacePath),
+                "workspacePath": .string(workspacePath),
+                "workspaceId": .string(workspaceId),
+                "sessionKey": .string(workspacePaneKeys[0]),
+                "active": .bool(false),
+                "activePane": .number(1),
+                "panes": .array([
+                    .object([
+                        "name": .string("restored workspace"),
+                        "cwd": .string(workspacePath),
+                        "workspacePath": .string(workspacePath),
+                        "sessionKey": .string(workspacePaneKeys[0])
+                    ]),
+                    .object([
+                        "name": .string("restored workspace"),
+                        "cwd": .string(workspacePath),
+                        "workspacePath": .string(workspacePath),
+                        "sessionKey": .string(workspacePaneKeys[1])
+                    ])
+                ]),
+                "belowSplitGroups": .array([
+                    .array([.number(0), .number(1)])
+                ])
+            ]),
+            at: 1
+        )
+        writePersistedArray(tabValues, forKey: "momenterm.native.terminal-tabs.v2")
+        writePersistedArray([
+            .object([
+                "id": .string(workspaceId),
+                "path": .string(workspacePath),
+                "name": .string("restore fidelity"),
+                "color": .string("#61afef"),
+                "icon": .string("diamond.fill")
+            ])
+        ], forKey: "momenterm.native.workspaces")
+
+        do {
+            let restored = registerSmokeController(MainWindowController(initialRoot: nil))
+            defer {
+                restored.disposeForSmokeTest()
+                restored.close()
+            }
+            restored.showWindow(nil)
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+
+            let homeKeys = Set(restored.terminalSessionKeysForSmokeTest(workspacePath: nil))
+            let restoredWorkspaceKeys = Set(restored.terminalSessionKeysForSmokeTest(workspacePath: workspacePath))
+            let persistedAfterRestore = readPersistedArray(forKey: "momenterm.native.terminal-tabs.v2")
+            guard restored.activeWorkspacePathForSmokeTest() == nil,
+                  restored.terminalTabCountForSmokeTest() == tabValues.count,
+                  homeKeys.count == 8,
+                  restoredWorkspaceKeys == Set(workspacePaneKeys),
+                  restored.activeTerminalSessionKeyForSmokeTest() == activeHomeKey,
+                  persistedAfterRestore.count == tabValues.count else {
+                fail("terminal relaunch dropped or activated the wrong saved sessions; tabs=\(restored.terminalTabCountForSmokeTest())/\(tabValues.count) home=\(homeKeys.sorted()) workspace=\(restoredWorkspaceKeys.sorted()) active=\(restored.activeTerminalSessionKeyForSmokeTest() ?? "nil") persisted=\(persistedAfterRestore.count)")
+                return
+            }
+
+            let marker = "momenterm-restored-pane-visible-\(UUID().uuidString)"
+            let evictedPrefix = "momenterm-replay-prefix-must-be-evicted"
+            let oversizedReplay = evictedPrefix
+                + "\r\n"
+                + String(repeating: "0123456789abcdef\r\n", count: 15_000)
+                + "\r\n\(marker)\r\n"
+            guard let seededSessionKey = restored.appendOutputToUnrenderedTerminalForSmokeTest(
+                workspacePath: workspacePath,
+                text: oversizedReplay
+            ) else {
+                fail("restored inactive workspace pane was rendered too early or was missing")
+                return
+            }
+            guard restored.pendingTerminalReplayByteCountForSmokeTest(sessionKey: seededSessionKey)
+                    == MainWindowController.terminalFallbackTranscriptLimit,
+                  !restored.pendingTerminalReplayContainsForSmokeTest(sessionKey: seededSessionKey, text: evictedPrefix),
+                  restored.pendingTerminalReplayContainsForSmokeTest(sessionKey: seededSessionKey, text: marker) else {
+                fail("restored pane replay buffer did not preserve bounded tail ordering")
+                return
+            }
+            restored.openWorkspaceForSmokeTest(workspace)
+            guard waitUntil("restored inactive pane replays into ghostty", timeout: 3, condition: {
+                restored.terminalSurfaceContainsForSmokeTest(sessionKey: seededSessionKey, text: marker)
+            }), restored.renderedTerminalPanesMatchActiveTabForSmokeTest() else {
+                fail("restored pane stayed blank after activation/maximized layout; session=\(seededSessionKey) rendered=\(restored.renderedTerminalPaneOwnershipDebugForSmokeTest())")
+                return
+            }
+        }
+
+        // A transient failure after some tabs have reattached must not replace the
+        // complete saved model with the partially restored runtime subset.
+        let successfulKey = "restore-transaction-success"
+        let failingKey = "restore-transaction-failure"
+        let transactionalTabs: [JSONValue] = [successfulKey, failingKey].enumerated().map { index, key in
+            .object([
+                "name": .string("transaction \(index + 1)"),
+                "cwd": .string(homePath),
+                "workspacePath": .string(""),
+                "sessionKey": .string(key),
+                "active": .bool(index == 0)
+            ])
+        }
+        writePersistedArray(transactionalTabs, forKey: "momenterm.native.terminal-tabs.v2")
+        writePersistedArray([], forKey: "momenterm.native.workspaces")
+        setenv("MOMENTERM_PTY_FAIL_SESSION_KEY", failingKey, 1)
+        let partiallyRestored = registerSmokeController(MainWindowController(initialRoot: nil))
+        unsetenv("MOMENTERM_PTY_FAIL_SESSION_KEY")
+        defer {
+            partiallyRestored.disposeForSmokeTest()
+            partiallyRestored.close()
+        }
+        partiallyRestored.persistTerminalState()
+        let persistedAfterFailure = readPersistedArray(forKey: "momenterm.native.terminal-tabs.v2")
+        let persistedKeys = Set(persistedAfterFailure.compactMap { $0.objectValue?["sessionKey"]?.stringValue })
+        guard partiallyRestored.terminalTabCountForSmokeTest() == 1,
+              persistedAfterFailure.count == transactionalTabs.count,
+              persistedKeys == Set([successfulKey, failingKey]) else {
+            fail("partial terminal restore overwrote the complete saved state; runtime=\(partiallyRestored.terminalTabCountForSmokeTest()) persisted=\(persistedKeys.sorted()) diagnostics=\(partiallyRestored.terminalWorkspaceDiagnosticsForSmokeTest())")
+            return
+        }
+    }
+
     private func verifyWorkspaceSwitchReplacesRenderedTerminalPanes() {
         let workspaceA = makeTempDirectory(name: "momenterm-pane-scope-a")
         let workspaceB = makeTempDirectory(name: "momenterm-pane-scope-b")
@@ -683,6 +1042,14 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(data, forKey: key)
     }
 
+    private func readPersistedArray(forKey key: String) -> [JSONValue] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let values = try? JSONDecoder().decode([JSONValue].self, from: data) else {
+            return []
+        }
+        return values
+    }
+
     private func writePersistedSettings(_ values: [String: JSONValue]) {
         guard let data = try? JSONEncoder().encode(values) else {
             fail("failed to encode persisted settings fixture")
@@ -714,19 +1081,31 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
                 fail("terminal output burst was retained by AppKit hidden text storage or exceeded transcript cap")
                 return
             }
+            trace("verifyNoStutterBudgets")
             verifyNoStutterBudgets(controller)
+            trace("verifyTerminalTabAndPaneShortcuts")
             verifyTerminalTabAndPaneShortcuts(controller)
+            trace("verifyPromptMemo")
             verifyPromptMemo(controller)
+            trace("verifySettingsOverlay")
             verifySettingsOverlay(controller)
+            trace("verifyWorkspaceAndReviewShortcuts")
             verifyWorkspaceAndReviewShortcuts(controller)
+            trace("verifyHomeWorkspaceCreationRenameAndIsolation")
             verifyHomeWorkspaceCreationRenameAndIsolation(controller)
+            trace("verifyOptionWorkspaceSwitchRestoresInterfaceState")
             verifyOptionWorkspaceSwitchRestoresInterfaceState(controller)
+            trace("verifyNativeShortcutEvents")
             verifyNativeShortcutEvents(controller)
             // Runs late (its fixtures/worktrees leave workspaces behind); the next verifier's
             // prepareLastHomeTerminalForSmokeTest() then clears everything for a fresh baseline.
+            trace("verifyWorkspaceLifecycle")
             verifyWorkspaceLifecycle(controller)
+            trace("verifyCloseLastHomeTerminalShortcut")
             verifyCloseLastHomeTerminalShortcut(controller)
+            trace("verifyWorkspaceScopedReviewNotesPersist")
             verifyWorkspaceScopedReviewNotesPersist()
+            trace("complete")
             timer?.invalidate()
             smokeControllers.forEach { controller in
                 controller.disposeForSmokeTest()
@@ -751,6 +1130,10 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             }
             guard controller.terminalUsesLibGhosttyRendererForSmokeTest() else {
                 fail("terminal is not using libghostty Metal renderer: \(controller.terminalLibGhosttyDebugForSmokeTest())")
+                return
+            }
+            guard controller.terminalIMEPreeditBridgeForSmokeTest() else {
+                fail("terminal Hangul preedit was not mirrored into ghostty at the live cursor before commit")
                 return
             }
             guard controller.terminalDocumentFillsViewportForSmokeTest() else {
@@ -907,8 +1290,9 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
     private func verifyTerminalTabAndPaneShortcuts(_ controller: MainWindowController) {
         let initialTabs = controller.terminalTabCountForSmokeTest()
         let initialPanes = controller.terminalPaneCountForSmokeTest()
-        guard controller.terminalTabUiIsVisibleForSmokeTest() else {
-            fail("terminal tab UI is not visible, so terminal tabs cannot be distinguished")
+        guard controller.terminalTabUiIsVisibleForSmokeTest(),
+              controller.terminalTabCloseControlsAreCompactForSmokeTest() else {
+            fail("terminal tab UI is not visible, compact, or equipped with close tooltips")
             return
         }
         guard controller.terminalTopPathBarIsRemovedForSmokeTest(),
@@ -930,9 +1314,9 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("Cmd+T did not create a visible, active terminal tab: tabs \(initialTabs)->\(controller.terminalTabCountForSmokeTest()) activeTabPanes \(controller.terminalPaneCountForSmokeTest())")
             return
         }
-        controller.closeActiveTerminalTabForSmokeTest()
-        guard controller.terminalTabCountForSmokeTest() == initialTabs else {
-            fail("closing the Cmd+T tab did not restore the original tab count: expected \(initialTabs) got \(controller.terminalTabCountForSmokeTest())")
+        guard controller.closeActiveTerminalTabViaButtonForSmokeTest(),
+              controller.terminalTabCountForSmokeTest() == initialTabs else {
+            fail("clicking the Cmd+T tab close icon did not restore the original tab count: expected \(initialTabs) got \(controller.terminalTabCountForSmokeTest())")
             return
         }
 
@@ -962,18 +1346,34 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("terminal tab strip did not render as full-width equal tabs: tabs=\(controller.terminalTabCountForSmokeTest())")
             return
         }
+        sendShortcut("1", keyCode: 18, modifiers: [.command])
+        guard controller.activeTerminalTabIndexForSmokeTest() == 0,
+              controller.overlayIsHiddenForSmokeTest() else {
+            fail("Cmd+1 did not jump directly to workspace terminal tab 1 without opening Files: active=\(controller.activeTerminalTabIndexForSmokeTest()) title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
+        sendShortcut("3", keyCode: 20, modifiers: [.command])
+        guard controller.activeTerminalTabIndexForSmokeTest() == 2,
+              controller.overlayIsHiddenForSmokeTest() else {
+            fail("Cmd+3 did not jump directly to workspace terminal tab 3: active=\(controller.activeTerminalTabIndexForSmokeTest()) title=\(controller.overlayTitleForSmokeTest()) hidden=\(controller.overlayIsHiddenForSmokeTest())")
+            return
+        }
         let tabIndexBeforePrevious = controller.activeTerminalTabIndexForSmokeTest()
         sendShortcut("{", keyCode: 33, modifiers: [.command, .shift], charactersIgnoringModifiers: "[")
         guard controller.activeTerminalTabIndexForSmokeTest() != tabIndexBeforePrevious,
+              controller.renderedTerminalPanesMatchActiveTabForSmokeTest(),
+              controller.terminalIsFirstResponderForSmokeTest(),
               controller.overlayIsHiddenForSmokeTest() else {
-            fail("Cmd+Shift+[ did not cycle terminal tabs without opening Files: before=\(tabIndexBeforePrevious) after=\(controller.activeTerminalTabIndexForSmokeTest())")
+            fail("Cmd+Shift+[ did not cycle terminal tabs with matching visible pane ownership: before=\(tabIndexBeforePrevious) after=\(controller.activeTerminalTabIndexForSmokeTest()) \(controller.renderedTerminalPaneOwnershipDebugForSmokeTest())")
             return
         }
         let tabIndexBeforeNext = controller.activeTerminalTabIndexForSmokeTest()
         sendShortcut("}", keyCode: 30, modifiers: [.command, .shift], charactersIgnoringModifiers: "]")
         guard controller.activeTerminalTabIndexForSmokeTest() != tabIndexBeforeNext,
+              controller.renderedTerminalPanesMatchActiveTabForSmokeTest(),
+              controller.terminalIsFirstResponderForSmokeTest(),
               controller.overlayIsHiddenForSmokeTest() else {
-            fail("Cmd+Shift+] did not cycle terminal tabs without opening Files: before=\(tabIndexBeforeNext) after=\(controller.activeTerminalTabIndexForSmokeTest())")
+            fail("Cmd+Shift+] did not cycle terminal tabs with matching visible pane ownership: before=\(tabIndexBeforeNext) after=\(controller.activeTerminalTabIndexForSmokeTest()) \(controller.renderedTerminalPaneOwnershipDebugForSmokeTest())")
             return
         }
         controller.closeActiveTerminalTabForSmokeTest()
@@ -1105,10 +1505,13 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("terminal pane PTY columns do not match split viewport after direct split: \(controller.terminalPaneSizeDebugForSmokeTest())")
             return
         }
-        controller.resizeWindowForSmokeTest(width: 1900, height: 920)
+        guard controller.maximizeWindowForSmokeTest() else {
+            fail("terminal smoke could not maximize the native window to the visible screen frame")
+            return
+        }
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
         guard controller.terminalVisiblePaneSizesMatchViewportForSmokeTest() else {
-            fail("terminal pane PTY columns do not match viewport after window resize: \(controller.terminalPaneSizeDebugForSmokeTest())")
+            fail("terminal pane PTY columns do not match viewport after window maximize: \(controller.terminalPaneSizeDebugForSmokeTest())")
             return
         }
         controller.resizeWindowForSmokeTest(width: 720, height: 360)
@@ -1207,8 +1610,8 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("prompt memo editable document does not fill viewport")
             return
         }
-        guard controller.memoEditorUsesCodeBackgroundForSmokeTest() else {
-            fail("prompt memo editable document does not use the code/editor background")
+        guard controller.promptSidePanelsFollowThemeBackgroundForSmokeTest() else {
+            fail("prompt memo and merged prompt surfaces do not follow the active light theme background")
             return
         }
         guard controller.memoOpensWithoutLegacyPrefillForSmokeTest() else {
@@ -1378,9 +1781,9 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         guard controller.memoSidePanelIsVisibleForSmokeTest(),
               controller.memoIsFirstResponderForSmokeTest(),
               controller.memoDocumentFillsViewportForSmokeTest(),
-              controller.memoEditorUsesCodeBackgroundForSmokeTest(),
+              controller.promptSidePanelsFollowThemeBackgroundForSmokeTest(),
               controller.memoOpensWithoutLegacyPrefillForSmokeTest() else {
-            fail("prompt memo editor surface did not open as a focused code-background editor")
+            fail("prompt memo editor surface did not open with a theme-following background")
             return
         }
     }
@@ -1407,16 +1810,19 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             return
         }
 
-        guard controller.selectSettingsCategoryForSmokeTest("general") else {
-            fail("settings sidebar could not select General")
+        guard !controller.selectSettingsCategoryForSmokeTest("general") else {
+            fail("settings sidebar still exposes the non-configurable General category")
+            return
+        }
+        guard controller.selectSettingsCategoryForSmokeTest("appearance") else {
+            fail("settings sidebar could not select Appearance")
             return
         }
         let text = controller.settingsTextForSmokeTest()
         let expected = [
-            "일반",
-            "Momenterm 환경설정",
-            "저장 방식",
-            "신택스 하이라이팅"
+            "테마",
+            "UI 팔레트",
+            "신택스 테마"
         ]
         for marker in expected {
             guard text.contains(marker) else {
@@ -1424,7 +1830,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
                 return
             }
         }
-        for marker in ["밀도", "Compact", "모양", "입력 중 Markdown 렌더링", "체크리스트 단축"] {
+        for marker in ["검색", "저장 방식", "신택스 하이라이팅", "밀도", "Compact", "모양", "입력 중 Markdown 렌더링", "체크리스트 단축"] {
             guard !text.contains(marker) else {
                 fail("settings overlay still exposes removed non-actionable option \(marker); text=\(text)")
                 return
@@ -1432,13 +1838,15 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         }
 
         guard controller.selectSettingsCategoryForSmokeTest("terminal"),
-              controller.settingsTextForSmokeTest().contains("쉘"),
-              controller.settingsTextForSmokeTest().contains("시작 디렉토리") else {
+              controller.settingsTextForSmokeTest().contains("여유로운 간격"),
+              !controller.settingsTextForSmokeTest().contains("시작 디렉토리"),
+              !controller.settingsTextForSmokeTest().contains("Cmd+D와 Cmd+Shift+D") else {
             fail("settings Terminal category did not render terminal settings: \(controller.settingsOverlayLayoutDiagnosticsForSmokeTest())")
             return
         }
         guard controller.selectSettingsCategoryForSmokeTest("review"),
-              controller.settingsTextForSmokeTest().contains("공백 무시") else {
+              controller.settingsTextForSmokeTest().contains("공백 무시"),
+              !controller.settingsTextForSmokeTest().contains("새로고침") else {
             fail("settings Review category did not render review settings: \(controller.settingsOverlayLayoutDiagnosticsForSmokeTest())")
             return
         }
@@ -1468,7 +1876,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("settings sidebar still exposes removed Prompt Memo settings category")
             return
         }
-        for rawCategory in ["general", "terminal", "review", "prompts"] {
+        for rawCategory in ["appearance", "terminal", "review", "prompts"] {
             guard controller.selectSettingsCategoryForSmokeTest(rawCategory) else {
                 fail("settings sidebar could not select \(rawCategory)")
                 return
@@ -1667,11 +2075,13 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
     // they share the identical home path. Rename via the picker must persist. This is the
     // regression guard for the path→id identity migration.
     private func verifyHomeWorkspaceCreationRenameAndIsolation(_ controller: MainWindowController) {
+        trace("workspace-home reset")
         controller.resetWorkspaceSelectionForSmokeTest()
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
         let baseCount = controller.workspaceCountForSmokeTest()
 
         let idA = controller.createHomeWorkspaceForSmokeTest(named: "home-alpha")
+        trace("workspace-home created A")
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
         guard controller.activeWorkspaceIdForSmokeTest() == idA,
               controller.activeWorkspacePathForSmokeTest() == home,
@@ -1684,8 +2094,10 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("home workspace A did not accept its scoped memo")
             return
         }
+        trace("workspace-home memo A")
 
         let idB = controller.createHomeWorkspaceForSmokeTest(named: "home-beta")
+        trace("workspace-home created B")
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
         guard idB != idA,
               controller.activeWorkspaceIdForSmokeTest() == idB,
@@ -1704,9 +2116,11 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("home workspace B did not accept its scoped memo")
             return
         }
+        trace("workspace-home memo B")
 
         // Re-activate A by id; its memo must still be its own.
         controller.activateWorkspaceForSmokeTest(id: idA)
+        trace("workspace-home activated A")
         RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
         guard controller.activeWorkspaceIdForSmokeTest() == idA,
               controller.memoTextForSmokeTest().contains("home-alpha memo"),
@@ -1729,11 +2143,23 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("could not locate workspace B in the picker for rename")
             return
         }
+        trace("workspace-home selected B index")
         controller.selectWorkspacePickerIndexForSmokeTest(indexB)
         guard controller.beginSelectedWorkspaceRenameFromFocusedRowKeyForSmokeTest() else {
             fail("pressing e while a workspace picker row is focused did not enter inline rename")
             return
         }
+        trace("workspace-home began focused rename")
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        guard controller.isRenamingWorkspaceForSmokeTest(),
+              controller.workspaceRenameFieldIsPresentForSmokeTest(),
+              controller.workspaceRenameFieldIsFocusedForSmokeTest(),
+              controller.workspaceRenameFieldSelectsAllForSmokeTest() else {
+            fail("workspace rename committed while acquiring field-editor focus")
+            return
+        }
+        trace("workspace-home focused rename ready")
         controller.cancelWorkspaceInlineRenameForSmokeTest()
         guard controller.renameSelectedWorkspacePickerItemForSmokeTest(to: "home-beta-renamed") else {
             fail("rename of the selected picker workspace failed")
@@ -1744,9 +2170,11 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("workspace rename did not target the selected instance; A=\(controller.workspaceNameForSmokeTest(id: idA) ?? "nil") B=\(controller.workspaceNameForSmokeTest(id: idB) ?? "nil")")
             return
         }
+        trace("workspace-home renamed B")
         // Reported ask: rename happens inline in the rail (no modal dialog). Entering rename mode drops
         // a focused editable field into the row; committing applies the name and exits edit mode.
         controller.beginWorkspaceInlineRenameForSmokeTest(id: idA)
+        trace("workspace-home began inline A")
         guard controller.isRenamingWorkspaceForSmokeTest(),
               controller.workspaceRenameFieldIsPresentForSmokeTest() else {
             fail("beginning a workspace rename did not enter inline-edit mode with a rename field present")
@@ -1757,6 +2185,7 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         // that rebuild tore the focused field out of the view tree, fired commit-on-focus-loss, and
         // snapped the row back to a static label so it could no longer be typed into.
         controller.simulateBackgroundRailRepaintForSmokeTest()
+        trace("workspace-home repainted inline A")
         guard controller.isRenamingWorkspaceForSmokeTest(),
               controller.workspaceRenameFieldIsPresentForSmokeTest() else {
             fail("a background rail repaint during inline rename tore down the edit field (rename-revert regression)")
@@ -1768,10 +2197,22 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
             fail("committing the inline workspace rename did not apply the name or exit edit mode; name=\(controller.workspaceNameForSmokeTest(id: idA) ?? "nil") renaming=\(controller.isRenamingWorkspaceForSmokeTest())")
             return
         }
+        trace("workspace-home committed inline A")
+        // Reported crash (SIGABRT in NSStackView._removeView): a queued workspace/pane status callback
+        // draining while rebuildWorkspaceButtons() tore down the focused inline-rename field re-entered
+        // the rebuild and emptied the rail out from under the outer removal loop, which then re-removed
+        // a detached view and aborted. Drive that exact mid-teardown re-entrancy deterministically; the
+        // re-entrancy guard must let the rename commit survive it with a consistent rail.
+        guard controller.rebuildWorkspaceButtonsSurvivesReentrantRepaintForSmokeTest(id: idB) else {
+            fail("a status callback re-entering rebuildWorkspaceButtons mid-rename crashed or left the rail inconsistent (NSStackView._removeView regression)")
+            return
+        }
+        trace("workspace-home survived reentrant rail repaint")
         // Terminal pane rename is inline in the header (no modal): begin → editable field → commit →
         // the header shows the custom name instead of the positional "Terminal N". Runs when the
         // active pane has a rendered header.
         controller.beginTerminalPaneRenameForSmokeTest()
+        trace("workspace-home began pane rename")
         if controller.terminalPaneRenameFieldIsPresentForSmokeTest() {
             guard controller.commitTerminalPaneRenameForSmokeTest("build-pane"),
                   controller.activePaneHeaderTitleForSmokeTest() == "build-pane" else {
@@ -1786,12 +2227,49 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         // verifyWorkspaceAndReviewShortcuts; this stays a pure read so it can't leak rail focus into
         // later verifiers.
         let closeButtonIds = controller.expandedWorkspaceCloseButtonIdsForSmokeTest()
+        trace("workspace-home read close buttons")
         guard closeButtonIds.contains(idA), closeButtonIds.contains(idB) else {
             fail("expanded workspace rows are missing their wired ✕ close buttons; ids=\(closeButtonIds)")
             return
         }
 
         controller.closeMemoAndFocusTerminalForSmokeTest()
+        trace("workspace-home complete")
+    }
+
+    private func verifyWorkspaceRenameFocusOnly(_ controller: MainWindowController, completion: @escaping () -> Void) {
+        controller.resetWorkspaceSelectionForSmokeTest()
+        let workspaceId = controller.createHomeWorkspaceForSmokeTest(named: "rename-focus")
+        guard let index = controller.workspacePickerIndexForSmokeTest(id: workspaceId) else {
+            fail("workspace rename focus smoke could not locate its workspace row")
+            return
+        }
+        controller.selectWorkspacePickerIndexForSmokeTest(index)
+        guard controller.beginSelectedWorkspaceRenameFromFocusedRowKeyForSmokeTest() else {
+            fail("workspace rename focus smoke could not enter inline rename with E")
+            return
+        }
+        // beginWorkspaceRename queues field focus. Check on later main-queue turns so the field editor
+        // has actually begun editing; spinning a nested RunLoop here cannot drain the GCD main queue.
+        DispatchQueue.main.async { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                guard controller.isRenamingWorkspaceForSmokeTest(),
+                      controller.workspaceRenameFieldIsPresentForSmokeTest(),
+                      controller.workspaceRenameFieldIsFocusedForSmokeTest(),
+                      controller.workspaceRenameFieldSelectsAllForSmokeTest() else {
+                    self.fail("workspace rename committed while acquiring field-editor focus; renaming=\(controller.isRenamingWorkspaceForSmokeTest()) field=\(controller.workspaceRenameFieldIsPresentForSmokeTest()) focused=\(controller.workspaceRenameFieldIsFocusedForSmokeTest()) responder=\(controller.firstResponderDiagnosticsForSmokeTest())")
+                    return
+                }
+                guard controller.commitWorkspaceInlineRenameForSmokeTest("rename-focus-committed"),
+                      controller.workspaceNameForSmokeTest(id: workspaceId) == "rename-focus-committed",
+                      !controller.isRenamingWorkspaceForSmokeTest() else {
+                    self.fail("workspace rename focus smoke could not commit after acquiring field-editor focus")
+                    return
+                }
+                completion()
+            }
+        }
     }
 
     private func verifyOptionWorkspaceSwitchRestoresInterfaceState(_ controller: MainWindowController) {
@@ -1932,6 +2410,13 @@ final class KeyInputSmokeApp: NSObject, NSApplicationDelegate {
         clearPersistedState()
         fputs("key input smoke failed: \(message)\n", stderr)
         exit(1)
+    }
+
+    private func trace(_ message: String) {
+        guard ProcessInfo.processInfo.environment["MOMENTERM_KEY_INPUT_SMOKE_TRACE"] != nil else {
+            return
+        }
+        fputs("key input smoke trace: \(message)\n", stderr)
     }
 
     func makeTempDirectory(name: String) -> URL {

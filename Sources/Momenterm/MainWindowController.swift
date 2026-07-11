@@ -91,6 +91,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var terminalResizeScheduled = false
     var sessions: [TerminalSession] = []
     var terminalTabs: [TerminalTab] = []
+    var isRestoringTerminalState = false
+    // A partial startup restore keeps the last complete on-disk model authoritative
+    // for the rest of this run; later UI/quit saves must not truncate it.
+    var terminalRestoreFailed = false
     var workspaces: [Workspace] = []
     var workspaceAgentAlertPaths = Set<String>()
     // Pane-level agent alerts: the session ids of terminal panes
@@ -159,11 +163,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var renamingWorkspaceId: String?
     // Carries an in-progress inline rename across a rail repaint so a background rebuild (workspace-
     // status refresh, agent OSC notification) doesn't lose the typed text or first-responder state.
-    // rebuildWorkspaceButtons stashes the field's text/focus here before teardown and re-seeds (and
-    // re-focuses) the recreated field, instead of the field committing-on-focus-loss and collapsing
+    // rebuildWorkspaceButtons stashes the field's text here before teardown and re-seeds plus
+    // re-focuses the recreated field, instead of the field committing-on-focus-loss and collapsing
     // back to a static label mid-type.
     var pendingWorkspaceRenameText: String?
-    var pendingWorkspaceRenameWasFocused = false
+    // Re-entrancy guard for rebuildWorkspaceButtons(). Tearing the focused inline-rename field out
+    // of the view tree inside the rebuild's removal loop spins AppKit's field-editor / first-
+    // responder teardown, which can service the main run loop and fire a queued status callback
+    // (workspace PR/port refresh or pane-cwd refresh) that calls rebuildWorkspaceButtons() again.
+    // A re-entrant rebuild would empty workspaceStack.arrangedSubviews out from under the outer
+    // loop's stale snapshot, so the outer loop then re-removes an already-detached view and
+    // NSStackView._removeView asserts (the reported SIGABRT during workspace rename). The guard
+    // turns any re-entrant call into a single coalesced follow-up rebuild after the current one.
+    var isRebuildingWorkspaceButtons = false
+    var workspaceButtonsRebuildCoalesced = false
+#if DEBUG
+    // Regression hook only: fires once inside rebuildWorkspaceButtons()' removal loop so a smoke can
+    // reproduce, deterministically, the mid-teardown re-entrant repaint that used to crash
+    // NSStackView._removeView. Nil in every non-test path.
+    var reentrantRebuildInjectionForSmokeTest: (() -> Void)?
+#endif
     // True while a terminal pane header shows its inline rename field.
     var renamingTerminalPaneActive = false
     var lastSidebarFocusDiagnostic = ""
@@ -236,7 +255,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     weak var memoScrollView: NSScrollView?
     var settingsPromptTextViews: [String: NativeSettingsPromptTextView] = [:]
     weak var settingsPromptSavedLabel: NSTextField?
-    var selectedSettingsCategory: SettingsCategory = .general
+    var selectedSettingsCategory: SettingsCategory = .appearance
     var terminateApplicationHandler: () -> Void = {
         NSApp.terminate(nil)
     }
@@ -357,6 +376,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     var mergedPromptPanelHiddenLeadingConstraint: NSLayoutConstraint?
     var mergedPromptSidePanelKind: String?
     var memoPanelAnimationDuration: TimeInterval = 0.18
+    var memoPanelTransitionGeneration = 0
     var overlayTopConstraint: NSLayoutConstraint?
     var overlayLeadingConstraint: NSLayoutConstraint?
     var overlayTrailingConstraint: NSLayoutConstraint?
@@ -1052,7 +1072,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NativePt
     // NOT cover, so opening Settings/Files/Changes while the memo is up leaves the memo visible
     // and usable beside the overlay instead of appearing to close it. nil when none is docked.
     private var overlayCoexistingSidePanel: NSView? {
-        if !memoSidePanel.isHidden { return memoSidePanel }
+        if isPromptMemoSidePanelActive() { return memoSidePanel }
         if isMergedPromptSidePanelActive() { return mergedPromptSidePanel }
         return nil
     }

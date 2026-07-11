@@ -255,9 +255,9 @@ extension MainWindowController {
         return font.fontName.lowercased().contains("monaco")
             && font.pointSize >= 11
             && font.pointSize < 14
-            && paragraph.minimumLineHeight >= MomentermDesign.Metrics.diffCodeMinimumLineHeight
-            && paragraph.minimumLineHeight < MomentermDesign.Metrics.codeMinimumLineHeight
-            && paragraph.lineSpacing <= MomentermDesign.Metrics.diffCodeLineSpacing
+            && paragraph.minimumLineHeight == MomentermDesign.Metrics.reviewCodeLineHeight
+            && paragraph.maximumLineHeight == MomentermDesign.Metrics.reviewCodeLineHeight
+            && paragraph.lineSpacing == 0
             && !oldScroll.hasVerticalScroller
             && newScroll.hasVerticalScroller
             && !oldScroll.hasHorizontalScroller
@@ -368,7 +368,7 @@ extension MainWindowController {
             return false
         }
         if !diffHybridView.isHidden {
-            let deadline = Date().addingTimeInterval(2)
+            let deadline = Date().addingTimeInterval(3)
             var hybridReady = false
             repeat {
                 hybridReady = (diffHybridView.evaluateJSSyncForSmokeTest("""
@@ -378,15 +378,17 @@ extension MainWindowController {
                   && typeof window.drawPlaceholderGap === 'function'
                   && typeof window.appendSvgConnector === 'function')
                 """) as? Bool) ?? false
-                if hybridReady {
+                if hybridReady || diffHybridView.isHidden {
                     break
                 }
                 RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
             } while Date() < deadline
-            return hybridReady
-                && !(lastHybridDiffSignature ?? "").isEmpty
-                && !hybridModifiedFileLines.isEmpty
-                && hybridReviewFilePath != nil
+            if !diffHybridView.isHidden {
+                return hybridReady
+                    && !(lastHybridDiffSignature ?? "").isEmpty
+                    && !hybridModifiedFileLines.isEmpty
+                    && hybridReviewFilePath != nil
+            }
         }
         guard let oldStorage = codePane.oldPaneTextStorage,
               let newStorage = codePane.newPaneTextStorage

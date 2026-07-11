@@ -101,11 +101,6 @@ extension MainWindowController {
             return true
         }
 
-        if option, !command, !control, (key == String(UnicodeScalar(0xF70F)!) || event.keyCode == 111) {
-            toggleTerminal()
-            return true
-        }
-
         // File view: Ctrl+Tab / Ctrl+Shift+Tab cycles the raw / side / rendered header modes.
         // It is gated on those mode buttons being visible so ordinary Ctrl+Tab remains available
         // everywhere else.
@@ -294,6 +289,12 @@ extension MainWindowController {
             // expanded) can never delete a workspace by accident.
             if event.keyCode == 51 {
                 forgetCurrentWorkspace()
+                return true
+            }
+            if overlayMode == .hidden,
+               !isPromptTextPanelActive(),
+               let tabIndex = terminalTabShortcutIndex(event: event, lowerKey: lowerKey),
+               focusTerminalTab(at: tabIndex) {
                 return true
             }
             switch lowerKey {
@@ -684,7 +685,7 @@ extension MainWindowController {
                 // (selectedSourceIndex) so later sidebar rebuilds keep showing it, then focus the pane.
                 selectedSourceIndex = sourceIndex
                 let selected = document.sourceFiles[sourceIndex]
-                renderSourceFile(selected)
+                renderSourceFile(sourceFilePreview(forPath: selected.path) ?? selected)
                 if !fileHybridView.isHidden {
                     fileHybridView.focusWebContent(in: window)
                 } else {
@@ -731,6 +732,24 @@ extension MainWindowController {
             let origin = scroll.contentView.bounds.origin
             scroll.contentView.scroll(to: NSPoint(x: origin.x, y: max(0, origin.y + CGFloat(delta) * visible * 0.9)))
             scroll.reflectScrolledClipView(scroll.contentView)
+        }
+    }
+
+    private func terminalTabShortcutIndex(event: NSEvent, lowerKey: String) -> Int? {
+        if let value = Int(lowerKey), (1...9).contains(value) {
+            return value - 1
+        }
+        switch event.keyCode {
+        case 18, 83: return 0
+        case 19, 84: return 1
+        case 20, 85: return 2
+        case 21, 86: return 3
+        case 23, 87: return 4
+        case 22, 88: return 5
+        case 26, 89: return 6
+        case 28, 91: return 7
+        case 25, 92: return 8
+        default: return nil
         }
     }
 

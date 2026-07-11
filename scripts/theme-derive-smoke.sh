@@ -9,6 +9,7 @@ swiftc \
   -o "$OUT/momenterm-theme-derive-smoke" \
   "$ROOT/Sources/Momenterm/NativeDesignSystem.swift" \
   "$ROOT/Sources/Momenterm/NativeTheme.swift" \
+  "$ROOT/Sources/Momenterm/MainWindowControllerHelpers.swift" \
   "$ROOT/Sources/Momenterm/ThemeManager.swift" \
   "$ROOT/Sources/ThemeDeriveSmoke/main.swift" \
   -framework AppKit

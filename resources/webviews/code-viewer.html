@@ -66,7 +66,7 @@ html,body{height:100%;background:transparent;overflow:hidden}
 var _editor=null,_markedLoaded=false,_monacoLoaded=false;
 var _pendingMonaco=null,_pendingMarked=null;
 // Current file state (last loadFile).
-var _content='',_lang='',_rawLang='',_viewMode='raw',_rendered=null,_isImage=false,_fontSize=11.5;
+var _content='',_lang='',_rawLang='',_viewMode='raw',_rendered=null,_isImage=false,_fontSize=11.5,_lineHeight=20;
 // Source-line caret state for the rendered/side preview.
 var _blockLines=[],_currentLine=1,_suppressMonacoSync=false;
 
@@ -82,7 +82,7 @@ window.addEventListener('message',function(e){
 function setFontSize(size){
   size=+size; if(!size)return;
   _fontSize=size;
-  if(_editor)_editor.updateOptions({fontSize:_fontSize});
+  if(_editor)_editor.updateOptions({fontSize:_fontSize,lineHeight:_lineHeight});
 }
 
 function applyTheme(t){
@@ -127,7 +127,8 @@ function loadFile(msg){
   _rendered=msg.rendered||null;
   _isImage=!!msg.isImage;
   if(msg.fontSize)_fontSize=+msg.fontSize;
-  if(_editor)_editor.updateOptions({fontSize:_fontSize});
+  if(msg.lineHeight)_lineHeight=+msg.lineHeight||20;
+  if(_editor)_editor.updateOptions({fontSize:_fontSize,lineHeight:_lineHeight});
   if(msg.theme)applyTheme(msg.theme);
   _currentLine=Math.max(1,+msg.cursorLine||1);
 
@@ -218,7 +219,7 @@ function setEditor(content,lang){
       value:content,language:mapLang(lang),
       readOnly:true,theme:'vs-dark',
       minimap:{enabled:false},scrollBeyondLastLine:false,
-      fontSize:_fontSize,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
+      fontSize:_fontSize,lineHeight:_lineHeight,fontFamily:"'SF Mono',Menlo,Monaco,monospace",
       lineNumbers:'on',lineNumbersMinChars:4,automaticLayout:true,wordWrap:'off',
       contextmenu:false,overviewRulerLanes:0,
       scrollbar:{verticalScrollbarSize:6,horizontalScrollbarSize:6}

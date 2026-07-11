@@ -127,6 +127,13 @@ extension MainWindowController {
                 sessionKey: sessionKey,
                 enforceCwd: enforceWorkspaceCwd
             )
+            guard !NativePtyManager.persistenceRequested(for: sessionKey) || spawn.persistent else {
+                ptyManager.kill(id: spawn.id)
+                let message = "persistent terminal backend is unavailable; refusing to start an ephemeral replacement"
+                lastTerminalSpawnError = message
+                appendSystemLine("failed to start terminal: \(message)", to: activeTerminalId)
+                return nil
+            }
             lastTerminalSpawnError = nil
             let session = TerminalSession(
                 id: spawn.id,
@@ -283,7 +290,10 @@ extension MainWindowController {
             ghosttyView.superview?.layoutSubtreeIfNeeded()
             ghosttyView.layoutSubtreeIfNeeded()
             fitTerminalDocumentView(for: session)
-            ghosttyView.fitToSize()
+            guard ghosttyView.fitToSize() else {
+                return
+            }
+            finishPendingGhosttyReplay(for: session, in: ghosttyView)
             return
         }
         // Lay out the pane/scroll view first so the width feeding column computation
@@ -304,6 +314,19 @@ extension MainWindowController {
         MomentermDesign.trimLeadingBlankLines(session.output)
         refreshTerminalTextView(for: session)
         fitTerminalDocumentView(for: session)
+    }
+
+    private func finishPendingGhosttyReplay(for session: TerminalSession, in ghosttyView: LibGhosttyTerminalView) {
+        guard !session.isGhosttyReplayReady else {
+            return
+        }
+        if !session.pendingGhosttyReplayData.isEmpty {
+            guard ghosttyView.receive(session.pendingGhosttyReplayData) else {
+                return
+            }
+            session.pendingGhosttyReplayData.removeAll(keepingCapacity: false)
+        }
+        session.isGhosttyReplayReady = true
     }
     func setActiveTerminal(id: Int?, focus: Bool) {
         let previousTabId = activeTerminalTabId
@@ -418,7 +441,14 @@ extension MainWindowController {
         window.makeFirstResponder(textView)
         if window.firstResponder !== textView {
             DispatchQueue.main.async { [weak self] in
-                guard let self = self, self.overlayMode == .hidden else {
+                guard let self = self,
+                      self.overlayMode == .hidden,
+                      !self.workspaceRailExpanded,
+                      self.renamingWorkspaceId == nil,
+                      !self.renamingTerminalPaneActive,
+                      self.memoSidePanel.isHidden,
+                      self.mergedPromptSidePanel.isHidden
+                else {
                     return
                 }
                 if let textView = self.activeSession()?.textView {
@@ -428,7 +458,13 @@ extension MainWindowController {
         }
     }
     func focusTerminalIfAppropriate() {
-        guard overlayMode == .hidden, memoSidePanel.isHidden, mergedPromptSidePanel.isHidden else {
+        guard overlayMode == .hidden,
+              !workspaceRailExpanded,
+              renamingWorkspaceId == nil,
+              !renamingTerminalPaneActive,
+              memoSidePanel.isHidden,
+              mergedPromptSidePanel.isHidden
+        else {
             return
         }
         focusTerminal()
@@ -492,6 +528,9 @@ extension MainWindowController {
         }
         for tab in terminalTabs {
             tab.tabButton = nil
+            tab.tabContainerView = nil
+            tab.tabTitleLabel = nil
+            tab.tabCloseButton = nil
         }
         let scopedTabs = terminalTabs(inWorkspaceId: activeWorkspaceId)
         let shouldShowTabs = !scopedTabs.isEmpty
@@ -500,50 +539,88 @@ extension MainWindowController {
         terminalTabStack.distribution = .fillEqually
         terminalTabStack.layer?.backgroundColor = theme.inactiveHeaderBackground.cgColor
         for (index, tab) in scopedTabs.enumerated() {
-            let button = terminalTabButton(for: tab, index: index)
-            tab.tabButton = button
-            terminalTabStack.addArrangedSubview(button)
+            terminalTabStack.addArrangedSubview(terminalTabButton(for: tab, index: index))
         }
         applyTerminalTabButtonStyles()
         updateTerminalStatus()
     }
 
-    private func terminalTabButton(for tab: TerminalTab, index: Int) -> NSButton {
-        let title = "\(index + 1)  \(tab.name.isEmpty ? "Terminal" : tab.name)"
-        let button = MomentermCompactButton(title: title, target: self, action: #selector(selectTerminalTabAction(_:)))
+    private func terminalTabButton(for tab: TerminalTab, index: Int) -> NSView {
+        let tabView = NSView()
+        tabView.translatesAutoresizingMaskIntoConstraints = false
+        tabView.wantsLayer = true
+        tabView.layer?.cornerRadius = 0
+        tabView.layer?.masksToBounds = true
+
+        let titleLabel = NSTextField(labelWithString: "\(index + 1)  \(tab.name.isEmpty ? "Terminal" : tab.name)")
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.alignment = .center
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.cell?.usesSingleLineMode = true
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        tabView.addSubview(titleLabel)
+
+        let button = MomentermCompactButton(title: "", target: self, action: #selector(selectTerminalTabAction(_:)))
         button.identifier = NSUserInterfaceItemIdentifier(String(tab.id))
         button.compactHeight = MomentermDesign.Metrics.terminalTabHeight
         button.bezelStyle = .regularSquare
         button.isBordered = false
-        button.wantsLayer = true
-        button.layer?.cornerRadius = 0
-        button.layer?.masksToBounds = true
-        button.cell?.lineBreakMode = .byTruncatingMiddle
-        button.toolTip = tooltipText(label: "Terminal tab \(index + 1): \(tab.name)", shortcut: "Cmd+Shift+[ / ]")
+        button.translatesAutoresizingMaskIntoConstraints = false
+        let shortcut = index < 9 ? "Cmd+\(index + 1), Cmd+Shift+[ / ]" : "Cmd+Shift+[ / ]"
+        button.toolTip = tooltipText(label: "Terminal tab \(index + 1): \(tab.name)", shortcut: shortcut)
         button.setContentHuggingPriority(.defaultLow, for: .horizontal)
         button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return button
+        tabView.addSubview(button)
+
+        let close = MomentermCompactButton(title: "", target: self, action: #selector(closeTerminalTabAction(_:)))
+        close.identifier = NSUserInterfaceItemIdentifier(String(tab.id))
+        close.isBordered = false
+        close.bezelStyle = .regularSquare
+        close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close terminal tab")
+        close.image?.isTemplate = true
+        close.imagePosition = .imageOnly
+        close.toolTip = "Close terminal tab"
+        close.isEnabled = terminalTabs(inWorkspaceId: tab.workspaceId).count > 1
+        close.translatesAutoresizingMaskIntoConstraints = false
+        tabView.addSubview(close)
+
+        NSLayoutConstraint.activate([
+            tabView.heightAnchor.constraint(equalToConstant: MomentermDesign.Metrics.terminalTabHeight),
+            button.topAnchor.constraint(equalTo: tabView.topAnchor),
+            button.leadingAnchor.constraint(equalTo: tabView.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: tabView.trailingAnchor),
+            button.bottomAnchor.constraint(equalTo: tabView.bottomAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: tabView.leadingAnchor, constant: 20),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -4),
+            titleLabel.centerYAnchor.constraint(equalTo: tabView.centerYAnchor),
+            close.trailingAnchor.constraint(equalTo: tabView.trailingAnchor, constant: -4),
+            close.centerYAnchor.constraint(equalTo: tabView.centerYAnchor),
+            close.widthAnchor.constraint(equalToConstant: 12),
+            close.heightAnchor.constraint(equalToConstant: 12)
+        ])
+
+        tab.tabContainerView = tabView
+        tab.tabTitleLabel = titleLabel
+        tab.tabButton = button
+        tab.tabCloseButton = close
+        return tabView
     }
 
     private func applyTerminalTabButtonStyles() {
         let activeTabId = activeTerminalTabId ?? activeTab()?.id
         for tab in terminalTabs {
-            guard let button = tab.tabButton else {
+            guard tab.tabButton != nil else {
                 continue
             }
             let active = tab.id == activeTabId
-            button.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.terminalBackground).cgColor
-            button.layer?.borderWidth = 0
-            button.layer?.borderColor = NSColor.clear.cgColor
-            let style = NSMutableParagraphStyle()
-            style.lineBreakMode = .byTruncatingMiddle
-            style.alignment = .center
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: (active ? MomentermDesign.Fonts.UI.labelStrong : MomentermDesign.Fonts.UI.label).font,
-                .foregroundColor: active ? theme.primaryText : theme.secondaryText,
-                .paragraphStyle: style
-            ]
-            button.attributedTitle = NSAttributedString(string: button.title, attributes: attributes)
+            tab.tabContainerView?.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.terminalBackground).cgColor
+            tab.tabContainerView?.layer?.borderWidth = MomentermDesign.Border.hairline
+            tab.tabContainerView?.layer?.borderColor = theme.panelBorder.cgColor
+            tab.tabTitleLabel?.font = (active ? MomentermDesign.Fonts.UI.labelStrong : MomentermDesign.Fonts.UI.label).font
+            tab.tabTitleLabel?.textColor = active ? theme.primaryText : theme.secondaryText
+            tab.tabCloseButton?.contentTintColor = active
+                ? theme.primaryText.withAlphaComponent(0.84)
+                : theme.tertiaryText
         }
     }
 
@@ -553,8 +630,17 @@ extension MainWindowController {
               let tab = terminalTabs.first(where: { $0.id == tabId }) else {
             return
         }
-        activeTerminalTabId = tab.id
-        setActiveTerminal(id: tab.activePaneId ?? tab.panes.first?.id, focus: true)
+        activateTerminalTab(tab, focus: true)
+    }
+
+    @objc func closeTerminalTabAction(_ sender: NSButton) {
+        guard let raw = sender.identifier?.rawValue,
+              let tabId = Int(raw),
+              let tab = terminalTabs.first(where: { $0.id == tabId }) else {
+            return
+        }
+        closeTerminalTab(tab)
+        focusTerminalIfAppropriate()
     }
 
     func rebuildTerminalPanes() {
@@ -660,11 +746,8 @@ extension MainWindowController {
                 container.layer?.borderWidth = MomentermDesign.Border.emphasis
                 container.layer?.borderColor = theme.stateAttention.cgColor
             } else {
-                // Panes read apart by their header + the un-dimmed content alone; no neutral
-                // separator border is drawn (it showed as a faint white line against the light
-                // theme). The agent-alert ring above and the merged-prompt ring below still paint.
-                container.layer?.borderWidth = 0
-                container.layer?.borderColor = NSColor.clear.cgColor
+                container.layer?.borderWidth = hasSplitPanes ? MomentermDesign.Border.hairline : 0
+                container.layer?.borderColor = hasSplitPanes ? theme.panelBorder.cgColor : NSColor.clear.cgColor
             }
             pane.paneHeaderView?.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.inactiveHeaderBackground).withAlphaComponent(active ? 1.0 : 0.88).cgColor
             pane.paneStatusBarView?.layer?.backgroundColor = (active ? theme.activeHeaderBackground : theme.inactiveHeaderBackground).withAlphaComponent(active ? 1.0 : 0.88).cgColor
@@ -710,6 +793,8 @@ extension MainWindowController {
         splitView.translatesAutoresizingMaskIntoConstraints = false
         splitView.isVertical = false
         splitView.dividerStyle = .thin
+        splitView.momentermDividerColor = theme.panelBorder
+        splitView.momentermDividerThickness = 2
         splitView.balancesVisibleSubviews = true
         splitView.minimumBalancedSubviewWidth = 48
         splitView.wantsLayer = true
@@ -783,6 +868,12 @@ extension MainWindowController {
             // The textView sits on top (z-order) and keeps keyboard/IME focus, but ghostty owns
             // the visible grid, so route mouse selection to ghostty. It renders its own highlight
             // and, on mouse-up, we pull the selection to the clipboard.
+            textView.onPreedit = { [weak ghosttyView] text in
+                ghosttyView?.setPreedit(text)
+            }
+            textView.imeRectProvider = { [weak ghosttyView] in
+                ghosttyView?.imeRectOnScreen()
+            }
             textView.onMouseButton = { [weak ghosttyView] event, pressed in
                 ghosttyView?.forwardMouseButton(event, pressed: pressed)
             }

@@ -28,6 +28,8 @@ extension MainWindowController {
         terminalPaneSplitView.translatesAutoresizingMaskIntoConstraints = false
         terminalPaneSplitView.isVertical = true
         terminalPaneSplitView.dividerStyle = .thin
+        terminalPaneSplitView.momentermDividerColor = theme.panelBorder
+        terminalPaneSplitView.momentermDividerThickness = 2
         terminalPaneSplitView.balancesVisibleSubviews = true
         terminalView.addSubview(terminalPaneSplitView)
         terminalTabBarHeightConstraint = terminalTabStack.heightAnchor.constraint(equalToConstant: 0)

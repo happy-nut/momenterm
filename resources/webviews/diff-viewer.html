@@ -8,7 +8,7 @@
   --mtm-darcula-editor:#2B2B2B;
   --mtm-darcula-gutter:#2B2B2B;
   --mtm-darcula-split:#3C3F41;
-  --mtm-line-height:18px;
+  --mtm-line-height:20px;
 }
 html,body,#editor{height:100%;background:var(--mtm-darcula-editor);overflow:hidden}
 #loading{
@@ -101,7 +101,7 @@ html,body,#editor{height:100%;background:var(--mtm-darcula-editor);overflow:hidd
 
 <script>
 'use strict';
-var _diffEditor=null,_loaded=false,_pending=null,_fontSize=13,_lineHeight=18;
+var _diffEditor=null,_loaded=false,_pending=null,_fontSize=13,_lineHeight=20;
 var _centerGutterNode=null,_centerGutterSvg=null,_centerGutterRaf=0,_centerGutterWired=false;
 var _bottomSpacerZoneIds={original:null,modified:null},_bottomSpacerSignature='';
 var _authoritativeLineDiffs={original:[],modified:[]};
@@ -386,7 +386,6 @@ function showLastHunkHint(text){
 function setFontSize(size){
   size=+size; if(!size)return;
   _fontSize=Math.max(12.5,size);
-  _lineHeight=Math.max(18,Math.round(_fontSize+5));
   document.documentElement.style.setProperty('--mtm-line-height',_lineHeight+'px');
   if(_diffEditor){
     _diffEditor.updateOptions({fontSize:_fontSize,lineHeight:_lineHeight});
@@ -956,7 +955,7 @@ function loadDiff(msg){
   var modified=msg.modified||'';
   var lang=(msg.language||'').toLowerCase();
   if(msg.fontSize)_fontSize=Math.max(12.5,+msg.fontSize||13);
-  if(msg.lineHeight)_lineHeight=Math.max(18,+msg.lineHeight||18);
+  if(msg.lineHeight)_lineHeight=+msg.lineHeight||20;
   document.documentElement.style.setProperty('--mtm-line-height',_lineHeight+'px');
   applyModifiedDiffColors(msg);
   setAuthoritativeLineDiffs(msg);

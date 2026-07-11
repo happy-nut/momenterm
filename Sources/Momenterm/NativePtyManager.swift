@@ -21,11 +21,38 @@ final class NativePtyManager {
         let sessionName: String?
     }
 
+    static func persistenceRequested(for sessionKey: String?) -> Bool {
+        guard let sessionKey = sessionKey, !sessionKey.isEmpty else {
+            return false
+        }
+        return ProcessInfo.processInfo.environment["MOMENTERM_DISABLE_TMUX_PERSISTENCE"] != "1"
+    }
+
+#if DEBUG
+    static func largeCommandCaptureCompletesForSmokeTest() -> Bool {
+        let marker = "momenterm-large-capture"
+        guard let output = NativePtySession.runCapturing(
+            "/usr/bin/awk",
+            ["BEGIN { for (i = 0; i < 20000; i++) print \"\(marker)\" }"]
+        ) else {
+            return false
+        }
+        return output.hasPrefix(marker)
+            && output.split(separator: "\n").count == 20_000
+    }
+#endif
+
     func spawn(cols: Int, rows: Int, cwd: URL?) throws -> Int {
         try spawnPersistent(cols: cols, rows: rows, cwd: cwd, sessionKey: nil).id
     }
 
     func spawnPersistent(cols: Int, rows: Int, cwd: URL?, sessionKey: String?, enforceCwd: Bool = false) throws -> SpawnResult {
+#if DEBUG
+        if let forcedFailureKey = ProcessInfo.processInfo.environment["MOMENTERM_PTY_FAIL_SESSION_KEY"],
+           forcedFailureKey == sessionKey {
+            throw MomentermError.commandFailed("persistent terminal", "forced smoke-test spawn failure")
+        }
+#endif
         nextId += 1
         let id = nextId
         let session = try NativePtySession(
@@ -89,6 +116,11 @@ final class NativePtyManager {
 }
 
 private final class NativePtySession {
+    private enum PersistentBackend {
+        case tmux(String)
+        case screen(String)
+    }
+
     private let id: Int
     private var childPid: pid_t = 0
     private var exitSource: DispatchSourceProcess?
@@ -100,7 +132,7 @@ private final class NativePtySession {
     private let slaveHandle: FileHandle
     private let masterFd: Int32
     private let writeQueue: DispatchQueue
-    private let tmuxPath: String?
+    private let persistentBackend: PersistentBackend?
     let sessionName: String?
     private let fallbackDirectory: URL
     private let onData: (Int, Data) -> Void
@@ -111,7 +143,7 @@ private final class NativePtySession {
     private var pendingWinchWork: DispatchWorkItem?
 
     var isPersistent: Bool {
-        tmuxPath != nil && sessionName != nil
+        persistentBackend != nil && sessionName != nil
     }
 
     init(
@@ -141,15 +173,32 @@ private final class NativePtySession {
         slaveHandle = FileHandle(fileDescriptor: slave, closeOnDealloc: true)
 
         let requestedSession = sessionKey.flatMap(NativePtySession.sanitizedTmuxSessionName)
-        let environment = ProcessInfo.processInfo.environment
-        let tmuxEnabled = environment["MOMENTERM_ENABLE_TMUX_PERSISTENCE"] == "1"
-            && environment["MOMENTERM_DISABLE_TMUX_PERSISTENCE"] != "1"
-        let availableTmux = tmuxEnabled && requestedSession != nil ? NativePtySession.findExecutable(named: "tmux") : nil
-        tmuxPath = availableTmux
-        sessionName = availableTmux == nil ? nil : requestedSession
+        let persistenceEnabled = requestedSession != nil
+            && NativePtyManager.persistenceRequested(for: sessionKey)
+        let availableTmux = persistenceEnabled ? NativePtySession.findExecutable(named: "tmux") : nil
+        let availableScreen = persistenceEnabled ? NativePtySession.findExecutable(named: "screen") : nil
+        if let availableTmux = availableTmux,
+           let requestedSession = requestedSession,
+           NativePtySession.tmuxSessionExists(tmuxPath: availableTmux, sessionName: requestedSession) {
+            persistentBackend = .tmux(availableTmux)
+        } else if let availableScreen = availableScreen,
+                  let requestedSession = requestedSession,
+                  NativePtySession.screenSessionExists(screenPath: availableScreen, sessionName: requestedSession) {
+            persistentBackend = .screen(availableScreen)
+        } else if let availableScreen = availableScreen {
+            // New sessions use the macOS-provided backend so installing or removing
+            // an optional tmux binary cannot change their identity on a later launch.
+            persistentBackend = .screen(availableScreen)
+        } else if let availableTmux = availableTmux {
+            persistentBackend = .tmux(availableTmux)
+        } else {
+            persistentBackend = nil
+        }
+        sessionName = persistentBackend == nil ? nil : requestedSession
 
         let launchDirectory = fallbackDirectory.path
-        if let tmuxPath = tmuxPath, let sessionName = sessionName {
+        switch (persistentBackend, sessionName) {
+        case (.tmux(let tmuxPath)?, .some(let sessionName)):
             if enforceCwd {
                 NativePtySession.resetTmuxSessionIfDirectoryMismatch(
                     tmuxPath: tmuxPath,
@@ -159,7 +208,14 @@ private final class NativePtySession {
             }
             self.spawnPath = tmuxPath
             self.spawnArgs = ["new-session", "-A", "-s", sessionName, "-c", launchDirectory]
-        } else {
+        case (.screen(let screenPath)?, .some(let sessionName)):
+            self.spawnPath = screenPath
+            self.spawnArgs = [
+                "-U", "-A", "-h", "10000", "-c", "/dev/null",
+                "-e", "^]x",
+                "-D", "-RR", "-S", sessionName
+            ]
+        default:
             let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
             self.spawnPath = shell
             self.spawnArgs = NativePtySession.loginShellArguments(for: shell)
@@ -176,12 +232,25 @@ private final class NativePtySession {
     }
 
     func currentDirectory() -> URL {
-        if let tmuxPath = tmuxPath,
-           let sessionName = sessionName,
-           let path = NativePtySession.runCapturing(tmuxPath, ["display-message", "-p", "-t", sessionName, "#{pane_current_path}"])?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !path.isEmpty {
-            return URL(fileURLWithPath: path).standardizedFileURL
+        if let sessionName = sessionName {
+            switch persistentBackend {
+            case .tmux(let tmuxPath):
+                if let path = NativePtySession.runCapturing(
+                    tmuxPath,
+                    ["display-message", "-p", "-t", sessionName, "#{pane_current_path}"]
+                )?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
+                    return URL(fileURLWithPath: path).standardizedFileURL
+                }
+            case .screen(let screenPath):
+                if let path = NativePtySession.screenCurrentDirectory(
+                    screenPath: screenPath,
+                    sessionName: sessionName
+                ) {
+                    return path
+                }
+            case nil:
+                break
+            }
         }
         return currentProcessDirectory() ?? fallbackDirectory
     }
@@ -325,19 +394,28 @@ private final class NativePtySession {
     }
 
     func kill() {
-        if let tmuxPath = tmuxPath, let sessionName = sessionName {
-            NativePtySession.runQuietly(tmuxPath, ["kill-session", "-t", sessionName])
+        if let sessionName = sessionName {
+            switch persistentBackend {
+            case .tmux(let tmuxPath):
+                NativePtySession.runQuietly(tmuxPath, ["kill-session", "-t", sessionName])
+            case .screen(let screenPath):
+                NativePtySession.runQuietly(screenPath, ["-S", sessionName, "-X", "quit"])
+            case nil:
+                break
+            }
         }
         closeClient(notifyExit: true)
     }
 
     func detach() {
-        // Detach without killing the process tree: closing the PTY master sends
-        // EOF to the tmux client, which exits gracefully while the tmux server
-        // session survives (we never call kill-session here). Re-spawning with the
-        // same sessionKey reattaches via `tmux new-session -A`. Unlike kill(), this
-        // must NOT terminate the process, so it skips signalDescendants/terminate/
-        // Darwin.kill. finish() already closes masterHandle and guards on didExit.
+        // Detach without killing the process tree: closing the PTY master ends the
+        // tmux/screen client while its server-side session survives. Re-spawning
+        // with the same session key reattaches. Unlike kill(), this must not signal
+        // descendants or terminate the persistent server session.
+        if case .screen(let screenPath) = persistentBackend,
+           let sessionName = sessionName {
+            NativePtySession.runQuietly(screenPath, ["-d", sessionName])
+        }
         masterHandle.readabilityHandler = nil
         finish(notifyExit: false)
     }
@@ -350,15 +428,21 @@ private final class NativePtySession {
         guard childPid > 0, !didExit else {
             return fallbackDirectory
         }
-        let pid = String(childPid)
-        guard let output = NativePtySession.runCapturing("/usr/sbin/lsof", ["-a", "-p", pid, "-d", "cwd", "-Fn"]) else {
-            return fallbackDirectory
+        return Self.processDirectory(pid: childPid) ?? fallbackDirectory
+    }
+
+    private static func processDirectory(pid: Int32) -> URL? {
+        guard let output = runCapturing(
+            "/usr/sbin/lsof",
+            ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]
+        ) else {
+            return nil
         }
         let path = output.components(separatedBy: .newlines)
             .first { $0.hasPrefix("n/") }
             .map { String($0.dropFirst()) }
         guard let path = path, !path.isEmpty else {
-            return fallbackDirectory
+            return nil
         }
         return URL(fileURLWithPath: path).standardizedFileURL
     }
@@ -375,17 +459,34 @@ private final class NativePtySession {
             Self.signalDescendants(of: rootPid, signal: SIGKILL)
             Darwin.kill(rootPid, SIGKILL)
         }
-        if childPid > 0 {
-            // Reap synchronously here rather than relying solely on the exitSource event:
-            // this session is typically removed from the owning dictionary right after
-            // kill() returns, and with only a weak self captured, the instance can be
-            // deallocated before the exit event fires — leaving a zombie behind.
-            waitpid(childPid, nil, 0)
-        }
         exitSource?.cancel()
         exitSource = nil
+        // A screen/tmux client can stay in its exit path until the PTY master closes.
+        // Close it before waiting so terminal teardown can never deadlock the UI thread.
         try? masterHandle.close()
+        if childPid > 0 {
+            Self.reapAfterTermination(childPid)
+        }
         finish(notifyExit: notifyExit)
+    }
+
+    private static func reapAfterTermination(_ pid: pid_t) {
+        let deadline = Date().addingTimeInterval(0.25)
+        var status: Int32 = 0
+        while Date() < deadline {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid || (result < 0 && errno != EINTR) {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+
+        // The process was already sent SIGKILL, but filesystem/session cleanup may
+        // briefly delay its exit. Reap it off the main thread once it becomes ready.
+        DispatchQueue.global(qos: .utility).async {
+            var status: Int32 = 0
+            while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        }
     }
 
     private static func signalDescendants(of rootPid: Int32, signal: Int32) {
@@ -684,20 +785,84 @@ private final class NativePtySession {
         }
     }
 
-    private static func runCapturing(_ executable: String, _ arguments: [String]) -> String? {
+    private static func tmuxSessionExists(tmuxPath: String, sessionName: String) -> Bool {
+        runCapturing(tmuxPath, ["has-session", "-t", sessionName]) != nil
+    }
+
+    private static func screenSessionExists(screenPath: String, sessionName: String) -> Bool {
+        screenServerPid(screenPath: screenPath, sessionName: sessionName) != nil
+    }
+
+    private static func screenCurrentDirectory(screenPath: String, sessionName: String) -> URL? {
+        guard let serverPid = screenServerPid(screenPath: screenPath, sessionName: sessionName) else {
+            return nil
+        }
+        let descendants = descendantPids(of: serverPid)
+        let configuredShell = ProcessInfo.processInfo.environment["SHELL"]
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let shellName = URL(fileURLWithPath: configuredShell).lastPathComponent
+        let shellPid = descendants.first(where: { processName(pid: $0) == shellName })
+            ?? (descendants.count > 1 ? descendants[1] : descendants.first)
+        if let shellPid = shellPid,
+           let directory = processDirectory(pid: shellPid) {
+            return directory
+        }
+        return processDirectory(pid: serverPid)
+    }
+
+    private static func screenServerPid(screenPath: String, sessionName: String) -> Int32? {
+        guard let listing = runCapturing(
+            screenPath,
+            ["-ls", sessionName],
+            requireSuccess: false
+        ) else {
+            return nil
+        }
+        let suffix = ".\(sessionName)"
+        return listing.components(separatedBy: .newlines).compactMap { line -> Int32? in
+            guard let token = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).first,
+                  token.hasSuffix(suffix),
+                  let separator = token.firstIndex(of: ".") else {
+                return nil
+            }
+            return Int32(token[..<separator])
+        }.first
+    }
+
+    private static func processName(pid: Int32) -> String? {
+        guard let output = runCapturing(
+            "/bin/ps",
+            ["-p", String(pid), "-o", "comm="]
+        )?.trimmingCharacters(in: .whitespacesAndNewlines), !output.isEmpty else {
+            return nil
+        }
+        let command = output.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return URL(fileURLWithPath: command).lastPathComponent
+    }
+
+    fileprivate static func runCapturing(
+        _ executable: String,
+        _ arguments: [String],
+        requireSuccess: Bool = true
+    ) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         let output = Pipe()
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         guard (try? process.run()) != nil else {
             return nil
         }
+        // Drain stdout while the child is running. Waiting first can deadlock when a command such
+        // as `ps -axo` fills the pipe buffer: the child blocks on write while the parent blocks on
+        // waitUntilExit(). Stderr is intentionally discarded above, so there is only one stream to
+        // drain and no second pipe can create the same cycle.
+        let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
+        guard !requireSuccess || process.terminationStatus == 0 else {
             return nil
         }
-        return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        return String(data: data, encoding: .utf8)
     }
 }

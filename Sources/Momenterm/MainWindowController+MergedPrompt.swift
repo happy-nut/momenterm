@@ -43,11 +43,11 @@ extension MainWindowController {
 
         configureMergedPromptFloatingButton()
 
-        configureCodeTextView(mergedPromptTextView)
         mergedPromptTextView.onEscapeKey = { [weak self] in
             self?.hideMergedPromptSidePanel(focusTerminalAfterClose: true)
         }
         let promptScroll = codeScrollView(mergedPromptTextView)
+        configureMergedPromptTextView()
         promptScroll.translatesAutoresizingMaskIntoConstraints = false
         mergedPromptSidePanel.addSubview(promptScroll)
 
@@ -83,6 +83,24 @@ extension MainWindowController {
             promptScroll.trailingAnchor.constraint(equalTo: mergedPromptSidePanel.trailingAnchor, constant: -14),
             promptScroll.bottomAnchor.constraint(equalTo: mergedPromptSidePanel.bottomAnchor, constant: -14)
         ])
+    }
+
+    func configureMergedPromptTextView() {
+        configureCodeTextView(mergedPromptTextView)
+        let background = theme.panelBackground
+        mergedPromptTextView.backgroundColor = background
+        mergedPromptTextView.textColor = theme.primaryText
+        mergedPromptTextView.wantsLayer = true
+        mergedPromptTextView.layer?.backgroundColor = background.cgColor
+        guard let scroll = mergedPromptTextView.enclosingScrollView else {
+            return
+        }
+        scroll.wantsLayer = true
+        scroll.layer?.backgroundColor = background.cgColor
+        scroll.backgroundColor = background
+        scroll.contentView.wantsLayer = true
+        scroll.contentView.layer?.backgroundColor = background.cgColor
+        scroll.contentView.backgroundColor = background
     }
     // The floating pill the merged prompt collapses into (US-08). Lives on rootView above the
     // terminal, hidden until the panel is folded away. Tapping it re-expands the panel.
@@ -149,7 +167,7 @@ extension MainWindowController {
             || isMergedPromptFloatingCollapsedActive()
     }
     func isPromptMemoSidePanelActive() -> Bool {
-        !memoSidePanel.isHidden
+        !memoSidePanel.isHidden && memoPanelVisibleTrailingConstraint?.isActive == true
     }
     func isPromptTextPanelActive() -> Bool {
         isPromptMemoSidePanelActive() || isMergedPromptPanelActive()

@@ -22,7 +22,7 @@ extension MainWindowController {
     }
 
     func focusWorkspaceRailPicker() {
-        guard workspaceRailExpanded else {
+        guard workspaceRailExpanded, renamingWorkspaceId == nil else {
             return
         }
         rebuildWorkspaceButtons()
@@ -32,7 +32,8 @@ extension MainWindowController {
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   self.workspaceRailExpanded,
-                  self.overlayView.isHidden
+                  self.overlayView.isHidden,
+                  self.renamingWorkspaceId == nil
             else {
                 return
             }

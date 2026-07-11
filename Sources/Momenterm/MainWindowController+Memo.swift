@@ -12,7 +12,7 @@ extension MainWindowController {
         if memoSidePanel.layer == nil {
             memoSidePanel.layer = CALayer()
         }
-        memoSidePanel.layer?.backgroundColor = theme.codeBackground.cgColor
+        memoSidePanel.layer?.backgroundColor = theme.panelBackground.cgColor
         memoSidePanel.layer?.borderColor = theme.panelBorder.cgColor
         memoSidePanel.layer?.borderWidth = 1
         applyMemoPanelShadow()
@@ -51,13 +51,13 @@ extension MainWindowController {
         MomentermDesign.styleMinimalScrollbars(scroll)
         scroll.borderType = .noBorder
         scroll.wantsLayer = true
-        scroll.layer?.backgroundColor = theme.codeBackground.cgColor
+        scroll.layer?.backgroundColor = theme.panelBackground.cgColor
         scroll.drawsBackground = true
-        scroll.backgroundColor = theme.codeBackground
+        scroll.backgroundColor = theme.panelBackground
         scroll.contentView.wantsLayer = true
-        scroll.contentView.layer?.backgroundColor = theme.codeBackground.cgColor
+        scroll.contentView.layer?.backgroundColor = theme.panelBackground.cgColor
         scroll.contentView.drawsBackground = true
-        scroll.contentView.backgroundColor = theme.codeBackground
+        scroll.contentView.backgroundColor = theme.panelBackground
         scroll.documentView = text
         memoSidePanel.addSubview(scroll)
         memoTextView = text
@@ -132,6 +132,8 @@ extension MainWindowController {
     }
 
     func showMemoPanel() {
+        memoPanelTransitionGeneration += 1
+        traceMemoPanelTransitionForSmokeTest("show generation=\(memoPanelTransitionGeneration)")
         if isMergedPromptSidePanelActive() {
             hideMergedPromptSidePanel(focusTerminalAfterClose: false, animated: false)
         }
@@ -163,10 +165,20 @@ extension MainWindowController {
             }
             return
         }
+        memoPanelTransitionGeneration += 1
+        let transitionGeneration = memoPanelTransitionGeneration
+        traceMemoPanelTransitionForSmokeTest("hide generation=\(transitionGeneration)")
         memoPanelVisibleTrailingConstraint?.isActive = false
         memoPanelHiddenLeadingConstraint?.isActive = true
         let finishClose = { [weak self] in
-            guard let self = self else { return }
+            guard let self = self else {
+                return
+            }
+            self.traceMemoPanelTransitionForSmokeTest("finish expected=\(transitionGeneration) actual=\(self.memoPanelTransitionGeneration)")
+            guard self.memoPanelTransitionGeneration == transitionGeneration else {
+                return
+            }
+            self.memoPanelTransitionGeneration += 1
             self.memoSidePanel.isHidden = true
             // US-12: a still-open overlay reclaims the space the memo vacated.
             if !self.overlayView.isHidden {
@@ -179,6 +191,13 @@ extension MainWindowController {
         }
         animateMemoPanelLayout(animated: true, completion: finishClose)
         DispatchQueue.main.asyncAfter(deadline: .now() + memoPanelAnimationDuration + 0.03, execute: finishClose)
+    }
+
+    private func traceMemoPanelTransitionForSmokeTest(_ message: String) {
+        guard ProcessInfo.processInfo.environment["MOMENTERM_KEY_INPUT_SMOKE_TRACE"] != nil else {
+            return
+        }
+        fputs("memo panel trace: \(message)\n", stderr)
     }
 
     func animateMemoPanelLayout(animated: Bool, completion: (() -> Void)? = nil) {

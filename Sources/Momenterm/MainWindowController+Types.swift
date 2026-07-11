@@ -59,7 +59,6 @@ extension MainWindowController {
     }
 
     enum SettingsCategory: String, CaseIterable {
-        case general
         case appearance
         case terminal
         case review
@@ -67,8 +66,6 @@ extension MainWindowController {
 
         var title: String {
             switch self {
-            case .general:
-                return "일반"
             case .appearance:
                 return "테마"
             case .terminal:
@@ -82,8 +79,6 @@ extension MainWindowController {
 
         var icon: String {
             switch self {
-            case .general:
-                return "gearshape"
             case .appearance:
                 return "paintpalette"
             case .terminal:
@@ -97,12 +92,10 @@ extension MainWindowController {
 
         var shortcut: String {
             switch self {
-            case .general:
-                return "⌘,"
             case .appearance:
                 return ""
             case .terminal:
-                return "⌥F12"
+                return ""
             case .review:
                 return "⌘0"
             case .prompts:
@@ -112,8 +105,6 @@ extension MainWindowController {
 
         var detail: String {
             switch self {
-            case .general:
-                return "Momenterm 환경설정"
             case .appearance:
                 return "UI 팔레트와 신택스 테마 (독립 선택)"
             // (title/detail deliberately avoid the legacy fake-option label)
@@ -193,6 +184,11 @@ extension MainWindowController {
         let output = NSMutableAttributedString()
         let renderer: NativeAnsiRenderer
         let outputDecoder = NativeUTF8StreamDecoder()
+        // Raw PTY bytes received before this pane gets a Ghostty surface. Restored
+        // inactive panes are intentionally built lazily; replaying this bounded tail
+        // prevents them from appearing blank when first activated.
+        var pendingGhosttyReplayData = Data()
+        var isGhosttyReplayReady = false
         var textView: NativeTerminalTextView?
         var scrollView: NSScrollView?
         var ghosttyView: LibGhosttyTerminalView?
@@ -246,6 +242,9 @@ extension MainWindowController {
         var panes: [TerminalSession]
         var activePaneId: Int?
         var tabButton: NSButton?
+        weak var tabContainerView: NSView?
+        weak var tabTitleLabel: NSTextField?
+        weak var tabCloseButton: NSButton?
         var panesSplitVertically: Bool
         var belowSplitGroups: [[Int]]
         var belowSideSplitGroups: [[Int]]

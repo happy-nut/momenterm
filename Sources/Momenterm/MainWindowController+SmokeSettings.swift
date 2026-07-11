@@ -74,22 +74,41 @@ extension MainWindowController {
             && textView.frame.height >= min(contentSize.height, 1)
     }
 
-    func memoEditorUsesCodeBackgroundForSmokeTest() -> Bool {
+    func promptSidePanelsFollowThemeBackgroundForSmokeTest() -> Bool {
         showMemoPanel()
+        let originalTheme = theme
+        let lightTheme = NativeTheme(
+            uiPalette: MomentermDesign.Colors.light,
+            syntax: MomentermDesign.Colors.darculaSyntax
+        )
+        applyTheme(lightTheme)
+        defer { applyTheme(originalTheme) }
         guard let textView = memoTextView,
-              let scrollView = textView.enclosingScrollView
+              let scrollView = textView.enclosingScrollView,
+              let mergedScrollView = mergedPromptTextView.enclosingScrollView
         else {
             return false
         }
-        let panelBackground = memoSidePanel.layer?.backgroundColor.flatMap(NSColor.init(cgColor:))
-        return MainWindowController.colorsAreCloseForSmokeTest(textView.backgroundColor, theme.codeBackground)
-            && MainWindowController.colorsAreCloseForSmokeTest(scrollView.backgroundColor, theme.codeBackground)
-            && MainWindowController.colorsAreCloseForSmokeTest(scrollView.contentView.backgroundColor, theme.codeBackground)
-            && panelBackground.map { MainWindowController.colorsAreCloseForSmokeTest($0, theme.codeBackground) } == true
+        let memoPanelBackground = memoSidePanel.layer?.backgroundColor.flatMap(NSColor.init(cgColor:))
+        let mergedPanelBackground = mergedPromptSidePanel.layer?.backgroundColor.flatMap(NSColor.init(cgColor:))
+        let expected = lightTheme.panelBackground
+        return !MainWindowController.colorsAreCloseForSmokeTest(expected, lightTheme.codeBackground)
+            && MainWindowController.colorsAreCloseForSmokeTest(textView.backgroundColor, expected)
+            && MainWindowController.colorsAreCloseForSmokeTest(scrollView.backgroundColor, expected)
+            && MainWindowController.colorsAreCloseForSmokeTest(scrollView.contentView.backgroundColor, expected)
+            && memoPanelBackground.map { MainWindowController.colorsAreCloseForSmokeTest($0, expected) } == true
+            && MainWindowController.colorsAreCloseForSmokeTest(mergedPromptTextView.backgroundColor, expected)
+            && MainWindowController.colorsAreCloseForSmokeTest(mergedScrollView.backgroundColor, expected)
+            && MainWindowController.colorsAreCloseForSmokeTest(mergedScrollView.contentView.backgroundColor, expected)
+            && mergedPanelBackground.map { MainWindowController.colorsAreCloseForSmokeTest($0, expected) } == true
     }
 
     func memoSidePanelIsVisibleForSmokeTest() -> Bool {
-        !memoSidePanel.isHidden
+        // During the slide-out animation AppKit keeps the view unhidden until completion, but the
+        // visible constraint is already inactive and the panel is no longer an active on-screen
+        // surface. Treat that transition state as closed so nested-run-loop smoke waits do not
+        // depend on a main-queue animation completion that can only run after the wait returns.
+        !memoSidePanel.isHidden && memoPanelVisibleTrailingConstraint?.isActive == true
     }
 
     // US-12: opening Settings (or any overlay) must not close or cover the memo. Returns true when
@@ -194,7 +213,7 @@ extension MainWindowController {
 
     func settingsOverlayMatchesPreferencesDesignForSmokeTest() -> Bool {
         let previousCategory = selectedSettingsCategory
-        selectedSettingsCategory = .general
+        selectedSettingsCategory = .terminal
         showOverlay(.settings)
         window?.contentView?.layoutSubtreeIfNeeded()
         defer {
@@ -204,12 +223,14 @@ extension MainWindowController {
             }
         }
         let visibleText = collectVisibleText(in: overlayView)
-        let hasExpectedCopy = ["설정", "일반", "Momenterm 환경설정", "저장 방식"].allSatisfy { marker in
+        let hasExpectedCopy = ["설정", "터미널", "여유로운 간격", "커서 모양", "배경색"].allSatisfy { marker in
             visibleText.contains(marker)
         }
-        let removedFakeOptions = !visibleText.contains("밀도")
-            && !visibleText.contains("Compact")
-            && !visibleText.contains("모양")
+        let removedFakeOptions = !visibleText.contains("Compact")
+            && !visibleText.contains("저장 방식")
+            && !visibleText.contains("신택스 하이라이팅")
+            && !visibleText.contains("시작 디렉토리")
+            && !visibleText.contains("Cmd+D와 Cmd+Shift+D")
         let overlayFrame = overlayView.frame
         let rootBounds = rootView.bounds
         let hasModalGeometry = overlayFrame.width <= rootBounds.width - 40
@@ -217,22 +238,29 @@ extension MainWindowController {
             && abs(overlayFrame.midX - rootBounds.midX) <= 3
             && abs(overlayFrame.midY - rootBounds.midY) <= 3
             && overlayFrame.width <= MomentermDesign.Metrics.settingsMaxWidth + 1
-        return compactOverlayModeActive
-            && hasModalGeometry
-            && !overlaySettingsScrollView.isHidden
-            && overlaySettingsScrollView.documentView?.isFlipped == true
-            && overlayDiffSplitView.isHidden
-            && overlaySidebarWidthConstraint?.constant == MomentermDesign.Metrics.settingsSidebarWidth
-            && containsView(identifier: "settings-sidebar-search", in: overlayView)
-            && countViews(identifier: "settings-row-group", in: overlayView) >= 1
-            && countViews(identifier: "settings-row-surface", in: overlayView) >= 2
-            && countViews(identifier: "settings-row-separator", in: overlayView) == 0
-            && countViews(identifier: "settings-row-divider", in: overlayView) == 0
-            && settingsRowsUseDividerlessPlateLayoutForSmokeTest()
-            && settingsContentLabelsUseArrowCursorForSmokeTest()
-            && hasExpectedCopy
-            && removedFakeOptions
-            && settingsOverlayHasNoClippedControlsForSmokeTest()
+        let checks: [(String, Bool)] = [
+            ("compact", compactOverlayModeActive),
+            ("geometry", hasModalGeometry),
+            ("scroll-visible", !overlaySettingsScrollView.isHidden),
+            ("flipped", overlaySettingsScrollView.documentView?.isFlipped == true),
+            ("diff-hidden", overlayDiffSplitView.isHidden),
+            ("sidebar-width", overlaySidebarWidthConstraint?.constant == MomentermDesign.Metrics.settingsSidebarWidth),
+            ("search-removed", collectTextFields(in: overlaySidebarStack).allSatisfy { !($0 is NSSearchField) }),
+            ("row-group", countViews(identifier: "settings-row-group", in: overlayView) >= 1),
+            ("row-surfaces", countViews(identifier: "settings-row-surface", in: overlayView) >= 2),
+            ("no-separators", countViews(identifier: "settings-row-separator", in: overlayView) == 0),
+            ("no-dividers", countViews(identifier: "settings-row-divider", in: overlayView) == 0),
+            ("plate-layout", settingsRowsUseDividerlessPlateLayoutForSmokeTest()),
+            ("label-cursors", settingsContentLabelsUseArrowCursorForSmokeTest()),
+            ("copy", hasExpectedCopy),
+            ("non-actionable-removed", removedFakeOptions),
+            ("controls-unclipped", settingsOverlayHasNoClippedControlsForSmokeTest())
+        ]
+        let failed = checks.filter { !$0.1 }.map(\.0)
+        if !failed.isEmpty {
+            fputs("settings design smoke failed checks: \(failed.joined(separator: ", "))\n", stderr)
+        }
+        return failed.isEmpty
     }
 
     func settingsOverlayLayoutDiagnosticsForSmokeTest() -> String {
@@ -259,7 +287,9 @@ extension MainWindowController {
 
     func settingsContentLabelsUseArrowCursorForSmokeTest() -> Bool {
         let labels = collectTextFields(in: overlaySettingsStack)
-        return !labels.isEmpty && labels.allSatisfy { $0 is NativeSettingsLabel }
+        return !labels.isEmpty
+            && labels.allSatisfy { !$0.isEditable }
+            && labels.contains { $0 is NativeSettingsLabel }
     }
 
     func selectSettingsCategoryForSmokeTest(_ rawValue: String) -> Bool {
@@ -274,7 +304,7 @@ extension MainWindowController {
 
     func settingsSidebarSelectionWorksForSmokeTest() -> Bool {
         let previousCategory = selectedSettingsCategory
-        selectedSettingsCategory = .general
+        selectedSettingsCategory = .appearance
         showOverlay(.settings)
         window?.contentView?.layoutSubtreeIfNeeded()
         guard let reviewButton = collectButtons(in: overlaySidebarStack).first(where: {

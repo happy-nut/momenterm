@@ -203,12 +203,15 @@ final class LibGhosttyTerminalView: NSView {
     private var surface: ghostty_surface_t?
     private var hostBridge: MomentermGhosttyHostBridge?
     private var renderScheduled = false
+    private var reportedSurfaceVisibility: Bool?
     private var lastColumns = 0
     private var lastRows = 0
 #if DEBUG
     // Counts mouse events forwarded into the ghostty surface so a smoke test can assert the
     // NSTextView on top actually relays its drag-select gesture here (the selection-bug fix).
     private(set) var forwardedMouseEventCountForSmokeTest = 0
+    private(set) var preeditTextForSmokeTest = ""
+    private(set) var surfaceVisibilityForSmokeTest = false
 #endif
 
     var isRenderingAvailable: Bool {
@@ -232,9 +235,11 @@ final class LibGhosttyTerminalView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil {
-            buildSurfaceIfNeeded()
+            buildSurfaceIfNeeded(initiallyVisible: false)
             fitToSize()
+            setSurfaceVisibility(true)
         } else {
+            setSurfaceVisibility(false)
             setFocused(false)
         }
     }
@@ -249,17 +254,19 @@ final class LibGhosttyTerminalView: NSView {
         fitToSize()
     }
 
-    func receive(_ string: String) {
+    @discardableResult
+    func receive(_ string: String) -> Bool {
         guard let data = string.data(using: .utf8) else {
-            return
+            return false
         }
-        receive(data)
+        return receive(data)
     }
 
-    func receive(_ data: Data) {
+    @discardableResult
+    func receive(_ data: Data) -> Bool {
         buildSurfaceIfNeeded()
         guard let surface = surface else {
-            return
+            return false
         }
         data.withUnsafeBytes { buffer in
             guard let base = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
@@ -268,12 +275,14 @@ final class LibGhosttyTerminalView: NSView {
             ghostty_surface_write_buffer(surface, base, UInt(buffer.count))
         }
         requestRender()
+        return true
     }
 
-    func fitToSize() {
+    @discardableResult
+    func fitToSize() -> Bool {
         buildSurfaceIfNeeded()
         guard let surface = surface else {
-            return
+            return false
         }
 
         updateMetalLayerMetrics()
@@ -281,7 +290,7 @@ final class LibGhosttyTerminalView: NSView {
         let pixelWidth = UInt32(max(1, floor(bounds.width * CGFloat(scale))))
         let pixelHeight = UInt32(max(1, floor(bounds.height * CGFloat(scale))))
         guard pixelWidth > 1, pixelHeight > 1 else {
-            return
+            return false
         }
 
         ghostty_surface_set_content_scale(surface, scale, scale)
@@ -289,6 +298,7 @@ final class LibGhosttyTerminalView: NSView {
         let size = ghostty_surface_size(surface)
         applyGridResize(columns: Int(size.columns), rows: Int(size.rows))
         requestRender()
+        return size.columns > 0 && size.rows > 0
     }
 
     func setFocused(_ focused: Bool) {
@@ -297,6 +307,44 @@ final class LibGhosttyTerminalView: NSView {
         }
         ghostty_surface_set_focus(surface, focused)
         requestRender()
+    }
+
+    func setPreedit(_ text: String) {
+#if DEBUG
+        preeditTextForSmokeTest = text
+#endif
+        buildSurfaceIfNeeded()
+        guard let surface = surface else {
+            return
+        }
+        if text.isEmpty {
+            ghostty_surface_preedit(surface, nil, 0)
+        } else {
+            text.withCString { pointer in
+                ghostty_surface_preedit(surface, pointer, UInt(text.utf8.count))
+            }
+        }
+        requestRender()
+    }
+
+    func imeRectOnScreen() -> NSRect? {
+        buildSurfaceIfNeeded()
+        guard let surface = surface, let window = window else {
+            return nil
+        }
+        let metrics = NativeTerminalFont.cellMetrics(size: 13)
+        var x = 0.0
+        var y = 0.0
+        var width = Double(metrics.width)
+        var height = Double(metrics.height)
+        ghostty_surface_ime_point(surface, &x, &y, &width, &height)
+        let viewRect = NSRect(
+            x: CGFloat(x),
+            y: bounds.height - CGFloat(y),
+            width: max(CGFloat(width), 0),
+            height: max(CGFloat(height), metrics.height)
+        )
+        return window.convertToScreen(convert(viewRect, to: nil))
     }
 
     // Mouse forwarding for text selection. The app's NSTextView sits on top of this Metal
@@ -383,7 +431,7 @@ final class LibGhosttyTerminalView: NSView {
     }
 
     func requestRender() {
-        guard surface != nil, !renderScheduled else {
+        guard surface != nil, reportedSurfaceVisibility == true, !renderScheduled else {
             return
         }
         renderScheduled = true
@@ -407,6 +455,39 @@ final class LibGhosttyTerminalView: NSView {
 #if DEBUG
     func isSurfaceAttachedForSmokeTest() -> Bool {
         surface != nil
+    }
+
+    func surfaceTextForSmokeTest() -> String? {
+        guard let surface = surface else {
+            return nil
+        }
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ),
+            bottom_right: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        )
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_text(surface, selection, &text) else {
+            return nil
+        }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard let pointer = text.text, text.text_len > 0 else {
+            return ""
+        }
+        return String(
+            decoding: UnsafeRawBufferPointer(start: pointer, count: Int(text.text_len)),
+            as: UTF8.self
+        )
     }
 
     func mouseForwardCountForSmokeTest() -> Int {
@@ -440,6 +521,7 @@ final class LibGhosttyTerminalView: NSView {
         surface = nil
         hostBridge = nil
         renderScheduled = false
+        reportedSurfaceVisibility = nil
         MomentermGhosttyRuntime.shared.unregister(self)
     }
 
@@ -459,7 +541,7 @@ final class LibGhosttyTerminalView: NSView {
         updateMetalLayerMetrics()
     }
 
-    private func buildSurfaceIfNeeded() {
+    private func buildSurfaceIfNeeded(initiallyVisible: Bool? = nil) {
         guard surface == nil,
               let app = MomentermGhosttyRuntime.shared.app
         else {
@@ -489,13 +571,28 @@ final class LibGhosttyTerminalView: NSView {
         surface = ghostty_surface_new(app, &config)
         if let surface = surface {
             ghostty_surface_set_color_scheme(surface, GHOSTTY_COLOR_SCHEME_DARK)
-            ghostty_surface_set_occlusion(surface, true)
+            reportedSurfaceVisibility = nil
+            setSurfaceVisibility(initiallyVisible ?? (window != nil))
+        }
+    }
+
+    private func setSurfaceVisibility(_ visible: Bool) {
+        guard let surface = surface, reportedSurfaceVisibility != visible else {
+            return
+        }
+        reportedSurfaceVisibility = visible
+        ghostty_surface_set_occlusion(surface, visible)
+#if DEBUG
+        surfaceVisibilityForSmokeTest = visible
+#endif
+        if visible {
+            requestRender()
         }
     }
 
     private func renderFrame() {
         renderScheduled = false
-        guard let surface = surface else {
+        guard let surface = surface, reportedSurfaceVisibility == true else {
             return
         }
         MomentermGhosttyRuntime.shared.tick()
@@ -528,10 +625,15 @@ final class LibGhosttyTerminalView: NSView {
     var onGridResize: ((Int, Int) -> Void)?
     var isRenderingAvailable: Bool { false }
 
-    func receive(_ string: String) {}
-    func receive(_ data: Data) {}
-    func fitToSize() {}
+    @discardableResult
+    func receive(_ string: String) -> Bool { false }
+    @discardableResult
+    func receive(_ data: Data) -> Bool { false }
+    @discardableResult
+    func fitToSize() -> Bool { false }
     func setFocused(_ focused: Bool) {}
+    func setPreedit(_ text: String) {}
+    func imeRectOnScreen() -> NSRect? { nil }
     func forwardMouseButton(_ event: NSEvent, pressed: Bool) {}
     func forwardMouseDrag(_ event: NSEvent) {}
     @discardableResult
@@ -542,8 +644,11 @@ final class LibGhosttyTerminalView: NSView {
     func releaseSurface() {}
 #if DEBUG
     func isSurfaceAttachedForSmokeTest() -> Bool { false }
+    func surfaceTextForSmokeTest() -> String? { nil }
     func usesMetalLayerForSmokeTest() -> Bool { false }
     func mouseForwardCountForSmokeTest() -> Int { 0 }
+    var preeditTextForSmokeTest: String { "" }
+    var surfaceVisibilityForSmokeTest: Bool { false }
 #endif
     func gridSize() -> (columns: Int, rows: Int)? { nil }
 }
