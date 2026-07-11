@@ -37,6 +37,7 @@ const files = {
   packageApp: read("scripts/package-app.sh"),
   installApp: read("scripts/install-app.sh"),
   packageDmg: read("scripts/package-dmg.sh"),
+  releaseWorkflow: read(".github/workflows/release.yml"),
   launchSmoke: read("scripts/launch-smoke.sh"),
   keyInputSmoke: read("scripts/key-input-smoke.sh"),
   appDelegate: read("Sources/Momenterm/AppDelegate.swift"),
@@ -543,6 +544,7 @@ check("package app copies checked-in icon", /cp "\$SOURCE_ICON" "\$ICON"/.test(f
 check("package app re-signs the completed resource bundle", /codesign --force --deep --sign - "\$APP"/.test(files.packageApp) && /codesign --verify --deep --strict "\$APP"/.test(files.packageApp));
 check("install app refreshes LaunchServices icon registration", /ditto "\$APP" "\$DEST"/.test(files.installApp) && /xattr -cr "\$DEST"/.test(files.installApp) && /lsregister/.test(files.installApp) && /touch "\$DEST" "\$DEST\/Contents\/Info\.plist"/.test(files.installApp));
 check("package dmg creates installer image", /hdiutil create/.test(files.packageDmg) && /ln -s \/Applications/.test(files.packageDmg) && /Momenterm\.dmg/.test(files.packageDmg));
+check("release checksum is portable outside the build directory", /release_name="Momenterm-\$\{version\}\.dmg"/.test(files.releaseWorkflow) && /shasum -a 256 "\$release_name" > "\$\{release_name\}\.sha256"/.test(files.releaseWorkflow) && !/shasum -a 256 "\$release_dmg"/.test(files.releaseWorkflow));
 check("launch smoke checks bundled icon", /cmp -s "\$ROOT\/assets\/icon\.icns"/.test(files.launchSmoke) && /check_app_icon/.test(files.launchSmoke) && /NSWorkspace\.shared\.icon\(forFile: appPath\)/.test(files.launchSmoke) && /CFBundleIconFile"\) as\? String == "Momenterm\.icns"/.test(files.launchSmoke));
 check("launch smoke checks dmg contents", /package-dmg\.sh/.test(files.launchSmoke) && /hdiutil attach/.test(files.launchSmoke) && /Momenterm\.app/.test(files.launchSmoke) && /Applications/.test(files.launchSmoke));
 check("launch smoke runs key input smoke", /key-input-smoke\.sh/.test(files.launchSmoke));

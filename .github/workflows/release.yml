@@ -33,9 +33,13 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
           dmg_path="$(./scripts/package-dmg.sh)"
-          release_dmg=".build/Momenterm-${version}.dmg"
+          release_name="Momenterm-${version}.dmg"
+          release_dmg=".build/${release_name}"
           cp "$dmg_path" "$release_dmg"
-          shasum -a 256 "$release_dmg" > "$release_dmg.sha256"
+          (
+            cd "$(dirname "$release_dmg")"
+            shasum -a 256 "$release_name" > "${release_name}.sha256"
+          )
           echo "dmg=$release_dmg" >> "$GITHUB_OUTPUT"
           echo "checksum=$release_dmg.sha256" >> "$GITHUB_OUTPUT"
 
