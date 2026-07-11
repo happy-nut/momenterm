@@ -19,7 +19,7 @@ final class WorkspaceCreationDialogController: NSObject, NSTextFieldDelegate {
     private var result: Result?
 
     init(parentWindow: NSWindow?, theme: NativeTheme, directory: URL, duplicateGitRoot: URL?, defaultName: String) {
-        let size = NSSize(width: 520, height: duplicateGitRoot == nil ? 344 : 462)
+        let size = NSSize(width: 520, height: duplicateGitRoot == nil ? 320 : 432)
         panel = WorkspaceCreationDialogPanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless],
@@ -74,27 +74,18 @@ final class WorkspaceCreationDialogController: NSObject, NSTextFieldDelegate {
         let content = NSStackView()
         content.orientation = .vertical
         content.alignment = .leading
-        content.spacing = 18
+        content.spacing = 16
         content.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(content)
 
         let header = makeHeader(theme: theme)
         content.addArrangedSubview(header)
 
-        let pathBlock = makePathBlock(title: "경로", value: directory.path, theme: theme)
+        let pathBlock = makePathBlock(title: "현재 경로", value: directory.path, theme: theme)
         content.addArrangedSubview(pathBlock)
 
         if let duplicateGitRoot {
-            let message = makeLabel(
-                "이미 이 git 저장소를 사용하는 워크스페이스가 있습니다.\n체크하면 linked git worktree를 만들고 그 경로를 새 워크스페이스로 엽니다.",
-                font: MomentermDesign.Fonts.UI.body.font,
-                color: theme.secondaryText,
-                wrapping: true
-            )
-            content.addArrangedSubview(message)
-            message.widthAnchor.constraint(equalToConstant: 456).isActive = true
-
-            let gitBlock = makePathBlock(title: "Git 저장소", value: duplicateGitRoot.path, theme: theme)
+            let gitBlock = makePathBlock(title: "이미 열린 Git 저장소", value: duplicateGitRoot.path, theme: theme)
             content.addArrangedSubview(gitBlock)
         }
 
@@ -110,7 +101,7 @@ final class WorkspaceCreationDialogController: NSObject, NSTextFieldDelegate {
 
         let nameContainer = NSView()
         nameContainer.wantsLayer = true
-        nameContainer.layer?.backgroundColor = theme.codeBackground.cgColor
+        nameContainer.layer?.backgroundColor = theme.primaryBackground.cgColor
         nameContainer.layer?.cornerRadius = 8
         nameContainer.layer?.borderColor = theme.panelBorder.cgColor
         nameContainer.layer?.borderWidth = 1
@@ -165,37 +156,36 @@ final class WorkspaceCreationDialogController: NSObject, NSTextFieldDelegate {
         let icon = WorkspaceDialogIconView(theme: theme)
         row.addArrangedSubview(icon)
         NSLayoutConstraint.activate([
-            icon.widthAnchor.constraint(equalToConstant: 64),
-            icon.heightAnchor.constraint(equalToConstant: 64)
+            icon.widthAnchor.constraint(equalToConstant: 56),
+            icon.heightAnchor.constraint(equalToConstant: 56)
         ])
 
         let labels = NSStackView()
         labels.orientation = .vertical
         labels.alignment = .leading
-        labels.spacing = 6
+        labels.spacing = 0
         labels.translatesAutoresizingMaskIntoConstraints = false
         row.addArrangedSubview(labels)
 
         labels.addArrangedSubview(makeLabel("새 워크스페이스", font: NSFont.systemFont(ofSize: 18, weight: .semibold), color: theme.primaryText, wrapping: false))
-        labels.addArrangedSubview(makeLabel("현재 터미널 경로로 워크스페이스를 만듭니다.", font: MomentermDesign.Fonts.UI.caption.font, color: theme.tertiaryText, wrapping: false))
         return row
     }
 
     private func makePathBlock(title: String, value: String, theme: NativeTheme) -> NSView {
         let container = NSView()
         container.wantsLayer = true
-        container.layer?.backgroundColor = theme.codeBackground.withAlphaComponent(0.72).cgColor
+        container.layer?.backgroundColor = theme.primaryBackground.cgColor
         container.layer?.cornerRadius = 8
         container.layer?.borderColor = theme.panelBorder.withAlphaComponent(0.75).cgColor
         container.layer?.borderWidth = 1
         container.translatesAutoresizingMaskIntoConstraints = false
 
-        let titleLabel = makeLabel(title, font: MomentermDesign.Fonts.UI.micro.font, color: theme.tertiaryText, wrapping: false)
+        let titleLabel = makeLabel(title, font: MomentermDesign.Fonts.UI.micro.font, color: theme.secondaryText, wrapping: false)
         titleLabel.attributedStringValue = NSAttributedString(
             string: title,
-            attributes: MomentermDesign.Fonts.UI.micro.attributes(color: theme.tertiaryText)
+            attributes: MomentermDesign.Fonts.UI.micro.attributes(color: theme.secondaryText)
         )
-        let valueLabel = makeLabel(value, font: MomentermDesign.Fonts.codeSmall, color: theme.secondaryText, wrapping: false)
+        let valueLabel = makeLabel(value, font: MomentermDesign.Fonts.codeSmall, color: theme.primaryText, wrapping: false)
         valueLabel.lineBreakMode = .byTruncatingMiddle
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -241,7 +231,7 @@ final class WorkspaceCreationDialogController: NSObject, NSTextFieldDelegate {
         spacer.translatesAutoresizingMaskIntoConstraints = false
         row.addArrangedSubview(spacer)
 
-        cancelButton.configure(title: "취소", background: theme.surfaceHover, foreground: theme.secondaryText, border: theme.panelBorder)
+        cancelButton.configure(title: "취소", background: theme.surfaceHover, foreground: theme.primaryText, border: theme.panelBorder)
         cancelButton.target = self
         cancelButton.action = #selector(cancelAction)
         cancelButton.keyEquivalent = "\u{1b}"
@@ -306,13 +296,13 @@ private final class WorkspaceDialogIconView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
-        layer?.backgroundColor = theme.primaryBackground.cgColor
-        layer?.cornerRadius = 16
-        layer?.borderColor = theme.panelBorder.cgColor
+        layer?.backgroundColor = theme.statePositive.cgColor
+        layer?.cornerRadius = 14
+        layer?.borderColor = theme.statePositive.cgColor
         layer?.borderWidth = 1
 
-        label.font = NSFont.monospacedSystemFont(ofSize: 27, weight: .semibold)
-        label.textColor = theme.primaryText
+        label.font = NSFont.monospacedSystemFont(ofSize: 24, weight: .semibold)
+        label.textColor = theme.primaryBackground
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)

@@ -402,6 +402,47 @@ enum MomentermDesign {
             )
         }
 
+        static func contrastRatio(_ foreground: NSColor, _ background: NSColor) -> CGFloat {
+            guard let foregroundRGB = foreground.usingColorSpace(.sRGB),
+                  let backgroundRGB = background.usingColorSpace(.sRGB)
+            else {
+                return 1
+            }
+            let foregroundLuminance = relativeLuminance(foregroundRGB)
+            let backgroundLuminance = relativeLuminance(backgroundRGB)
+            return (max(foregroundLuminance, backgroundLuminance) + 0.05)
+                / (min(foregroundLuminance, backgroundLuminance) + 0.05)
+        }
+
+        static func readableAccent(
+            _ preferred: NSColor,
+            on background: NSColor,
+            fallback: NSColor,
+            minimumContrast: CGFloat = 3
+        ) -> NSColor {
+            if contrastRatio(preferred, background) >= minimumContrast {
+                return preferred
+            }
+            if contrastRatio(fallback, background) >= minimumContrast {
+                return fallback
+            }
+            return contrastRatio(NSColor.black, background) >= contrastRatio(NSColor.white, background)
+                ? .black
+                : .white
+        }
+
+        private static func relativeLuminance(_ color: NSColor) -> CGFloat {
+            func linearized(_ component: CGFloat) -> CGFloat {
+                if component <= 0.03928 {
+                    return component / 12.92
+                }
+                return CGFloat(pow((Double(component) + 0.055) / 1.055, 2.4))
+            }
+            return linearized(color.redComponent) * 0.2126
+                + linearized(color.greenComponent) * 0.7152
+                + linearized(color.blueComponent) * 0.0722
+        }
+
         private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
             NSColor(calibratedRed: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: 1)
         }

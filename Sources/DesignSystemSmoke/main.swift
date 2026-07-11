@@ -147,6 +147,22 @@ check(rgbKey(ui.surfaceBase) != rgbKey(ui.surfacePanel),
 check(rgbKey(ui.surfacePanel) != rgbKey(ui.surfaceElevated),
       "surfacePanel must differ from surfaceElevated")
 
+// Persisted workspace swatches may come from a different UI palette. Low-contrast
+// legacy colors must fall back to the active theme instead of disappearing on the rail.
+let lightUI = MomentermDesign.Colors.derive(
+    uiPalette: MomentermDesign.Colors.uiThemePreset(id: "slate-light").palette
+)
+let washedOutWorkspaceColor = NSColor.white
+let readableWorkspaceColor = MomentermDesign.Colors.readableAccent(
+    washedOutWorkspaceColor,
+    on: lightUI.railBackground,
+    fallback: lightUI.workspaceBlue
+)
+check(rgbKey(readableWorkspaceColor) != rgbKey(washedOutWorkspaceColor),
+      "low-contrast persisted workspace color must be replaced on the active theme")
+check(MomentermDesign.Colors.contrastRatio(readableWorkspaceColor, lightUI.railBackground) >= 3,
+      "resolved workspace rail color must keep at least 3:1 contrast")
+
 // MARK: - Report.
 
 if failures.isEmpty {

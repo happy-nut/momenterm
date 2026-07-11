@@ -103,6 +103,7 @@ extension MainWindowController {
             let active = workspace.id == activeWorkspaceId
             let pickerSelected = workspaceRailExpanded && index == selectedWorkspacePickerIndex
             let branch = workspaceBranchDisplayName(for: workspace)
+            let workspaceColor = readableWorkspaceRailColor(workspace.color)
             // US-3/4: when any pane in this workspace is inside a repo, the rail glyph switches from
             // the plain dot to a branch mark and the hover tooltip gains the detected repo path.
             let railSymbol = workspace.detectedGitRoot != nil ? "arrow.triangle.branch" : "circle.fill"
@@ -133,8 +134,8 @@ extension MainWindowController {
                 railBorder = theme.selectionBorder.cgColor
                 railBorderWidth = 1
             } else if active {
-                railBackground = workspace.color.withAlphaComponent(0.34).cgColor
-                railBorder = workspace.color.cgColor
+                railBackground = workspaceColor.withAlphaComponent(0.34).cgColor
+                railBorder = workspaceColor.cgColor
                 railBorderWidth = 1
             } else {
                 railBackground = NSColor.clear.cgColor
@@ -152,7 +153,7 @@ extension MainWindowController {
             }
             button.imageScaling = .scaleNone
             button.imagePosition = .imageOnly
-            button.contentTintColor = workspace.color
+            button.contentTintColor = workspaceColor
             // Hover tooltip always names the Cmd+P picker; the expanded switcher additionally spells
             // out its per-row keys (Enter/E/Cmd+Backspace) so they're discoverable on hover.
             let selectLabel = workspaceRailExpanded
@@ -169,7 +170,7 @@ extension MainWindowController {
                 button.heightAnchor.constraint(equalToConstant: workspaceRailExpanded ? 40 : MomentermDesign.Metrics.railButtonSize)
             ])
             if workspaceRailExpanded {
-                configureExpandedWorkspaceButton(button, workspace: workspace, branch: branch)
+                configureExpandedWorkspaceButton(button, workspace: workspace, branch: branch, color: workspaceColor)
             }
             if workspaceAgentAlertPaths.contains(normalizedWorkspacePath(workspace.path) ?? workspace.path) {
                 addWorkspaceAgentAlertDot(to: button)
@@ -258,7 +259,7 @@ extension MainWindowController {
         // workspace's own servers, so ":80 :443" showed identically on every workspace.
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
-    private func configureExpandedWorkspaceButton(_ button: NSButton, workspace: Workspace, branch: String?) {
+    private func configureExpandedWorkspaceButton(_ button: NSButton, workspace: Workspace, branch: String?, color: NSColor) {
         let icon = NSImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
         // US-3/4: branch mark when a repo is detected under any pane, else the plain workspace dot.
@@ -270,7 +271,7 @@ extension MainWindowController {
         // workspace dot visually pinned as the rail expands — it must not jump or resize.
         circleImg?.size = NSSize(width: 8, height: 8)
         icon.image = circleImg
-        icon.contentTintColor = workspace.color
+        icon.contentTintColor = color
         icon.imageScaling = .scaleNone
         button.addSubview(icon)
 
@@ -400,6 +401,14 @@ extension MainWindowController {
             notificationLabel.trailingAnchor.constraint(equalTo: nameView.trailingAnchor),
             notificationLabel.topAnchor.constraint(equalTo: branchLabel.bottomAnchor, constant: 1)
         ])
+    }
+
+    private func readableWorkspaceRailColor(_ preferred: NSColor) -> NSColor {
+        MomentermDesign.Colors.readableAccent(
+            preferred,
+            on: theme.railBackground,
+            fallback: theme.workspaceBlue
+        )
     }
     func workspaceBranchName(for workspace: Workspace) -> String? {
         if let branch = service.branchName(from: URL(fileURLWithPath: workspace.path)), !branch.isEmpty {
