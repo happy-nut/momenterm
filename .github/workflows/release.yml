@@ -11,6 +11,7 @@ permissions:
 jobs:
   dmg:
     runs-on: macos-14
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -19,6 +20,12 @@ jobs:
           swift --version
           node --version
           gh --version
+
+      - name: Build
+        run: ./scripts/build.sh
+
+      - name: Smoke suite
+        run: SMOKE_SKIP="launch-smoke.sh key-input-smoke.sh" SMOKE_FAIL_FAST=1 SMOKE_TIMEOUT_SECONDS=600 ./scripts/smoke-all.sh
 
       - name: Build DMG
         id: package
@@ -31,6 +38,13 @@ jobs:
           shasum -a 256 "$release_dmg" > "$release_dmg.sha256"
           echo "dmg=$release_dmg" >> "$GITHUB_OUTPUT"
           echo "checksum=$release_dmg.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release version and signature
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' .build/Momenterm.app/Contents/Info.plist)"
+          test "$bundle_version" = "$version"
+          /usr/bin/codesign --verify --deep --strict .build/Momenterm.app
 
       - name: Publish GitHub Release
         env:

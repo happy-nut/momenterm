@@ -41,9 +41,9 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.0.3</string>
+  <string>0.0.4</string>
   <key>CFBundleVersion</key>
-  <string>3</string>
+  <string>4</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
   <key>NSHighResolutionCapable</key>
@@ -51,5 +51,11 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# `swiftc` linker-signs the bare executable before this script adds Info.plist and
+# resources. Re-seal the completed bundle so the installed app and DMG pass strict
+# code-signature validation instead of carrying a stale executable-only signature.
+/usr/bin/codesign --force --deep --sign - "$APP"
+/usr/bin/codesign --verify --deep --strict "$APP"
 
 echo "$APP"
