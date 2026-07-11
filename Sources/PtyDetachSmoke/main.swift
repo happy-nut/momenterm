@@ -14,6 +14,15 @@ func fail(_ message: String) -> Never {
 guard NativePtyManager.largeCommandCaptureCompletesForSmokeTest() else {
     fail("large child-process output did not drain without deadlocking")
 }
+guard NativePtyManager.commandTimeoutCompletesForSmokeTest() else {
+    fail("PTY helper command timeout did not return within its bounded deadline")
+}
+
+func processExists(_ pid: Int32) -> Bool {
+    guard pid > 0 else { return false }
+    if Darwin.kill(pid, 0) == 0 { return true }
+    return errno == EPERM
+}
 
 final class DetachSmokeDelegate: NativePtyManagerDelegate {
     private(set) var output = Data()
@@ -96,7 +105,7 @@ guard manager.currentDirectory(id: first.id)?.standardizedFileURL == changedDire
 delegate.resetOutput()
 manager.write(
     id: first.id,
-    data: "printf 'ctrl-a-ready\\n'; IFS= read -r -k 1 MOMENTERM_CTRL_A; printf 'ctrl-a-byte:%d\\n' \"'$MOMENTERM_CTRL_A\"\n"
+    data: "printf 'ctrl-a-ready\\n'; if [ -n \"$ZSH_VERSION\" ]; then IFS= read -r -k 1 MOMENTERM_CTRL_A; else IFS= read -r -n 1 MOMENTERM_CTRL_A; fi; printf 'ctrl-a-byte:%d\\n' \"'$MOMENTERM_CTRL_A\"\n"
 )
 delegate.wait(seconds: 3) { delegate.contains("ctrl-a-ready") }
 guard delegate.contains("ctrl-a-ready") else {
@@ -111,7 +120,11 @@ guard delegate.contains("ctrl-a-byte:1") else {
     fail("persistent backend intercepted Ctrl+A instead of forwarding it to the shell; output=\(diagnostic.debugDescription)")
 }
 
+let detachStarted = Date()
 manager.detachAll()
+guard Date().timeIntervalSince(detachStarted) < 0.15 else {
+    fail("detachAll exceeded its bounded control-command deadline")
+}
 delegate.wait(seconds: 0.5) { false }
 delegate.resetOutput()
 
@@ -162,7 +175,20 @@ guard delegate.contains("marker-restored:\(marker)") else {
     manager.kill(id: second.id)
     fail("reattach created a fresh shell instead of preserving live shell state; output=\(diagnostic.debugDescription)")
 }
+let killedClientPid = manager.runningRootPid(id: second.id) ?? 0
+let killStarted = Date()
 manager.kill(id: second.id)
+guard Date().timeIntervalSince(killStarted) < 0.15 else {
+    fail("kill exceeded its bounded control-command deadline")
+}
+delegate.wait(seconds: 3) { !processExists(killedClientPid) }
+guard !processExists(killedClientPid) else {
+    fail("killed PTY client was not reaped")
+}
+delegate.wait(seconds: 3) { !NativePtyManager.persistentSessionExistsForSmokeTest(sessionName) }
+guard !NativePtyManager.persistentSessionExistsForSmokeTest(sessionName) else {
+    fail("killing a terminal returned quickly but orphaned its persistent server session")
+}
 
 // The explicit opt-out remains available for isolation tests and troubleshooting.
 setenv("MOMENTERM_DISABLE_TMUX_PERSISTENCE", "1", 1)

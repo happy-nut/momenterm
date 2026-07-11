@@ -40,6 +40,23 @@ final class NativePtyManager {
         return output.hasPrefix(marker)
             && output.split(separator: "\n").count == 20_000
     }
+
+    static func commandTimeoutCompletesForSmokeTest() -> Bool {
+        let started = Date()
+        let output = NativePtySession.runCapturing(
+            "/bin/sleep",
+            ["2"],
+            timeout: 0.05
+        )
+        return output == nil && Date().timeIntervalSince(started) < 0.5
+    }
+
+    static func persistentSessionExistsForSmokeTest(_ sessionName: String) -> Bool {
+        guard let screenPath = NativePtySession.findExecutable(named: "screen") else {
+            return false
+        }
+        return NativePtySession.screenSessionExists(screenPath: screenPath, sessionName: sessionName)
+    }
 #endif
 
     func spawn(cols: Int, rows: Int, cwd: URL?) throws -> Int {
@@ -120,6 +137,12 @@ private final class NativePtySession {
         case tmux(String)
         case screen(String)
     }
+
+    private static let lifecycleQueue = DispatchQueue(
+        label: "momenterm.pty.lifecycle",
+        qos: .utility,
+        attributes: .concurrent
+    )
 
     private let id: Int
     private var childPid: pid_t = 0
@@ -314,15 +337,16 @@ private final class NativePtySession {
         }
 
         // Detect child exit and reap the zombie (replaces Process.terminationHandler).
-        let source = DispatchSource.makeProcessSource(identifier: childPid, eventMask: .exit, queue: .main)
+        let source = DispatchSource.makeProcessSource(identifier: childPid, eventMask: .exit, queue: Self.lifecycleQueue)
         source.setEventHandler { [weak self] in
             guard let self = self else { return }
-            // .exit already fired, so the child is reapable; block (not WNOHANG) so a
-            // not-yet-reapable 0 return can't leave a zombie behind.
-            var status: Int32 = 0
-            waitpid(self.childPid, &status, 0)
-            self.exitSource?.cancel()
-            self.finish()
+            let pid = self.childPid
+            Self.reapChildBlocking(pid)
+            DispatchQueue.main.async { [weak self] in
+                self?.exitSource?.cancel()
+                self?.exitSource = nil
+                self?.finish()
+            }
         }
         exitSource = source
         source.resume()
@@ -394,14 +418,14 @@ private final class NativePtySession {
     }
 
     func kill() {
-        if let sessionName = sessionName {
+        if let sessionName = sessionName, let persistentBackend = persistentBackend {
+            // The server must acknowledge quit before closing the last tab can terminate the app.
+            // Keep this bounded to 100 ms; process-tree termination/reaping remains fully async.
             switch persistentBackend {
             case .tmux(let tmuxPath):
-                NativePtySession.runQuietly(tmuxPath, ["kill-session", "-t", sessionName])
+                Self.runQuietly(tmuxPath, ["kill-session", "-t", sessionName], timeout: 0.1)
             case .screen(let screenPath):
-                NativePtySession.runQuietly(screenPath, ["-S", sessionName, "-X", "quit"])
-            case nil:
-                break
+                Self.runQuietly(screenPath, ["-S", sessionName, "-X", "quit"], timeout: 0.1)
             }
         }
         closeClient(notifyExit: true)
@@ -410,13 +434,16 @@ private final class NativePtySession {
     func detach() {
         // Detach without killing the process tree: closing the PTY master ends the
         // tmux/screen client while its server-side session survives. Re-spawning
-        // with the same session key reattaches. Unlike kill(), this must not signal
-        // descendants or terminate the persistent server session.
-        if case .screen(let screenPath) = persistentBackend,
-           let sessionName = sessionName {
-            NativePtySession.runQuietly(screenPath, ["-d", sessionName])
+        // with the same session key reattaches. Screen must acknowledge detach before
+        // the master closes or it tears down a newly-created server. This one bounded
+        // control call has a 100 ms hard deadline; no process cleanup wait runs here.
+        if case .screen(let screenPath) = persistentBackend, let sessionName = sessionName {
+            Self.runQuietly(screenPath, ["-d", sessionName], timeout: 0.1)
         }
         masterHandle.readabilityHandler = nil
+        exitSource?.cancel()
+        exitSource = nil
+        try? masterHandle.close()
         finish(notifyExit: false)
     }
 
@@ -450,43 +477,59 @@ private final class NativePtySession {
     private func closeClient(notifyExit: Bool) {
         masterHandle.readabilityHandler = nil
         let rootPid = (childPid > 0 && !didExit) ? childPid : 0
-        if rootPid > 0 {
-            Self.signalDescendants(of: rootPid, signal: SIGTERM)
-            Darwin.kill(rootPid, SIGTERM)
-        }
-        if rootPid > 0 {
-            Thread.sleep(forTimeInterval: 0.05)
-            Self.signalDescendants(of: rootPid, signal: SIGKILL)
-            Darwin.kill(rootPid, SIGKILL)
-        }
         exitSource?.cancel()
         exitSource = nil
-        // A screen/tmux client can stay in its exit path until the PTY master closes.
-        // Close it before waiting so terminal teardown can never deadlock the UI thread.
+        // Closing the master is the only synchronous lifecycle work. Process-tree discovery,
+        // signals, and waitpid all run on the lifecycle queue so Cmd+W/Cmd+Q cannot block AppKit.
         try? masterHandle.close()
-        if childPid > 0 {
-            Self.reapAfterTermination(childPid)
-        }
         finish(notifyExit: notifyExit)
+        if rootPid > 0 {
+            Self.lifecycleQueue.async {
+                Self.terminateProcessTreeAndReap(rootPid)
+            }
+        }
     }
 
-    private static func reapAfterTermination(_ pid: pid_t) {
-        let deadline = Date().addingTimeInterval(0.25)
+    private static func waitForChild(_ pid: pid_t, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
         var status: Int32 = 0
-        while Date() < deadline {
+        while true {
             let result = waitpid(pid, &status, WNOHANG)
-            if result == pid || (result < 0 && errno != EINTR) {
-                return
+            if result == pid || (result < 0 && errno == ECHILD) {
+                return true
+            }
+            if result < 0 && errno != EINTR {
+                return true
+            }
+            if Date() >= deadline {
+                return false
             }
             Thread.sleep(forTimeInterval: 0.01)
         }
+    }
 
-        // The process was already sent SIGKILL, but filesystem/session cleanup may
-        // briefly delay its exit. Reap it off the main thread once it becomes ready.
-        DispatchQueue.global(qos: .utility).async {
-            var status: Int32 = 0
-            while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+    private static func reapChildBlocking(_ pid: pid_t) {
+        guard pid > 0 else { return }
+        var status: Int32 = 0
+        while true {
+            let result = waitpid(pid, &status, 0)
+            if result == pid || (result < 0 && errno == ECHILD) {
+                return
+            }
+            if result < 0 && errno != EINTR {
+                return
+            }
         }
+    }
+
+    private static func terminateProcessTreeAndReap(_ pid: pid_t) {
+        guard !waitForChild(pid, timeout: 0) else { return }
+        signalDescendants(of: pid, signal: SIGTERM)
+        Darwin.kill(pid, SIGTERM)
+        if waitForChild(pid, timeout: 0.15) { return }
+        signalDescendants(of: pid, signal: SIGKILL)
+        Darwin.kill(pid, SIGKILL)
+        reapChildBlocking(pid)
     }
 
     private static func signalDescendants(of rootPid: Int32, signal: Int32) {
@@ -729,7 +772,7 @@ private final class NativePtySession {
         return String(collapsed.prefix(80))
     }
 
-    private static func findExecutable(named name: String) -> String? {
+    fileprivate static func findExecutable(named name: String) -> String? {
         let pathCandidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
             .split(separator: ":")
             .map { String($0) + "/\(name)" }
@@ -752,8 +795,8 @@ private final class NativePtySession {
         }
     }
 
-    private static func runQuietly(_ executable: String, _ arguments: [String]) {
-        _ = runCapturing(executable, arguments)
+    private static func runQuietly(_ executable: String, _ arguments: [String], timeout: TimeInterval = 0.75) {
+        _ = runCapturing(executable, arguments, timeout: timeout)
     }
 
     /// Builds a NULL-terminated C string array (as posix_spawn's argv/envp expect) by
@@ -789,7 +832,7 @@ private final class NativePtySession {
         runCapturing(tmuxPath, ["has-session", "-t", sessionName]) != nil
     }
 
-    private static func screenSessionExists(screenPath: String, sessionName: String) -> Bool {
+    fileprivate static func screenSessionExists(screenPath: String, sessionName: String) -> Bool {
         screenServerPid(screenPath: screenPath, sessionName: sessionName) != nil
     }
 
@@ -810,22 +853,23 @@ private final class NativePtySession {
         return processDirectory(pid: serverPid)
     }
 
-    private static func screenServerPid(screenPath: String, sessionName: String) -> Int32? {
-        guard let listing = runCapturing(
-            screenPath,
-            ["-ls", sessionName],
-            requireSuccess: false
-        ) else {
+    private static func screenServerPid(screenPath _: String, sessionName: String) -> Int32? {
+        let socketDirectory: URL
+        if let configured = ProcessInfo.processInfo.environment["SCREENDIR"], !configured.isEmpty {
+            socketDirectory = URL(fileURLWithPath: configured, isDirectory: true)
+        } else {
+            socketDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent(".screen", isDirectory: true)
+        }
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: socketDirectory.path) else {
             return nil
         }
         let suffix = ".\(sessionName)"
-        return listing.components(separatedBy: .newlines).compactMap { line -> Int32? in
-            guard let token = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).first,
-                  token.hasSuffix(suffix),
-                  let separator = token.firstIndex(of: ".") else {
+        return entries.compactMap { entry -> Int32? in
+            guard entry.hasSuffix(suffix), let separator = entry.firstIndex(of: ".") else {
                 return nil
             }
-            return Int32(token[..<separator])
+            return Int32(entry[..<separator])
         }.first
     }
 
@@ -843,7 +887,8 @@ private final class NativePtySession {
     fileprivate static func runCapturing(
         _ executable: String,
         _ arguments: [String],
-        requireSuccess: Bool = true
+        requireSuccess: Bool = true,
+        timeout: TimeInterval = 0.75
     ) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -854,12 +899,41 @@ private final class NativePtySession {
         guard (try? process.run()) != nil else {
             return nil
         }
-        // Drain stdout while the child is running. Waiting first can deadlock when a command such
-        // as `ps -axo` fills the pipe buffer: the child blocks on write while the parent blocks on
-        // waitUntilExit(). Stderr is intentionally discarded above, so there is only one stream to
-        // drain and no second pipe can create the same cycle.
-        let data = output.fileHandleForReading.readDataToEndOfFile()
+
+        // Drain stdout concurrently so large `ps` output cannot fill the pipe while we wait.
+        let readGroup = DispatchGroup()
+        var data = Data()
+        readGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            data = output.fileHandleForReading.readDataToEndOfFile()
+            readGroup.leave()
+        }
+
+        let deadline = Date().addingTimeInterval(max(timeout, 0.01))
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            process.terminate()
+            let terminationDeadline = Date().addingTimeInterval(0.1)
+            while process.isRunning && Date() < terminationDeadline {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            if process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+            try? output.fileHandleForReading.close()
+            lifecycleQueue.async {
+                process.waitUntilExit()
+            }
+            return nil
+        }
+
         process.waitUntilExit()
+        guard readGroup.wait(timeout: .now() + 0.5) == .success else {
+            try? output.fileHandleForReading.close()
+            return nil
+        }
         guard !requireSuccess || process.terminationStatus == 0 else {
             return nil
         }

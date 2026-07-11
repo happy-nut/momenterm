@@ -395,31 +395,13 @@ extension MainWindowController {
         if let override = currentTerminalDirectoryOverrideForSmokeTest {
             return override
         }
-        let scopedActiveTab = activeTab()
-        if let activeTerminalId = activeTerminalId,
-           let scopedActiveTab = scopedActiveTab,
-           scopedActiveTab.panes.contains(where: { $0.id == activeTerminalId }),
-           let cwd = ptyManager.currentDirectory(id: activeTerminalId) {
-            updateActiveTerminalDirectory(cwd)
-            return cwd
-        }
         if let session = activeSession() {
-            return session.cwd.standardizedFileURL
+            return (session.statusResolvedCwd ?? session.cwd).standardizedFileURL
         }
         if let workspaceURL = activeWorkspaceURL() {
             return workspaceURL
         }
         return FileManager.default.homeDirectoryForCurrentUser
-    }
-    private func updateActiveTerminalDirectory(_ cwd: URL) {
-        let standardized = cwd.standardizedFileURL
-        if let session = activeSession() {
-            session.cwd = standardized
-        }
-        if let tab = activeTab() {
-            tab.cwd = standardized
-        }
-        updateTerminalStatus()
     }
     func writeToActiveTerminal(_ data: String) {
         guard let activeId = activeTerminalId else {

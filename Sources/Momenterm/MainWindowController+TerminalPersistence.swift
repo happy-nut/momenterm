@@ -19,14 +19,14 @@ extension MainWindowController {
         guard !Self.statePersistenceDisabled else {
             return
         }
-        syncTerminalDirectoriesFromPtys()
+        syncCachedTerminalDirectoriesForQuit()
         persistWorkspaceState()
         persistTerminalState()
     }
 
-    private func syncTerminalDirectoriesFromPtys() {
+    private func syncCachedTerminalDirectoriesForQuit() {
         for pane in sessions {
-            guard let cwd = ptyManager.currentDirectory(id: pane.id)?.standardizedFileURL else {
+            guard let cwd = pane.statusResolvedCwd?.standardizedFileURL else {
                 continue
             }
             pane.cwd = cwd

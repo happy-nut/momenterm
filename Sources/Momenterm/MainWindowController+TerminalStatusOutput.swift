@@ -54,6 +54,11 @@ extension MainWindowController {
     ) {
         let cwd = status.cwd ?? pane.cwd
         pane.statusResolvedCwd = cwd
+        pane.cwd = cwd
+        if let tab = terminalTabs.first(where: { $0.panes.contains(where: { $0.id == pane.id }) }),
+           tab.activePaneId == pane.id {
+            tab.cwd = cwd
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         var path = cwd.path
         if path == home {
@@ -128,7 +133,7 @@ extension MainWindowController {
     // would never react to a `cd` into or out of a repo. Cheap: one `git rev-parse --show-toplevel`
     // per workspace pane (home terminals — workspaceId == nil — are skipped; they have no rail row).
     func refreshWorkspaceGitDetection() {
-        guard !Self.statePersistenceDisabled, !workspaces.isEmpty else {
+        guard !Self.statePersistenceDisabled else {
             return
         }
         // Never repaint the rail out from under an in-progress inline rename — a detection-triggered
@@ -136,14 +141,14 @@ extension MainWindowController {
         guard renamingWorkspaceId == nil else {
             return
         }
-        let targets: [(id: Int, pid: Int32, fallback: URL)] = terminalTabs
-            .filter { $0.workspaceId != nil }
-            .flatMap { $0.panes }
-            .compactMap { pane in
-                guard let pid = ptyManager.runningRootPid(id: pane.id) else {
-                    return nil
+        let targets: [(id: Int, pid: Int32, fallback: URL, tracksWorkspace: Bool)] = terminalTabs
+            .flatMap { tab in
+                tab.panes.compactMap { pane in
+                    guard let pid = ptyManager.runningRootPid(id: pane.id) else {
+                        return nil
+                    }
+                    return (pane.id, pid, pane.cwd, tab.workspaceId != nil)
                 }
-                return (pane.id, pid, pane.cwd)
             }
         // No live workspace panes: leave the last-known detection alone (transient pid-resolution
         // failures shouldn't clear the rail — pane/tab close already recomputes detection, and a
@@ -152,7 +157,11 @@ extension MainWindowController {
             return
         }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let resolved = targets.map { ($0.id, Self.resolveGitRoot(pid: $0.pid, fallback: $0.fallback)) }
+            let resolved = targets.map { target in
+                let cwd = Self.processCwd(pid: target.pid) ?? target.fallback
+                let gitRoot = target.tracksWorkspace ? Self.resolveGitRoot(cwd: cwd) : nil
+                return (target.id, cwd, gitRoot, target.tracksWorkspace)
+            }
             DispatchQueue.main.async {
                 // Re-check on the main thread: a rename may have started while this resolve was in
                 // flight; don't repaint the rail out from under its editable field (see the guard above).
@@ -160,8 +169,18 @@ extension MainWindowController {
                     return
                 }
                 var changed = false
-                for (paneId, root) in resolved {
-                    if let pane = self.sessions.first(where: { $0.id == paneId }), pane.gitRoot != root {
+                for (paneId, cwd, root, tracksWorkspace) in resolved {
+                    guard let pane = self.sessions.first(where: { $0.id == paneId }) else {
+                        continue
+                    }
+                    let standardizedCwd = cwd.standardizedFileURL
+                    pane.statusResolvedCwd = standardizedCwd
+                    pane.cwd = standardizedCwd
+                    if let tab = self.terminalTabs.first(where: { $0.panes.contains(where: { $0.id == paneId }) }),
+                       tab.activePaneId == paneId {
+                        tab.cwd = standardizedCwd
+                    }
+                    if tracksWorkspace, pane.gitRoot != root {
                         pane.gitRoot = root
                         changed = true
                     }
@@ -176,6 +195,10 @@ extension MainWindowController {
     // (no branch/dirty/foreground-process work) so the 2.5s rail-detection cadence stays cheap.
     private static func resolveGitRoot(pid: Int32, fallback: URL) -> String? {
         let cwd = processCwd(pid: pid) ?? fallback
+        return resolveGitRoot(cwd: cwd)
+    }
+
+    private static func resolveGitRoot(cwd: URL) -> String? {
         guard let out = try? Shell.run("/usr/bin/env", ["git", "rev-parse", "--show-toplevel"], cwd: cwd),
               out.status == 0 else {
             return nil
